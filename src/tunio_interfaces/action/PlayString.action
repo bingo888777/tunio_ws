@@ -1,0 +1,7 @@
+# 서버 -> 로봇. 교시된 줄 위치에서 발현
+uint8 string_no
+---
+bool   done
+string message
+---
+string stage

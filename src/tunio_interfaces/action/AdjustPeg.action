@@ -1,0 +1,9 @@
+# 서버 -> 로봇. 페그 조절
+uint8   string_no
+bool    raise_pitch        # true=음 높이기, false=낮추기
+float64 angle_deg          # 회전량. 최종 접근은 조이는 방향으로 마무리
+---
+bool   done
+string message
+---
+string stage

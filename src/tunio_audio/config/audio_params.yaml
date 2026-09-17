@@ -1,0 +1,6 @@
+# 오디오 분석 파라미터 (pitch_test.py 검증값 기준, 테스트 후 확정)
+sample_rate: 44100
+record_sec: 2.0
+skip_head_sec: 0.3        # 발현 직후 과도음 제외
+min_db: -50.0             # 소리 부족 판정
+search_semitones: 2       # 목표 ±2반음 (옥타브 오인 차단)

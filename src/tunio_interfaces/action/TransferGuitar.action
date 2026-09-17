@@ -1,0 +1,7 @@
+# 서버 -> 로봇. Phase 3(후순위). 작업대 이송 / 원위치 복귀
+uint8 direction            # 0=작업대로, 1=원위치로
+---
+bool   done
+string message
+---
+string stage

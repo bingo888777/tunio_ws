@@ -1,0 +1,6 @@
+# 기본 조율 설정 (기획서 9.1, 테스트 후 확정)
+tolerance_cents: 5.0      # 허용 오차(임시)
+max_adjust: 5             # 줄당 최대 페그 조절
+measure_timeout_sec: 10.0 # 측정 응답 타임아웃(정상 목표 2초)
+max_measure_retry: 3      # 측정 실패 시 추가 재측정
+string_order: [6, 5, 2, 1]

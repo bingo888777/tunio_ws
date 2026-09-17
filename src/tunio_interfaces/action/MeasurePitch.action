@@ -1,0 +1,13 @@
+# 서버 -> 마이크. 요청 시에만 측정
+int32  job_id
+uint8  string_no
+int32  measure_id          # 같은 줄의 몇 번째 측정인지
+---
+int32   job_id
+uint8   string_no
+int32   measure_id
+bool    success
+float64 measured_hz        # 실패 시 NaN
+string  fail_reason
+---
+bool    ready              # 녹음 준비 완료 Feedback

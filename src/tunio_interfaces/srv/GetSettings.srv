@@ -1,0 +1,4 @@
+---
+float64 tolerance_cents
+uint8   max_adjust
+float64 measure_timeout_sec
