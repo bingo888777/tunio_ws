@@ -19,6 +19,11 @@ def adjust_peg(string_no: int, raise_pitch: bool, angle_deg: float):
     raise NotImplementedError
 
 
-def transfer(direction: int):
-    """이송(후순위). 0=작업대로, 1=원위치로."""
+def press_pin(string_no: int) -> bool:
+    """브릿지핀을 힘 제어로 눌러 안착 확인. 반환: 안착 여부."""
+    raise NotImplementedError
+
+
+def strum_all(strings: list):
+    """전체 줄을 훑어 화음. 측정 없는 완료 연출. 비우면 전체."""
     raise NotImplementedError

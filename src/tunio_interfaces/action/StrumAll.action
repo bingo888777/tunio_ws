@@ -1,0 +1,7 @@
+# 서버 -> 로봇. 전체 줄을 훑어 화음을 울림. 측정 없는 완료 연출.
+uint8[] strings            # 비우면 전체(6,5,2,1)
+---
+bool   done
+string message
+---
+string stage
