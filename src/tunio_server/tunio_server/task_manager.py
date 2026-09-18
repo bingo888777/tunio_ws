@@ -37,7 +37,7 @@ class TaskManager(Node):
 
         # 설정 (명세 5절 TuningSettings. 작업 시작 전에만 변경)
         self.settings = TuningSettings()
-        self.settings.tolerance_cents = 5.0      # 임시값 (명세 권장 시작값 10.0)
+        self.settings.tolerance_cents = 10.0     # 첫 통합 테스트 시작값. 실측 후 조정
         self.settings.max_adjust_count = 5
         self.settings.max_measure_retry = 3
         self.settings.measure_timeout_sec = 10.0
