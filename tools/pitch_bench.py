@@ -141,14 +141,35 @@ def algo_yin(x, sr, fmin, fmax):
     return f0
 
 
-def algo_pyin(x, sr, fmin, fmax):
-    """librosa.pyin — YIN + HMM 궤적 추적. 유효 프레임의 중앙값을 쓴다."""
+def algo_pyin(x, sr, fmin, fmax, resolution=0.1):
+    """
+    librosa.pyin — YIN + HMM 궤적 추적. 유효 프레임의 중앙값을 쓴다.
+
+    탐색 범위를 목표 ±2반음으로 좁게 잡으면 기본 설정으로는 터진다.
+    pyin은 주파수를 격자로 나눠 HMM을 돌리는데, 4반음 범위에서 격자가 41칸뿐인 반면
+    기본 전이 폭(max_transition_rate=35.92 기준)은 101칸을 요구하기 때문이다.
+    우리 신호는 2초짜리 정지음이라 음정이 크게 움직이지 않으므로,
+    전이율을 격자 크기에 맞춰 낮춰 잡는다.
+    """
     import librosa
+
     # 저음에서도 최소 4주기가 들어가도록 프레임 길이를 잡는다
     frame_length = int(2 ** np.ceil(np.log2(max(4.0 * sr / fmin, 2048))))
+    hop_length = frame_length // 4
+
+    # 전이 폭이 격자를 넘지 않도록 max_transition_rate 상한을 역산한다
+    #   격자 수      n_bins = floor(12 * nbps * log2(fmax/fmin)) + 1
+    #   전이 폭      width  = round(mtr * 12 * hop/sr) * nbps + 1  <=  n_bins
+    nbps = int(np.ceil(1.0 / resolution))
+    n_bins = int(np.floor(12 * nbps * np.log2(fmax / fmin))) + 1
+    frame_period = hop_length / sr
+    max_semitones = max(1, (n_bins - 1) // nbps)
+    mtr = min(max_semitones / (12 * frame_period), 35.92) * 0.9
+
     f0, _voiced, _prob = librosa.pyin(
         np.asarray(x, dtype=np.float32), fmin=fmin, fmax=fmax, sr=sr,
-        frame_length=frame_length, hop_length=frame_length // 4)
+        frame_length=frame_length, hop_length=hop_length,
+        resolution=resolution, max_transition_rate=mtr)
     f0 = f0[~np.isnan(f0)]
     return float(np.median(f0)) if len(f0) else None
 
@@ -398,6 +419,11 @@ def main():
     ap.add_argument("--truth", type=float, default=None,
                     help="WAV의 참값 f0. 없으면 재현성만 본다")
     ap.add_argument("--skip", type=float, default=0.3, help="WAV 앞부분 제외(초)")
+    ap.add_argument("--detune", type=float, default=-37.3,
+                    help="합성 신호의 f0를 목표에서 이만큼(센트) 벗어나게 한다. "
+                         "0으로 두면 pyin·crepe처럼 주파수를 격자로 양자화하는 "
+                         "알고리즘에 유리한 편향이 생긴다 (목표가 격자에 정확히 "
+                         "떨어지기 때문). 실제 기타는 항상 목표에서 벗어나 있다")
     args = ap.parse_args()
 
     if not any((args.synth, args.wav, args.robust, args.octave, args.all)):
@@ -414,8 +440,13 @@ def main():
     fmax = f_target * 2 ** (+2 / 12)
     profile = HARMONICS.get(args.string, HARMONICS[1])
 
+    # 탐색 범위는 목표 기준으로 잡되(실제 운용과 동일), 합성 신호의 실제 f0는
+    # 목표에서 벗어나게 둔다. 격자 기반 알고리즘에 공짜 점수를 주지 않기 위해서다.
+    f_true = f_target * 2 ** (args.detune / 1200.0)
+
     print(f"대상: {args.string}번 줄 {name} = {f_target:.4f} Hz")
     print(f"탐색 범위: {fmin:.2f} ~ {fmax:.2f} Hz (목표 ±2반음)")
+    print(f"합성 신호 실제 f0: {f_true:.4f} Hz (목표 {args.detune:+.1f}센트)")
     print(f"비교 알고리즘: {', '.join(n for n, _ in algos)}")
     if skipped:
         for n, dep in skipped:
@@ -423,16 +454,16 @@ def main():
 
     if args.synth or args.all:
         header("합성 신호 — 참값이 정확히 알려진 조건")
-        x = synth(f_target, SR, profile=profile)
-        report_single(algos, x, SR, fmin, fmax, f_target, "이상적 조건 (잡음 없음)")
+        x = synth(f_true, SR, profile=profile)
+        report_single(algos, x, SR, fmin, fmax, f_true, "이상적 조건 (잡음 없음)")
 
-        x = synth(f_target, SR, profile=profile, inharm=1e-4)
-        report_single(algos, x, SR, fmin, fmax, f_target,
+        x = synth(f_true, SR, profile=profile, inharm=1e-4)
+        report_single(algos, x, SR, fmin, fmax, f_true,
                       "비조화성 포함 (B=1e-4, 실제 현에 가까움)")
 
-        sigs = [synth(f_target, SR, profile=profile, snr_db=30, seed=i)
+        sigs = [synth(f_true, SR, profile=profile, snr_db=30, seed=i)
                 for i in range(10)]
-        report_repeat(algos, sigs, SR, fmin, fmax, f_target,
+        report_repeat(algos, sigs, SR, fmin, fmax, f_true,
                       "반복 10회 (SNR 30dB, 잡음 시드만 다름)")
 
     if args.wav or (args.all and args.wav):
@@ -452,10 +483,10 @@ def main():
                 print("  --truth 로 참값을 주면 절대 오차도 계산합니다.")
 
     if args.robust or args.all:
-        report_robust(algos, f_target, SR, fmin, fmax, profile)
+        report_robust(algos, f_true, SR, fmin, fmax, profile)
 
     if args.octave or args.all:
-        report_octave(algos, f_target, SR, profile)
+        report_octave(algos, f_true, SR, profile)
 
     print()
 
