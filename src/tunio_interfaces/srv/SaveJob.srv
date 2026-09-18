@@ -1,0 +1,12 @@
+# 완료된 작업 한 건을 일괄 저장한다.
+# task_manager -> result_store
+# 정상 종료 시에만 호출한다. 취소 작업과 부분 결과는 저장하지 않는다.
+
+string job_id                       # 작업 식별자
+builtin_interfaces/Time finished_at # 종료 시각
+uint8 overall_result                # 전체 판정 (검증 패스 기준)
+StringResult[] strings              # 줄별 결과 전체
+TuningSettings settings             # 이 작업에 적용했던 설정 스냅샷
+---
+bool saved                          # 저장 성공 여부
+string message                      # 실패 시 사유

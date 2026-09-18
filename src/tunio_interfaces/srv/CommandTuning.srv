@@ -1,0 +1,8 @@
+# 작업 제어 버튼 공용 Service.
+# /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel 네 개가 이 타입을 공유한다.
+# 요청에 필드가 없다 (어느 이름으로 불렸는지가 곧 명령).
+# 접수 여부만 응답하고, 실제 진행 상황은 /tuning/state 로 알린다.
+
+---
+bool accepted              # 명령을 받아들였는지 여부
+string message             # 거부 시 사유. 준비 안 됨, 이미 진행 중, 진행 중인 작업 없음 등

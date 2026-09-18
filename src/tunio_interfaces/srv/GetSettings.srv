@@ -1,4 +1,4 @@
+# 현재 적용 중인 조율 설정을 조회한다. UI 설정 탭 로딩에 사용.
+
 ---
-float64 tolerance_cents
-uint8   max_adjust
-float64 measure_timeout_sec
+TuningSettings settings    # 현재 설정값

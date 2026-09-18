@@ -1,3 +1,10 @@
-int32 limit                # 최근 N건
+# 작업 이력을 조회한다.
+# job_id가 비어 있으면 최신순 목록, 채워져 있으면 그 작업의 줄별 상세를 돌려준다.
+
+string job_id              # 상세 조회할 작업 식별자. 빈 문자열이면 목록 조회
+uint16 limit               # 목록 조회 시 최대 개수
 ---
-string history_json        # 작업 목록 (JSON 직렬화)
+bool found                 # 조회 결과 존재 여부
+JobSummary[] jobs          # 목록 조회 결과. 최신순. 상세 조회 시에는 비어 있다
+StringResult[] strings     # 상세 조회 결과의 줄별 기록. 목록 조회 시에는 비어 있다
+TuningSettings settings    # 상세 조회 시 그 작업에 적용됐던 설정 스냅샷

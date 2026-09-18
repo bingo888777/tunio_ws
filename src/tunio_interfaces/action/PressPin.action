@@ -1,8 +1,0 @@
-# 서버 -> 로봇. 브릿지핀을 힘 제어로 눌러 안착 확인 (조율 판정에 영향 없음)
-uint8   string_no
----
-bool   done
-bool   seated              # 핀이 안착돼 있었는지
-string message
----
-string stage
