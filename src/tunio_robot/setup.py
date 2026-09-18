@@ -1,6 +1,7 @@
-from setuptools import find_packages, setup
-import os
 from glob import glob
+import os
+
+from setuptools import find_packages, setup
 
 package_name = 'tunio_robot'
 
@@ -16,6 +17,7 @@ setup(
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='tunio-team',
     maintainer_email='team@example.com',
