@@ -41,6 +41,7 @@ class TaskManager(Node):
         self.settings.max_adjust_count = 5
         self.settings.max_measure_retry = 3
         self.settings.measure_timeout_sec = 10.0
+        self.settings.onset_timeout_sec = 10.0
 
         # Action 클라이언트
         self.cli_measure = ActionClient(self, MeasurePitch, "/audio/measure_pitch")

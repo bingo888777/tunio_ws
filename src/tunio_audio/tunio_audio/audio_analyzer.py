@@ -6,6 +6,9 @@ TODO(정정인):
   - Goal 수신 -> ready Feedback -> 녹음 -> pitch.estimate -> Result
   - job_id/string_number/measurement_id를 Result에 그대로 실어 요청과 대조
   - target_hz 기준 +-2반음으로 탐색 범위 제한(옥타브 오인 차단)
+  - onset(무음 -> 소리) 검출: ready 발행 직후부터 입력을 감시한다.
+    onset 시점이 timeout_sec 카운트의 기준이다. 서버·로봇 신호에 의존하지 않는다
+  - onset_timeout_sec 안에 onset이 없으면 FAIL_LOW_SIGNAL. 발현 자체가 실패한 경우다
   - timeout_sec 초과 시 FAIL_TIMEOUT 반환. 녹음 길이가 아니라 응답 제한 시간
   - 실패 사유: FAIL_LOW_SIGNAL / FAIL_NO_PITCH / FAIL_TIMEOUT / FAIL_CANCELED
 """

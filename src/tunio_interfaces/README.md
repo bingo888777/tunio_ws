@@ -44,4 +44,5 @@ ros2 interface show tunio_interfaces/action/MeasurePitch
 - 백래시 마무리를 task_manager가 결정하는 구조로 잡았다 (풀기 goal + 조이기 goal 두 번)
 - 측정 타임아웃은 audio_analyzer가 직접 재고 `FAIL_TIMEOUT`을 반환한다
 - 측정 타임아웃 카운트는 audio_analyzer가 오디오 onset(무음 → 소리)을 검출한 시점부터 센다
+- onset이 `onset_timeout_sec` 안에 오지 않으면 `FAIL_LOW_SIGNAL`. 대기 상한 임시 10.0
 - 허용 센트 기본값 미정 (시작값 ±10센트 권장)

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS settings_snapshot (
     max_adjust_count    INTEGER,
     max_measure_retry   INTEGER,
     measure_timeout_sec REAL,
+    onset_timeout_sec   REAL,
     FOREIGN KEY (job_id) REFERENCES jobs(job_id)
 );
 """

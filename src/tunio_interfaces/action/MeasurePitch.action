@@ -8,6 +8,8 @@ uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1)
 uint32 measurement_id      # 작업 내 측정 일련번호. 1부터 증가, 작업이 바뀌면 초기화
 float32 target_hz          # 이 줄의 목표 주파수. 마이크는 이 값 +-2반음으로 탐색 범위를 제한한다
 float32 timeout_sec        # 결과 응답 제한 시간. 녹음 길이가 아니다. 초과 시 FAIL_TIMEOUT
+float32 onset_timeout_sec  # onset(무음->소리) 대기 상한. ready 발행 시점부터 센다
+                           # 초과 시 FAIL_LOW_SIGNAL. 발현 자체가 실패한 경우다
 ---
 # --- Result ---
 string job_id              # Goal의 값을 그대로 되돌려준다

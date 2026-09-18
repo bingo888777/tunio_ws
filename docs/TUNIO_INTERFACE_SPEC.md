@@ -91,6 +91,7 @@ uint8 string_number
 uint32 measurement_id
 float32 target_hz
 float32 timeout_sec
+float32 onset_timeout_sec
 ---
 # --- Result ---
 string job_id
@@ -111,6 +112,7 @@ bool ready
 
 - `target_hz` — 마이크가 이 값 ±2반음으로 탐색 범위를 제한한다. 옥타브 오인 차단용. 목표 주파수의 단일 출처는 서버다
 - `timeout_sec` — 결과 응답 제한 시간이지 녹음 길이가 아니다. 카운트는 audio_analyzer가 오디오 onset(무음 → 소리)을 스스로 검출한 시점부터 시작하며, 초과 시 마이크가 `FAIL_TIMEOUT`을 반환한다. 로봇 접근·파지 시간이 타임아웃에 먹히지 않고, 서버나 로봇의 신호에 의존하지 않는다
+- `onset_timeout_sec` — onset 대기 상한. 마이크가 `ready`를 발행해 듣기 시작한 시점부터 센다. 이 안에 onset이 들어오지 않으면 발현 자체가 실패한 것이므로 `FAIL_LOW_SIGNAL`을 반환한다. onset이 영영 오지 않을 때 Action이 매달리는 것을 막는 유일한 장치다
 - Result의 ID 3개는 Goal 값을 그대로 되돌려준다. 늦게 도착한 이전 결과를 걸러내는 유일한 수단이라 생략 불가
 - `success=false`면 `frequency_hz`는 읽지 않는다. 0Hz를 유효값으로 쓰지 않는다
 - Feedback `ready=true`를 받은 뒤에 서버가 `play_string`을 요청한다
@@ -183,12 +185,14 @@ float32 tolerance_cents
 uint8 max_adjust_count
 uint8 max_measure_retry
 float32 measure_timeout_sec
+float32 onset_timeout_sec
 ```
 
 - `tolerance_cents` — |1200 × log2(측정/목표)| 가 이 값 이내면 성공. 기본값 미정, 시작값 ±10 권장
 - `max_adjust_count` — 줄당 최대 페그 조절 횟수 (임시 5)
 - `max_measure_retry` — 측정 실패 시 페그를 돌리지 않고 다시 튕기는 최대 횟수 (임시 3)
 - `measure_timeout_sec` — 임시 10.0
+- `onset_timeout_sec` — onset 대기 상한. 임시 10.0. 로봇 접근·파지·발현에 걸리는 시간을 덮을 만큼 넉넉해야 한다
 
 ### msg/StringResult.msg
 
