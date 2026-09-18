@@ -313,10 +313,14 @@ def report_single(algos, x, sr, fmin, fmax, truth, label):
 
 
 def report_repeat(algos, signals, sr, fmin, fmax, truth, label):
-    """여러 신호(반복 측정)에 대한 평균·표준편차."""
+    """
+    여러 신호(반복 측정)에 대한 평균·표준편차.
+    종합표에서 다시 쓸 수 있도록 알고리즘별 결과를 반환한다.
+    """
     print(f"\n{label}")
     print(f"  {'알고리즘':<8s} {'평균 f0':>11s} {'평균오차':>10s} "
           f"{'표준편차':>10s} {'실패':>6s} {'평균(ms)':>10s}")
+    out = {}
     for name, fn in algos:
         vals, times, fail = [], [], 0
         for x in signals:
@@ -328,12 +332,57 @@ def report_repeat(algos, signals, sr, fmin, fmax, truth, label):
                 vals.append(f0)
         if not vals:
             print(f"  {name:<8s} {'전부 실패':>11s}")
+            out[name] = None
             continue
         a = np.array(vals)
         sd_c = np.std(cents(a, a.mean()), ddof=1) if len(a) > 1 else 0.0
-        err = f"{cents(a.mean(), truth):+10.2f}" if truth else f"{'-':>10s}"
+        err_v = cents(a.mean(), truth) if truth else None
+        err = f"{err_v:+10.2f}" if err_v is not None else f"{'-':>10s}"
         print(f"  {name:<8s} {a.mean():>11.4f} {err} {sd_c:>9.2f}c "
               f"{fail:>4d}/{len(signals):<2d} {np.mean(times)*1000:>9.1f}")
+        out[name] = {"mean": float(a.mean()), "err": err_v, "sd": float(sd_c),
+                     "fail": fail, "n": len(signals),
+                     "ms": float(np.mean(times) * 1000)}
+    return out
+
+
+def report_summary(algos, synth_res, wav_res, wav_label):
+    """
+    합성 신호와 실제 녹음을 나란히 놓는다.
+
+    둘을 같이 봐야 하는 이유: 합성은 참값을 아는 대신 현실(비조화성·맥놀이·
+    시간 변화)을 덜 담고, 실제 녹음은 현실을 담는 대신 참값을 모른다.
+    한쪽만 보면 결론이 뒤집힌다 — 실제로 합성에서 가장 약했던 알고리즘이
+    실제 저음 녹음에서는 가장 정확했다.
+    """
+    header("종합 — 합성 신호 vs 실제 녹음")
+    print(f"  실제 녹음: {wav_label}")
+    print()
+    print(f"  {'알고리즘':<8s} │ {'합성 오차':>10s} {'합성 편차':>10s} │ "
+          f"{'실제 오차':>10s} {'실제 편차':>10s} {'실패':>6s} │ {'시간(ms)':>9s}")
+    print("  " + "─" * 8 + "─┼─" + "─" * 21 + "─┼─" + "─" * 28 + "─┼─" + "─" * 9)
+
+    for name, _fn in algos:
+        s = synth_res.get(name) if synth_res else None
+        w = wav_res.get(name) if wav_res else None
+
+        def fmt(d, key, unit="c", width=10):
+            if not d or d.get(key) is None:
+                return f"{'-':>{width}s}"
+            v = d[key]
+            return f"{v:+9.2f}{unit}" if key == "err" else f"{v:9.2f}{unit}"
+
+        fails = f"{w['fail']}/{w['n']}" if w else "-"
+        ms = f"{w['ms']:.0f}" if w else (f"{s['ms']:.0f}" if s else "-")
+        print(f"  {name:<8s} │ {fmt(s,'err')} {fmt(s,'sd')} │ "
+              f"{fmt(w,'err')} {fmt(w,'sd')} {fails:>6s} │ {ms:>9s}")
+
+    print()
+    print("  합성 오차는 참값 대비 절대 정확도, 편차는 재현성이다.")
+    if wav_res and all(v is None or v.get("err") is None
+                       for v in wav_res.values()):
+        print("  실제 녹음은 참값을 주지 않아 오차 열이 비어 있다 (--truth 로 지정).")
+    print("  두 결과가 갈리면 실제 녹음을 따른다. 합성은 현실을 덜 담는다.")
 
 
 def report_robust(algos, f0_true, sr, fmin, fmax, profile, snr_floor=30.0):
@@ -444,6 +493,8 @@ def main():
     # 목표에서 벗어나게 둔다. 격자 기반 알고리즘에 공짜 점수를 주지 않기 위해서다.
     f_true = f_target * 2 ** (args.detune / 1200.0)
 
+    synth_res, wav_res, wav_label = None, None, None
+
     print(f"대상: {args.string}번 줄 {name} = {f_target:.4f} Hz")
     print(f"탐색 범위: {fmin:.2f} ~ {fmax:.2f} Hz (목표 ±2반음)")
     print(f"합성 신호 실제 f0: {f_true:.4f} Hz (목표 {args.detune:+.1f}센트)")
@@ -463,10 +514,10 @@ def main():
 
         sigs = [synth(f_true, SR, profile=profile, snr_db=30, seed=i)
                 for i in range(10)]
-        report_repeat(algos, sigs, SR, fmin, fmax, f_true,
-                      "반복 10회 (SNR 30dB, 잡음 시드만 다름)")
+        synth_res = report_repeat(algos, sigs, SR, fmin, fmax, f_true,
+                                  "반복 10회 (SNR 30dB, 잡음 시드만 다름)")
 
-    if args.wav or (args.all and args.wav):
+    if args.wav:
         paths = sorted(glob.glob(args.wav))
         if not paths:
             print(f"\nWAV를 찾지 못했습니다: {args.wav}")
@@ -476,8 +527,9 @@ def main():
             for p in paths:
                 x, sr = load_wav(p, args.skip)
                 sigs.append(x)
-            report_repeat(algos, sigs, sr, fmin, fmax, args.truth,
-                          f"{paths[0]} … {paths[-1]}")
+            wav_label = f"{paths[0]} … {paths[-1]} ({len(paths)}개)"
+            wav_res = report_repeat(algos, sigs, sr, fmin, fmax, args.truth,
+                                    wav_label)
             if args.truth is None:
                 print("\n  참값을 모르므로 표준편차(재현성)만 유효합니다.")
                 print("  --truth 로 참값을 주면 절대 오차도 계산합니다.")
@@ -487,6 +539,10 @@ def main():
 
     if args.octave or args.all:
         report_octave(algos, f_true, SR, profile)
+
+    # 합성과 실제를 둘 다 돌렸으면 나란히 놓고 마무리한다
+    if synth_res and wav_res:
+        report_summary(algos, synth_res, wav_res, wav_label)
 
     print()
 
