@@ -1,24 +1,30 @@
 cmake_minimum_required(VERSION 3.8)
 project(tunio_interfaces)
 
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-find_package(std_msgs REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/StringResult.msg"
-  "msg/TuningState.msg"
   "action/MeasurePitch.action"
   "action/PlayString.action"
   "action/AdjustPeg.action"
-  "action/PressPin.action"
   "action/StrumAll.action"
-  "srv/StartTuning.srv"
-  "srv/ControlCommand.srv"
-  "srv/GetHistory.srv"
+  "msg/TuningSettings.msg"
+  "msg/StringResult.msg"
+  "msg/JobSummary.msg"
+  "msg/TuningState.msg"
+  "srv/CommandTuning.srv"
   "srv/GetSettings.srv"
   "srv/SetSettings.srv"
-  DEPENDENCIES std_msgs
+  "srv/GetHistory.srv"
+  "srv/SaveJob.srv"
+  DEPENDENCIES builtin_interfaces
 )
 
+ament_export_dependencies(rosidl_default_runtime)
 ament_package()

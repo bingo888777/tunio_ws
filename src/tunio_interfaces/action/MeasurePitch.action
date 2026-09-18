@@ -1,13 +1,25 @@
-# 서버 -> 마이크. 요청 시에만 측정
-int32  job_id
-uint8  string_no
-int32  measure_id          # 같은 줄의 몇 번째 측정인지
+# 한 줄의 주파수를 1회 측정한다.
+# task_manager -> audio_analyzer
+# 마이크는 상시 분석하지 않고 이 Goal을 받았을 때만 녹음/분석한다.
+
+# --- Goal ---
+string job_id              # 작업 식별자. task_manager가 "20260922_143015" 형식으로 생성
+uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1)
+uint32 measurement_id      # 작업 내 측정 일련번호. 1부터 증가, 작업이 바뀌면 초기화
+float32 target_hz          # 이 줄의 목표 주파수. 마이크는 이 값 +-2반음으로 탐색 범위를 제한한다
+float32 timeout_sec        # 결과 응답 제한 시간. 녹음 길이가 아니다. 초과 시 FAIL_TIMEOUT
 ---
-int32   job_id
-uint8   string_no
-int32   measure_id
-bool    success
-float64 measured_hz        # 실패 시 NaN
-string  fail_reason
+# --- Result ---
+string job_id              # Goal의 값을 그대로 되돌려준다
+uint8 string_number        # Goal의 값을 그대로 되돌려준다
+uint32 measurement_id      # Goal의 값을 그대로 되돌려준다. 늦게 도착한 이전 결과를 걸러내는 기준
+bool success               # 유효한 주파수를 얻었는지 여부. false면 frequency_hz는 읽지 않는다
+float32 frequency_hz       # 측정 주파수. success=false일 때는 의미 없음 (0을 유효값으로 쓰지 않는다)
+uint8 failure_reason       # success=false일 때의 사유. 화면 표시와 DB 기록에 사용
+uint8 FAIL_NONE=0          # 실패 아님
+uint8 FAIL_LOW_SIGNAL=1    # 소리 부족
+uint8 FAIL_NO_PITCH=2      # 주파수 판별 불가
+uint8 FAIL_TIMEOUT=3       # 응답 시간 초과
 ---
-bool    ready              # 녹음 준비 완료 Feedback
+# --- Feedback ---
+bool ready                 # 녹음 준비 완료. true를 받은 뒤에 서버가 play_string을 요청한다

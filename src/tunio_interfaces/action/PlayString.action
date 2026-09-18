@@ -1,7 +1,13 @@
-# 서버 -> 로봇. 교시된 줄 위치에서 발현
-uint8 string_no
+# 지정한 줄을 피크로 한 번 튕긴다.
+# task_manager -> robot_controller
+
+# --- Goal ---
+uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1). 교시된 좌표를 로봇이 조회한다
 ---
-bool   done
-string message
+# --- Result ---
+bool success               # 동작 수행 성공 여부
+string message             # 실패 시 사람이 읽을 사유. 성공 시 빈 문자열
 ---
-string stage
+# --- Feedback ---
+bool plucked               # 발현 완료 순간. 마이크의 타임아웃 기준 시점이 된다
+                           # 발현 직후 5mm 이상 후퇴는 로봇 내부에서 처리

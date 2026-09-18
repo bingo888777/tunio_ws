@@ -1,9 +1,17 @@
-# 서버 -> 로봇. 페그 조절
-uint8   string_no
-bool    raise_pitch        # true=음 높이기, false=낮추기
-float64 angle_deg          # 회전량. 최종 접근은 조이는 방향으로 마무리
+# 지정한 줄의 페그를 요청한 각도만큼 돌린다.
+# task_manager -> robot_controller
+# 백래시 대응(목표보다 높으면 풀었다 조이기)은 task_manager가 결정하고
+# 여기서는 방향과 각도만 그대로 수행한다.
+
+# --- Goal ---
+uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1)
+int8 direction             # +1 음 높이기(조임), -1 음 낮추기(풀림)
+                           # 줄별 실제 모터 회전 방향 변환은 로봇측 YAML이 담당
+float32 angle_deg          # 회전량(도). 항상 양수 크기로 보낸다
 ---
-bool   done
-string message
+# --- Result ---
+bool success               # 동작 수행 성공 여부
+string message             # 실패 시 사유. 파지 실패, 과토크, 걸림 등
 ---
-string stage
+# --- Feedback ---
+# 사용하지 않음
