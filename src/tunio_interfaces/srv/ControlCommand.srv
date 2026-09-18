@@ -1,5 +1,0 @@
-# pause / resume / cancel 공용
-uint8 command              # 0=pause 1=resume 2=cancel
----
-bool accepted
-string message

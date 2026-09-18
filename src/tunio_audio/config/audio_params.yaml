@@ -1,20 +1,20 @@
 # audio_analyzer 파라미터
 #
 # 실행: ros2 run tunio_audio audio_analyzer --ros-args --params-file <이 파일>
+#
+# 타임아웃(timeout_sec / onset_timeout_sec)과 목표 주파수(target_hz)는 여기가 아니라
+# MeasurePitch.Goal 로 서버가 준다. 아래 default_* 는 Goal 값이 0일 때만 쓰는 대비값이다.
 /audio_analyzer:
   ros__parameters:
     device: -1                  # -1이면 시스템 기본 입력. 목록은 tools/mic_level.py
     sample_rate: 44100          # 장치가 안 받으면 기본값 -> 48000 -> 44100 순으로 재시도
-    skip_head_sec: 0.3          # 발현 직후 과도음 제외
+    skip_head_sec: 0.3          # onset 직후 과도음 제외
     min_db: -50.0               # 소리 부족 판정 (이것만으로는 방 소음을 못 거른다)
     min_prominence_db: 16.0     # 유효 측정 판정. 실측 근거는 pitch.py 주석
     max_agreement_cents: 12.0   # 안정화 판정. 겹친 창들이 이 폭 안으로 모여야 채택
     search_semitones: 2.0       # 목표 +-2반음 (옥타브 오인 차단, CLAUDE.md 3.3)
-    response_timeout_sec: 10.0  # 응답 제한. 정상 목표는 2.2초
-    record_sec:                 # 줄별 녹음 길이. 실측 스윕 근거는 audio_analyzer.py 주석
-      s1: 1.5
-      s2: 1.5
-      s3: 1.8
-      s4: 1.8
-      s5: 2.0
-      s6: 2.0
+    record_sec_high: 1.5        # 고음현 녹음 길이. 실측 스윕 근거는 audio_analyzer.py 주석
+    record_sec_low: 2.0         # 저음현 녹음 길이
+    low_freq_hz: 150.0          # 이 아래를 저음현으로 본다 (E2 82.4 / A2 110 vs B3 246.9)
+    default_timeout_sec: 10.0
+    default_onset_timeout_sec: 10.0

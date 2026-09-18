@@ -3,15 +3,26 @@ audio_analyzer — /audio/measure_pitch Action 서버.
 
 요청 시에만 녹음/분석한다. 흐름은 이렇다.
 
-  Goal 수신 -> (녹음 스트림 확인) -> ready Feedback -> 로봇이 줄을 튕김
-           -> 줄별 녹음 길이만큼 수집 -> 앞 과도음 잘라냄 -> pitch.analyze -> Result
+  Goal 수신 -> 녹음 스트림 확인 -> ready Feedback -> 로봇이 줄을 튕김
+           -> onset(무음->소리) 후보 검출 -> 후보마다 창을 떠서 분석
+           -> 관문을 통과하는 첫 후보를 채택 -> Result
 
-Result에는 요청의 job_id·string_no·measure_id를 그대로 실어 돌려준다.
-늦게 도착한 이전 측정이 현재 결과로 쓰이지 않게 하기 위한 것이다(기획서 7절).
+onset을 느슨하게 잡고 분석이 판정하는 이유는 recorder.py 주석에 실측과 함께 적어뒀다.
+요약하면, 잡음이 onset을 깨뜨릴 정도면 주파수 측정 자체가 이미 먼저 무너진다.
+그래서 onset을 엄격하게 만들 이유가 없고, 느슨하게 두고 pitch.analyze 의 관문
+(돌출 16dB + 창 일치 12센트)이 진짜 발현인지 가르게 하는 편이 모든 잡음 레벨에서 낫다.
+
+타임아웃은 두 가지다 (명세 4절).
+  onset_timeout_sec — ready 발행 시점부터. 이 안에 onset이 없으면 발현 자체가 실패다
+  timeout_sec       — onset 시점부터. 로봇 접근·파지 시간이 타임아웃에 먹히지 않는다
+
+Result에는 요청의 job_id·string_number·measurement_id를 그대로 실어 돌려준다.
+늦게 도착한 이전 측정이 현재 결과로 쓰이지 않게 하기 위한 것이다(명세 4절).
 같은 이유로 측정은 한 번에 하나만 받는다. 이미 진행 중이면 새 Goal을 거부한다.
 """
 import time
 
+import numpy as np
 import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -19,42 +30,47 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from tunio_audio import pitch
-from tunio_audio.recorder import read_wav, Recorder, RecorderError
+from tunio_audio.recorder import find_onsets, read_wav, Recorder, RecorderError
 
 from tunio_interfaces.action import MeasurePitch
 
-# 줄별 녹음 길이 기본값(초).
+# 녹음 길이(초). onset 이후 이만큼을 분석에 쓴다.
 #
 # 저음현은 한 주기가 길어 짧게 자르면 값이 흔들린다. 여기에 안정화 판정이 겹치는 창을
 # 세 개 쓰므로 창 하나가 충분히 길어야 한다. 실제 녹음 10개씩으로 스윕한 결과:
-#   1번 줄  0.8초 7/10 · 1.0초 8/10 · 1.2초 7/10 · 1.5초 10/10 · 2.0초 10/10
-#   6번 줄  0.8초 1/10 · 1.0초 7/10 · 1.5초 8/10 · 2.0초 9/10
-# 1번 줄은 1.5초부터 전부 통과하고 6번 줄은 2.0초가 최선이다.
-# 응답은 1번 1.53초 / 6번 2.05초로 목표 2.2초 안에 들어온다.
-DEFAULT_RECORD_SEC = {1: 1.5, 2: 1.5, 3: 1.8, 4: 1.8, 5: 2.0, 6: 2.0}
+#   1번 줄(E4)  0.8초 7/10 · 1.0초 8/10 · 1.2초 7/10 · 1.5초 10/10
+#   6번 줄(E2)  0.8초 1/10 · 1.0초 7/10 · 1.5초 8/10 · 2.0초 9/10
+# 줄 번호가 아니라 목표 주파수로 가른다. 목표 주파수 표의 단일 출처는 서버다.
+RECORD_SEC_HIGH = 1.5
+RECORD_SEC_LOW = 2.0
+LOW_FREQ_HZ = 150.0       # 이 아래면 저음현으로 본다 (E2 82.4 / A2 110 vs B3 246.9)
 
-RESPONSE_GOAL_SEC = 2.2     # 정상 목표. 넘으면 경고만 남기고 결과는 그대로 반환한다.
+CHUNK_SEC = 0.1           # onset을 보며 받아들이는 단위
+MIN_USABLE_SEC = 0.7      # 입력이 끝난 뒤(WAV 모드) 잘린 꼬리라도 이만큼은 있어야 분석한다
+RESPONSE_GOAL_SEC = 2.2   # onset 이후 정상 목표. 넘으면 경고만 남긴다
 
 
 class AudioAnalyzer(Node):
+    """measure_pitch Action 서버 노드."""
+
     def __init__(self):
         super().__init__("audio_analyzer")
 
-        self.declare_parameter("device", -1)            # -1이면 시스템 기본 입력
+        self.declare_parameter("device", -1)             # -1이면 시스템 기본 입력
         self.declare_parameter("sample_rate", 44100)
-        self.declare_parameter("skip_head_sec", 0.3)    # 발현 직후 과도음 제외
-        self.declare_parameter("min_db", -50.0)         # 소리 부족 판정
-        # 탐색 범위 안 FFT 피크 돌출 하한. RMS만으로는 방 소음을 못 거른다. pitch.py 주석 참조
+        self.declare_parameter("skip_head_sec", 0.3)     # onset 직후 과도음 제외
+        self.declare_parameter("min_db", -50.0)          # 소리 부족 판정
         self.declare_parameter("min_prominence_db", pitch.MIN_PROMINENCE_DB)
-        # 안정화 판정: 겹치는 창들이 이 폭 안으로 일치해야 채택한다
         self.declare_parameter("max_agreement_cents", pitch.MAX_AGREEMENT_CENTS)
         self.declare_parameter("search_semitones", 2.0)  # 목표 +-2반음
-        self.declare_parameter("response_timeout_sec", 10.0)
-        # 마이크 대신 WAV를 읽는다 (마이크 없이 흐름 확인용). 빈 문자열이면 마이크를 쓴다.
-        # {string_no}를 넣으면 줄 번호로 치환된다. 예: tools/g{string_no}_*.wav
+        self.declare_parameter("record_sec_high", RECORD_SEC_HIGH)
+        self.declare_parameter("record_sec_low", RECORD_SEC_LOW)
+        self.declare_parameter("low_freq_hz", LOW_FREQ_HZ)
+        self.declare_parameter("default_timeout_sec", 10.0)
+        self.declare_parameter("default_onset_timeout_sec", 10.0)
+        # 마이크 대신 WAV를 읽는다 (마이크 없이 흐름 확인용). 빈 문자열이면 마이크.
+        # {string_number}를 넣으면 줄 번호로 치환된다. 예: tools/g{string_number}_*.wav
         self.declare_parameter("replay_wav", "")
-        for s, sec in DEFAULT_RECORD_SEC.items():
-            self.declare_parameter(f"record_sec.s{s}", sec)
 
         dev = self.get_parameter("device").value
         self.recorder = Recorder(
@@ -72,15 +88,15 @@ class AudioAnalyzer(Node):
             callback_group=self._cb_group,
         )
 
-        # 첫 측정이 장치 여는 시간을 물지 않도록 미리 열어둔다. 실패해도 측정 때 다시 시도한다.
+        # 첫 측정이 장치 여는 시간을 물지 않도록 미리 열어둔다. 실패해도 측정 때 다시 시도.
         try:
             sr = self.recorder.open()
             self.get_logger().info(
                 f"입력 장치 '{self.recorder.device_name()}' {sr} Hz 로 열림")
             if sr != self.recorder.requested_rate:
                 self.get_logger().warn(
-                    f"요청 {self.recorder.requested_rate} Hz 는 지원되지 않아 {sr} Hz 로 열었다. "
-                    f"분석은 실제 값으로 한다.")
+                    f"요청 {self.recorder.requested_rate} Hz 는 지원되지 않아 {sr} Hz 로 "
+                    f"열었다. 분석은 실제 값으로 한다.")
         except RecorderError as exc:
             self.get_logger().warn(f"입력 장치를 아직 열지 못했다: {exc}")
 
@@ -88,14 +104,14 @@ class AudioAnalyzer(Node):
 
     # ---------------- Goal 수락 정책 ----------------
     def on_goal(self, goal_request):
-        if goal_request.string_no not in pitch.STRINGS:
-            self.get_logger().warn(f"알 수 없는 줄 번호 {goal_request.string_no} — 거부")
+        if not (20.0 < goal_request.target_hz < 5000.0):
+            self.get_logger().warn(
+                f"목표 주파수 {goal_request.target_hz} Hz 가 범위를 벗어난다 — 거부")
             return GoalResponse.REJECT
         if self._busy:
             self.get_logger().warn(
-                f"측정 진행 중이라 거부 "
-                f"(job {goal_request.job_id} / {goal_request.string_no}번 / "
-                f"measure {goal_request.measure_id})")
+                f"측정 진행 중이라 거부 (job {goal_request.job_id} / "
+                f"{goal_request.string_number}번 / m{goal_request.measurement_id})")
             return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
@@ -103,119 +119,174 @@ class AudioAnalyzer(Node):
         self.get_logger().info("취소 요청 수신")
         return CancelResponse.ACCEPT
 
-    # ---------------- 측정 ----------------
-    def _record_sec(self, string_no):
-        return float(self.get_parameter(f"record_sec.s{string_no}").value)
+    # ---------------- 보조 ----------------
+    def _record_sec(self, target_hz):
+        if target_hz < float(self.get_parameter("low_freq_hz").value):
+            return float(self.get_parameter("record_sec_low").value)
+        return float(self.get_parameter("record_sec_high").value)
 
-    def _result(self, req, analysis=None, fail_reason=""):
+    def _analyze(self, sig, sr, target_hz):
+        return pitch.analyze(
+            sig, sr, target_hz,
+            min_db=float(self.get_parameter("min_db").value),
+            semitones=float(self.get_parameter("search_semitones").value),
+            min_prominence_db=float(self.get_parameter("min_prominence_db").value),
+            max_agreement_cents=float(self.get_parameter("max_agreement_cents").value),
+        )
+
+    def _result(self, req, analysis=None, failure_reason=None):
         res = MeasurePitch.Result()
         res.job_id = req.job_id
-        res.string_no = req.string_no
-        res.measure_id = req.measure_id
+        res.string_number = req.string_number
+        res.measurement_id = req.measurement_id
         if analysis is not None and analysis.ok:
             res.success = True
-            res.measured_hz = analysis.hz
-            res.fail_reason = ""
+            res.frequency_hz = float(analysis.hz)
+            res.failure_reason = pitch.FAIL_NONE
         else:
             res.success = False
-            res.measured_hz = float("nan")
-            res.fail_reason = fail_reason or (
-                analysis.fail_reason if analysis is not None else "알 수 없음")
+            res.frequency_hz = 0.0   # success=false면 읽지 않는다 (명세 4절)
+            if failure_reason is not None:
+                res.failure_reason = failure_reason
+            elif analysis is not None:
+                res.failure_reason = analysis.failure_reason
+            else:
+                res.failure_reason = pitch.FAIL_NO_PITCH
         return res
 
+    # ---------------- 측정 ----------------
     def on_measure(self, goal_handle):
         req = goal_handle.request
-        tag = f"job {req.job_id} / {req.string_no}번 / measure {req.measure_id}"
+        tag = (f"job {req.job_id} / {req.string_number}번 / m{req.measurement_id} "
+               f"/ 목표 {req.target_hz:.2f}Hz")
         self._busy = True
-        t0 = time.monotonic()
-        timeout = float(self.get_parameter("response_timeout_sec").value)
-
-        rec_sec = self._record_sec(req.string_no)
-        skip = float(self.get_parameter("skip_head_sec").value)
-        replay = str(self.get_parameter("replay_wav").value or "")
-
         try:
-            if replay:
-                # 마이크 대신 WAV. 준비 Feedback은 형식을 맞추기 위해 그대로 보낸다.
-                path = replay.replace("{string_no}", str(req.string_no))
-                fb = MeasurePitch.Feedback()
-                fb.ready = True
-                goal_handle.publish_feedback(fb)
-                try:
-                    raw, sr = read_wav(path)
-                except Exception as exc:
-                    self.get_logger().error(f"[{tag}] WAV를 읽지 못했다 {path}: {exc}")
-                    return self._result(req, fail_reason=pitch.FAIL_NO_DEVICE)
-                raw = raw[:int(rec_sec * sr)]
-                self.get_logger().info(
-                    f"[{tag}] WAV 재생 모드 — {path} ({sr} Hz, {len(raw) / sr:.2f}초)")
-            else:
-                # 1) 녹음 준비. 여기서 스트림이 살아 있어야 ready를 보낼 수 있다.
-                try:
-                    sr = self.recorder.open()
-                except RecorderError as exc:
-                    self.get_logger().error(f"[{tag}] {exc}")
-                    return self._result(req, fail_reason=pitch.FAIL_NO_DEVICE)
-
-                self.recorder.flush()
-                fb = MeasurePitch.Feedback()
-                fb.ready = True
-                goal_handle.publish_feedback(fb)
-
-                # 2) 녹음
-                self.get_logger().info(f"[{tag}] 녹음 {rec_sec}초 시작 ({sr} Hz)")
-                try:
-                    raw = self.recorder.read(
-                        rec_sec,
-                        abort=lambda: goal_handle.is_cancel_requested,
-                        timeout=max(0.1, timeout - (time.monotonic() - t0)),
-                    )
-                except TimeoutError as exc:
-                    self.get_logger().error(f"[{tag}] {exc}")
-                    return self._result(req, fail_reason=pitch.FAIL_TIMEOUT)
-
-                if raw is None or goal_handle.is_cancel_requested:
-                    goal_handle.canceled()
-                    self.get_logger().info(f"[{tag}] 취소됨")
-                    return self._result(req, fail_reason=pitch.FAIL_CANCELED)
-
-            # 3) 과도음 구간 제외 후 분석
-            sig = raw[int(skip * sr):]
-            analysis = pitch.analyze(
-                sig, sr, req.string_no,
-                min_db=float(self.get_parameter("min_db").value),
-                semitones=float(self.get_parameter("search_semitones").value),
-                min_prominence_db=float(self.get_parameter("min_prominence_db").value),
-                max_agreement_cents=float(
-                    self.get_parameter("max_agreement_cents").value),
-            )
-
-            elapsed = time.monotonic() - t0
-            if elapsed > timeout:
-                self.get_logger().error(f"[{tag}] 응답 제한 {timeout}초 초과 ({elapsed:.2f}초)")
-                goal_handle.abort()
-                return self._result(req, fail_reason=pitch.FAIL_TIMEOUT)
-
-            level = f"{elapsed:.2f}초"
-            if elapsed > RESPONSE_GOAL_SEC:
-                self.get_logger().warn(
-                    f"[{tag}] {analysis.summary()} — 응답 {level} (목표 {RESPONSE_GOAL_SEC}초 초과)")
-            else:
-                self.get_logger().info(f"[{tag}] {analysis.summary()} — 응답 {level}")
-
-            if analysis.ok:
-                goal_handle.succeed()
-            else:
-                goal_handle.abort()
-            return self._result(req, analysis)
-
-        except Exception as exc:                      # 어떤 경우에도 Result는 돌려준다
+            return self._measure(goal_handle, req, tag)
+        except Exception as exc:                     # 어떤 경우에도 Result는 돌려준다
             self.get_logger().error(f"[{tag}] 예외: {exc!r}")
             if goal_handle.is_active:
                 goal_handle.abort()
-            return self._result(req, fail_reason=f"내부 오류: {exc}")
+            return self._result(req, failure_reason=pitch.FAIL_NO_PITCH)
         finally:
             self._busy = False
+
+    def _measure(self, goal_handle, req, tag):
+        rec_sec = self._record_sec(req.target_hz)
+        skip = float(self.get_parameter("skip_head_sec").value)
+        timeout = req.timeout_sec if req.timeout_sec > 0 else \
+            float(self.get_parameter("default_timeout_sec").value)
+        onset_timeout = req.onset_timeout_sec if req.onset_timeout_sec > 0 else \
+            float(self.get_parameter("default_onset_timeout_sec").value)
+        replay = str(self.get_parameter("replay_wav").value or "")
+
+        # --- 입력 준비 ---
+        if replay:
+            path = replay.replace("{string_number}", str(req.string_number))
+            try:
+                buf, sr = read_wav(path)
+            except Exception as exc:
+                self.get_logger().error(f"[{tag}] WAV를 읽지 못했다 {path}: {exc}")
+                goal_handle.abort()
+                return self._result(req, failure_reason=pitch.FAIL_LOW_SIGNAL)
+            self.get_logger().info(
+                f"[{tag}] WAV 재생 모드 — {path} ({sr} Hz, {len(buf) / sr:.2f}초)")
+        else:
+            try:
+                sr = self.recorder.open()
+            except RecorderError as exc:
+                # 장치가 없으면 재시도해도 소용없지만 전용 상수가 없다. pitch.py 주석 참조
+                self.get_logger().error(f"[{tag}] 오디오 장치 열기 실패: {exc}")
+                goal_handle.abort()
+                return self._result(req, failure_reason=pitch.FAIL_LOW_SIGNAL)
+            self.recorder.flush()
+            buf = np.zeros(0, dtype=np.float32)
+
+        fb = MeasurePitch.Feedback()
+        fb.ready = True
+        goal_handle.publish_feedback(fb)
+        t_ready = time.monotonic()
+        self.get_logger().info(
+            f"[{tag}] 준비 완료 — onset 대기 (녹음 {rec_sec}초, {sr} Hz)")
+
+        # --- onset 후보를 보며 분석 ---
+        # 마이크는 계속 들어오니 onset 뒤로 rec_sec 이 찰 때까지 기다리면 된다.
+        # WAV 모드는 입력에 끝이 있어, 꼬리가 짧으면 있는 만큼으로 분석한다.
+        need = int((rec_sec + 0.05) * sr)
+        min_need = int((skip + MIN_USABLE_SEC) * sr)
+        finite = bool(replay)
+        tried, t_onset, last = set(), None, None
+
+        while True:
+            if goal_handle.is_cancel_requested:
+                goal_handle.canceled()
+                self.get_logger().info(f"[{tag}] 취소됨")
+                return self._result(req, failure_reason=pitch.FAIL_CANCELED)
+
+            now = time.monotonic()
+            if t_onset is None and now - t_ready > onset_timeout:
+                self.get_logger().warn(
+                    f"[{tag}] onset 미검출 {onset_timeout:.1f}초 — 발현 실패")
+                goal_handle.abort()
+                return self._result(req, failure_reason=pitch.FAIL_LOW_SIGNAL)
+            if t_onset is not None and now - t_onset > timeout:
+                # 여기 오는 흔한 경우는 발현이 실패해 잡음에 onset이 잘못 걸린 때다.
+                # 명세 4절에 따라 사유는 FAIL_TIMEOUT 으로 내보내되,
+                # 후보를 몇 개 왜 기각했는지는 로그에 남겨 진단할 수 있게 한다.
+                why = f" 마지막 기각: {last.summary()}" if last is not None else \
+                      " 분석 가능한 후보가 없었다"
+                self.get_logger().error(
+                    f"[{tag}] onset 이후 {timeout:.1f}초 초과 "
+                    f"(후보 {len(tried)}개 기각).{why}")
+                goal_handle.abort()
+                return self._result(req, failure_reason=pitch.FAIL_TIMEOUT)
+
+            for t in find_onsets(buf, sr):
+                if t in tried:
+                    continue
+                if t_onset is None:
+                    t_onset = time.monotonic() - (len(buf) / sr - t)
+                start = int(t * sr)
+                avail = len(buf) - start
+                if avail < need and not (finite and avail >= min_need):
+                    continue        # 아직 뒤가 덜 찼다 (WAV는 최소 길이만 넘으면 간다)
+                tried.add(t)
+                seg = buf[start + int(skip * sr):start + int(rec_sec * sr)]
+                a = self._analyze(seg, sr, req.target_hz)
+                last = a
+                if a.ok:
+                    el = time.monotonic() - t_onset
+                    msg = f"[{tag}] onset {t:.2f}초 → {a.summary()} — {el:.2f}초"
+                    if el > RESPONSE_GOAL_SEC:
+                        self.get_logger().warn(f"{msg} (목표 {RESPONSE_GOAL_SEC}초 초과)")
+                    else:
+                        self.get_logger().info(msg)
+                    goal_handle.succeed()
+                    return self._result(req, a)
+                self.get_logger().info(f"[{tag}] onset {t:.2f}초 후보 기각 — {a.summary()}")
+
+            if replay:
+                break               # 파일은 더 들어올 게 없다
+
+            try:
+                chunk = self.recorder.read(
+                    CHUNK_SEC, abort=lambda: goal_handle.is_cancel_requested)
+            except TimeoutError as exc:
+                self.get_logger().error(f"[{tag}] {exc}")
+                goal_handle.abort()
+                return self._result(req, failure_reason=pitch.FAIL_TIMEOUT)
+            if chunk is None:
+                goal_handle.canceled()
+                return self._result(req, failure_reason=pitch.FAIL_CANCELED)
+            buf = np.concatenate([buf, chunk])
+
+        # 파일 모드에서 후보를 다 써버린 경우
+        if last is None:
+            self.get_logger().warn(f"[{tag}] onset 후보 없음")
+            goal_handle.abort()
+            return self._result(req, failure_reason=pitch.FAIL_LOW_SIGNAL)
+        self.get_logger().warn(f"[{tag}] 모든 후보 기각 — {last.summary()}")
+        goal_handle.abort()
+        return self._result(req, last)
 
     def destroy_node(self):
         self.recorder.close()

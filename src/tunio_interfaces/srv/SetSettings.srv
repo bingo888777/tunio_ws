@@ -1,6 +1,6 @@
-float64 tolerance_cents
-uint8   max_adjust
-float64 measure_timeout_sec
+# 조율 설정을 변경한다. 작업 시작 전에만 허용하며 작업 중에는 거부한다.
+
+TuningSettings settings    # 변경할 설정값 전체
 ---
-bool accepted
-string message
+bool accepted              # 반영 여부
+string message             # 거부 시 사유. 작업 진행 중, 입력 범위 초과 등

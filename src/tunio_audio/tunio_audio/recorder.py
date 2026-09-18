@@ -27,6 +27,82 @@ class RecorderError(RuntimeError):
     pass
 
 
+# ---------------------------------------------------------------
+# onset(무음 -> 소리) 검출
+# ---------------------------------------------------------------
+#
+# 왜 '직전 구간 대비 상승'으로 보나:
+#   절대 레벨로는 못 가른다. 실측에서 방 소음 RMS(-25.7~-16 dBFS)가 실제 연주
+#   (-24.9~-10 dBFS)와 완전히 겹쳤다. "커지면 발현"은 성립하지 않는다.
+#   고정 기준선 대비로 봐도 방 소음이 자기 중앙값보다 최대 +13.8 dB까지 출렁여서,
+#   임계 +12 dB 한 프레임 기준이면 30초에 117번 오발했다.
+#
+# 왜 임계값을 높이지 않나:
+#   발현의 공격음이 짧아서다. 임계를 +24 dB로 올리면 소음은 막히지만 실제 발현을
+#   20개 중 14개밖에 못 잡았다. 효과가 있던 건 임계가 아니라 '지속' 조건이다.
+#   소음 스파이크는 한두 프레임이고 발현은 이어진다.
+#
+# 왜 느슨하게 잡나 (RISE_DB 8.0, PERSIST 2):
+#   엄격하게 잡아 오발을 0으로 만들면 조용한 조건에서만 통한다. 잡음을 섞어 재보니
+#   어느 설정이든 잡음이 커지면 무너지는데, 그보다 먼저 주파수 측정 자체가 무너졌다.
+#     잡음 -6dB : 엄격 onset 20/20, 측정은 10/20
+#     잡음  0dB : 엄격 onset  8/20, 측정은 10/20
+#   그래서 onset은 후보를 넉넉히 내놓고, 진짜 발현인지는 pitch.analyze 의 관문
+#   (돌출 16dB + 창 일치 12센트)이 판정하게 한다. 이 방식이 모든 잡음 레벨에서
+#   "발현 위치를 정답으로 알려준 경우"와 같은 성적을 냈다. onset 때문에 잃는 게 없다.
+#
+# 아직 못 잰 것: 로봇 구동음. 그리퍼 접촉음이 발현처럼 뾰족할 수 있다.
+#   오발이 나도 분석 관문에서 걸러지므로 측정이 틀리지는 않고 대기 시간만 늘어난다.
+#   로봇이 붙는 대로 확인할 것.
+FRAME_SEC = 0.010
+HOP_SEC = 0.005
+ONSET_LOOKBACK_FRAMES = 40    # 직전 200ms를 기준 구간으로
+ONSET_GAP_FRAMES = 4          # 20ms 띄운다 (상승 시작이 기준에 섞이지 않게)
+ONSET_RISE_DB = 8.0
+ONSET_PERSIST_FRAMES = 2
+ONSET_MIN_GAP_SEC = 0.3       # 같은 발현을 여러 번 세지 않도록
+
+
+def frame_levels(x, sr, frame_sec=FRAME_SEC, hop_sec=HOP_SEC):
+    """프레임별 RMS를 dB로. 반환 길이는 (len(x) - frame) // hop + 1."""
+    n, h = int(frame_sec * sr), int(hop_sec * sr)
+    if len(x) < n:
+        return np.zeros(0)
+    starts = np.arange(0, len(x) - n + 1, h)
+    out = np.empty(len(starts))
+    for i, st in enumerate(starts):
+        seg = x[st:st + n]
+        out[i] = 20 * np.log10(np.sqrt(np.mean(seg * seg)) + 1e-12)
+    return out
+
+
+def local_rise(levels, lookback=ONSET_LOOKBACK_FRAMES, gap=ONSET_GAP_FRAMES):
+    """직전 구간 중앙값 대비 몇 dB 높은지. 잡음 바닥이 변해도 따라간다."""
+    out = np.full(len(levels), -99.0)
+    for i in range(lookback + gap, len(levels)):
+        out[i] = levels[i] - np.median(levels[i - lookback - gap:i - gap])
+    return out
+
+
+def find_onsets(x, sr, rise_db=ONSET_RISE_DB, persist=ONSET_PERSIST_FRAMES,
+                min_gap_sec=ONSET_MIN_GAP_SEC, hop_sec=HOP_SEC):
+    """
+    소리가 시작된 지점(onset) 후보들을 초 단위로 돌려준다.
+
+    느슨하게 잡는다. 진짜 발현인지는 부르는 쪽이 pitch.analyze 로 판정한다.
+    """
+    rise = local_rise(frame_levels(x, sr, hop_sec=hop_sec))
+    out, run, last = [], 0, -1e9
+    for i, over in enumerate(rise > rise_db):
+        run = run + 1 if over else 0
+        if run == persist:
+            t = (i - persist + 1) * hop_sec
+            if t - last >= min_gap_sec:
+                out.append(t)
+                last = t
+    return out
+
+
 def read_wav(path):
     """
     WAV를 모노 float32로 읽는다.

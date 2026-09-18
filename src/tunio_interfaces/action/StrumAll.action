@@ -1,7 +1,12 @@
-# 서버 -> 로봇. 전체 줄을 훑어 화음을 울림. 측정 없는 완료 연출.
-uint8[] strings            # 비우면 전체(6,5,2,1)
+# 전체 줄을 한 번 훑어 화음을 울린다. 완료 알림용 연출 동작이며 측정하지 않는다.
+# task_manager -> robot_controller
+
+# --- Goal ---
+uint8[] string_numbers     # 대상 줄 목록. 비어 있으면 교시된 전체 줄
 ---
-bool   done
-string message
+# --- Result ---
+bool success               # 동작 수행 성공 여부
+string message             # 실패 시 사유
 ---
-string stage
+# --- Feedback ---
+# 사용하지 않음
