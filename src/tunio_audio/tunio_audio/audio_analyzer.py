@@ -4,8 +4,10 @@ audio_analyzer — measure_pitch Action 서버.
 
 TODO(정정인):
   - Goal 수신 -> ready Feedback -> 녹음 -> pitch.estimate -> Result
-  - job_id/string_no/measure_id를 Result에 그대로 실어 요청과 대조
-  - 실패 사유: 소리부족 / 판별불가 / 시간초과
+  - job_id/string_number/measurement_id를 Result에 그대로 실어 요청과 대조
+  - target_hz 기준 +-2반음으로 탐색 범위 제한(옥타브 오인 차단)
+  - timeout_sec 초과 시 FAIL_TIMEOUT 반환. 녹음 길이가 아니라 응답 제한 시간
+  - 실패 사유: FAIL_LOW_SIGNAL / FAIL_NO_PITCH / FAIL_TIMEOUT / FAIL_CANCELED
 """
 import rclpy
 from rclpy.node import Node
@@ -29,11 +31,14 @@ class AudioAnalyzer(Node):
         # TODO: 녹음 -> pitch.estimate
         goal.succeed()
         res = MeasurePitch.Result()
+        # ID 3개는 Goal 값을 그대로 되돌려준다.
+        # 늦게 도착한 이전 결과를 걸러내는 유일한 수단이라 생략 불가(명세 4절)
         res.job_id = req.job_id
-        res.string_no = req.string_no
-        res.measure_id = req.measure_id
+        res.string_number = req.string_number
+        res.measurement_id = req.measurement_id
         res.success = False
-        res.fail_reason = "미구현"
+        # success=False면 frequency_hz는 읽지 않는다. 0을 유효값으로 쓰지 않는다
+        res.failure_reason = MeasurePitch.Result.FAIL_NO_PITCH   # TODO: 미구현
         return res
 
 

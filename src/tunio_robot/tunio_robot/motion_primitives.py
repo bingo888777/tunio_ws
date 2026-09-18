@@ -9,21 +9,21 @@ TODO(정묵·성현):
 """
 
 
-def pluck_string(string_no: int):
+def pluck_string(string_number: int):
     """줄 튕기기. 힘 제어로 일정한 세기 유지 후 즉시 후퇴."""
     raise NotImplementedError
 
 
-def adjust_peg(string_no: int, raise_pitch: bool, angle_deg: float):
-    """페그 조절. 최종 접근은 항상 조이는 방향."""
+def adjust_peg(string_number: int, direction: int, angle_deg: float):
+    """
+    페그 조절. 최종 접근은 항상 조이는 방향.
+
+    direction: +1 조임(음 높이기) / -1 풀림. AdjustPeg.Goal.direction 과 같은 규약.
+    줄별 실제 모터 회전 방향 변환은 로봇측 YAML이 담당한다.
+    """
     raise NotImplementedError
 
 
-def press_pin(string_no: int) -> bool:
-    """브릿지핀을 힘 제어로 눌러 안착 확인. 반환: 안착 여부."""
-    raise NotImplementedError
-
-
-def strum_all(strings: list):
+def strum_all(string_numbers: list):
     """전체 줄을 훑어 화음. 측정 없는 완료 연출. 비우면 전체."""
     raise NotImplementedError

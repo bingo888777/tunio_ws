@@ -103,6 +103,7 @@ uint8 FAIL_NONE=0
 uint8 FAIL_LOW_SIGNAL=1
 uint8 FAIL_NO_PITCH=2
 uint8 FAIL_TIMEOUT=3
+uint8 FAIL_CANCELED=4
 ---
 # --- Feedback ---
 bool ready
@@ -214,14 +215,16 @@ uint8 FAIL_NONE=0
 uint8 FAIL_LOW_SIGNAL=1
 uint8 FAIL_NO_PITCH=2
 uint8 FAIL_TIMEOUT=3
-uint8 FAIL_ADJUST_EXHAUSTED=4
-uint8 FAIL_ROBOT_ERROR=5
-uint8 FAIL_DETUNED_ON_VERIFY=6
+uint8 FAIL_CANCELED=4
+uint8 FAIL_ADJUST_EXHAUSTED=5
+uint8 FAIL_ROBOT_ERROR=6
+uint8 FAIL_DETUNED_ON_VERIFY=7
 ```
 
 - `has_tuned_hz` / `has_verified_hz` — DB의 NULL에 대응한다. false면 해당 주파수를 읽지 않는다. 0Hz를 유효값으로 쓰지 않으려는 장치라 생략 불가
 - `adjust_count` — 실제 수행한 페그 조절 횟수. 최초 측정은 포함하지 않는다
 - `FAIL_DETUNED_ON_VERIFY` — 조율은 성공했으나 최종 검증 패스에서 허용 센트를 벗어난 경우
+- `FAIL_*` 0~4는 `MeasurePitch`의 `failure_reason`과 번호·의미가 같다. 측정 실패 사유를 그대로 옮겨 담을 수 있다. 5~7은 `StringResult`에만 있다
 
 ### msg/JobSummary.msg
 

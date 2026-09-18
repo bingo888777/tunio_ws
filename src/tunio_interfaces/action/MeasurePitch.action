@@ -20,6 +20,7 @@ uint8 FAIL_NONE=0          # 실패 아님
 uint8 FAIL_LOW_SIGNAL=1    # 소리 부족
 uint8 FAIL_NO_PITCH=2      # 주파수 판별 불가
 uint8 FAIL_TIMEOUT=3       # 응답 시간 초과
+uint8 FAIL_CANCELED=4      # 서버 취소로 중단
 ---
 # --- Feedback ---
 bool ready                 # 녹음 준비 완료. true를 받은 뒤에 서버가 play_string을 요청한다

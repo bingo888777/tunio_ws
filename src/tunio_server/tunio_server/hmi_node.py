@@ -5,13 +5,26 @@ TODO(정동휘): PyQt 이벤트 루프와 rclpy spin을 QTimer로 통합.
 """
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
+                       QoSProfile, QoSReliabilityPolicy)
+
 from tunio_interfaces.msg import TuningState
+
+# 명세 5절: /tuning/state 는 reliable, depth 1, transient local.
+# task_manager 쪽 발행 QoS와 값이 같아야 매칭된다.
+STATE_QOS = QoSProfile(
+    reliability=QoSReliabilityPolicy.RELIABLE,
+    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+    history=QoSHistoryPolicy.KEEP_LAST,
+    depth=1,
+)
 
 
 class HmiNode(Node):
     def __init__(self):
         super().__init__("hmi_node")
-        self.create_subscription(TuningState, "/tuning/state", self.on_state, 10)
+        self.create_subscription(
+            TuningState, "/tuning/state", self.on_state, STATE_QOS)
         self.get_logger().info("hmi_node 시작")
 
     def on_state(self, msg):
