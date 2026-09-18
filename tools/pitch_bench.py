@@ -232,13 +232,18 @@ def run(fn, x, sr, fmin, fmax):
 # 합성 신호 — 참값을 아는 유일한 조건
 # ===============================================================
 
-# 실측 배음 프로필 (dB, 1배음 기준)
-# E4는 t3_e4_1.wav 실측값. E2는 저음현이 기본파보다 2·3배음이 강한 특성을 반영한 추정값
-# (실제 기타 6번 줄 녹음이 생기면 실측값으로 교체할 것)
+# 실측 배음 프로필 (dB, 1배음 기준). 둘 다 실제 기타 녹음에서 뽑았다.
+#   1번 E4 — t3_e4_1.wav
+#   6번 E2 — g6_e2_*.wav 10개 평균. 기본파보다 2배음이 6.5dB, 3배음이 10.3dB 강하다
 HARMONICS = {
     1: [0.0, -2.4, -0.3, -25.8, -20.1, -22.4],
-    6: [-12.0, 0.0, -3.0, -8.0, -10.0, -14.0],
+    6: [0.0, 6.5, 10.3, -0.9, 3.2, -4.5],
 }
+
+# 실측 비조화성 계수. f_k = k*f0*sqrt(1 + B*k^2)
+# 6번 줄 g6_e2_*.wav 에서 피팅한 값으로, 통상값(1e-5~1e-4)보다 크다.
+# 이 때문에 배음을 차수로 나눠 f0를 역산하면 실제보다 높게 나온다 — 참값 추정에 쓰지 말 것.
+INHARM = {1: 1.0e-4, 6: 3.33e-4}
 
 
 def synth(f0, sr=SR, dur=1.7, profile=None, decay=3.0,
@@ -488,6 +493,7 @@ def main():
     fmin = f_target * 2 ** (-2 / 12)
     fmax = f_target * 2 ** (+2 / 12)
     profile = HARMONICS.get(args.string, HARMONICS[1])
+    inharm = INHARM.get(args.string, 1.0e-4)
 
     # 탐색 범위는 목표 기준으로 잡되(실제 운용과 동일), 합성 신호의 실제 f0는
     # 목표에서 벗어나게 둔다. 격자 기반 알고리즘에 공짜 점수를 주지 않기 위해서다.
@@ -508,9 +514,9 @@ def main():
         x = synth(f_true, SR, profile=profile)
         report_single(algos, x, SR, fmin, fmax, f_true, "이상적 조건 (잡음 없음)")
 
-        x = synth(f_true, SR, profile=profile, inharm=1e-4)
+        x = synth(f_true, SR, profile=profile, inharm=inharm)
         report_single(algos, x, SR, fmin, fmax, f_true,
-                      "비조화성 포함 (B=1e-4, 실제 현에 가까움)")
+                      f"비조화성 포함 (B={inharm:.2e}, 해당 줄 실측값)")
 
         sigs = [synth(f_true, SR, profile=profile, snr_db=30, seed=i)
                 for i in range(10)]
