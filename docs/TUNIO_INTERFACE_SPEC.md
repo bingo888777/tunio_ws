@@ -73,7 +73,7 @@ src/tunio_interfaces/
 - `string_number` — 배열 인덱스가 아니라 **실제 줄 번호** (6, 5, 2, 1)
 - 실패 표현 — `bool success` + `string message`. 단, `MeasurePitch`만 `failure_reason` 상수를 쓴다
 - 열거 상수를 나중에 바꿀 때 기존 번호를 재사용하거나 당기지 않는다. 뒤에 추가만 한다
-- Feedback은 `MeasurePitch`와 `PlayString`에만 있다
+- Feedback은 `MeasurePitch`에만 있다
 
 ---
 
@@ -110,7 +110,7 @@ bool ready
 ```
 
 - `target_hz` — 마이크가 이 값 ±2반음으로 탐색 범위를 제한한다. 옥타브 오인 차단용. 목표 주파수의 단일 출처는 서버다
-- `timeout_sec` — 결과 응답 제한 시간이지 녹음 길이가 아니다. 초과 시 마이크가 `FAIL_TIMEOUT`을 반환한다
+- `timeout_sec` — 결과 응답 제한 시간이지 녹음 길이가 아니다. 카운트는 audio_analyzer가 오디오 onset(무음 → 소리)을 스스로 검출한 시점부터 시작하며, 초과 시 마이크가 `FAIL_TIMEOUT`을 반환한다. 로봇 접근·파지 시간이 타임아웃에 먹히지 않고, 서버나 로봇의 신호에 의존하지 않는다
 - Result의 ID 3개는 Goal 값을 그대로 되돌려준다. 늦게 도착한 이전 결과를 걸러내는 유일한 수단이라 생략 불가
 - `success=false`면 `frequency_hz`는 읽지 않는다. 0Hz를 유효값으로 쓰지 않는다
 - Feedback `ready=true`를 받은 뒤에 서버가 `play_string`을 요청한다
@@ -128,10 +128,9 @@ bool success
 string message
 ---
 # --- Feedback ---
-bool plucked
+# 사용하지 않음
 ```
 
-- `plucked=true`가 마이크 타임아웃의 기준 시점이다. 이게 없으면 로봇 접근 시간이 타임아웃에 먹힌다
 - 발현 직후 5mm 이상 후퇴(버징 방지)는 로봇 내부에서 처리하며 인터페이스에 드러나지 않는다
 
 ### action/AdjustPeg.action
@@ -414,6 +413,5 @@ ament_export_dependencies(rosidl_default_runtime)
 
 - **백래시 마무리 주체** — 현재는 task_manager가 결정(풀기 goal + 조이기 goal 두 번). 기획서 9.1절은 로봇이 마무리한다고 적혀 있어 문서 간 불일치가 있다
 - **타임아웃 주체** — 현재는 마이크가 직접 재고 `FAIL_TIMEOUT` 반환. 서버가 Action을 취소하는 방식이면 실패 사유가 뭉개진다
-- **`plucked` Feedback** — 기획서에 없던 항목이라 로봇 담당자의 추가 작업이 필요하다
 - **설정 Service 제공 노드** — 현재 전제는 result_store. hmi_node가 제공하는 안도 가능
 - **허용 센트 기본값** — 미정. 첫 통합 테스트는 ±10센트로 시작 권장

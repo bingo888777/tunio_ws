@@ -35,10 +35,7 @@ class RobotController(Node):
 
     def on_play(self, goal):
         MP.pluck_string(goal.request.string_number)   # TODO
-        # 발현 완료 시점. 마이크의 타임아웃 기준이 된다(명세 4절)
-        # TODO: 실제 타현 순간에 맞춰 발행
-        fb = PlayString.Feedback(); fb.plucked = True
-        goal.publish_feedback(fb)
+        # Feedback 없음. 타임아웃 카운트는 서버가 이 Result를 받은 시점부터 센다
         goal.succeed()
         res = PlayString.Result(); res.success = True; res.message = ""
         return res
