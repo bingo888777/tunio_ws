@@ -43,7 +43,7 @@
 - 페그 축 토크 경로는 웜기어 자기잠금으로 신호가 차단됨 → 측정 불가.
 - 따라서 **주파수는 마이크로 측정하고, 장력이 필요하면 T=4L²f²μ 로 역산**한다.
 - 힘 센서는 조율 판정이 아니라 아래에만 쓴다:
-  타현 세기 유지(2~5N), 접촉 탐색, 파지 확인, 브릿지핀 누르기, 과토크 안전정지.
+  타현 세기 유지(2~5N), 접촉 탐색, 파지 확인, 과토크 안전정지.
 
 ### 3.2 페그 백래시 — 최종 접근은 항상 조이는 방향
 - 목표보다 음이 높으면, 목표 아래로 충분히 풀었다가 조여 올린다.
@@ -74,7 +74,14 @@
 - 판정은 센트, 화면 표시는 Hz.
   - 센트 오차 = 1200 × log2(측정 / 목표), 절댓값이 허용 센트 이내면 성공
 - 재시도: 페그 조절 최대 5회 / 측정 실패 시 추가 재측정 최대 3회 (임시값, 테스트 후 확정)
-- 측정 응답: 정상 목표 2초, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
+- 측정 응답: 정상 목표 **2.2초**, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
+  - 2초에서 2.2초로 올렸다(2026-09-18). 저음현은 녹음 2.0초가 필요해 2초로는 못 맞춘다.
+    6번 줄 실측 2.05초 = 장치 10ms + 녹음 2.0초 + 분석 36ms.
+    근거는 docs/주파수분석_테스트가이드.md 4.4
+  - 녹음 길이는 줄마다 다르게 잡는다. 고음 1.5초, 저음 2.0초
+    (안정화 판정이 겹치는 창 3개를 쓰므로 고음도 1.0초로는 부족하다.
+     실측 스윕은 src/tunio_audio/tunio_audio/audio_analyzer.py 주석)
+  - 통신 지연(ROS Action 왕복 + 3 PC Wi-Fi)은 아직 미포함. 통합 후 측정
 - 유효 측정값 없으면 화면 '측정 불가', DB 주파수 NULL (0Hz를 유효값으로 쓰지 않음)
 
 ---
@@ -88,9 +95,10 @@
 
 **Phase 2 · 검증·마무리·저장**
 4줄 최종 검증 패스(조절 없이 측정만, 틀어진 줄은 실패 재기록)
-→ 브릿지핀 안착 확인·고정(힘 제어로 각 핀 눌러 확인)
 → 전체 화음 한 번 튕겨 완료 알림 (측정 안 함, 연출)
 → 대기 자세 복귀 → 결과 저장
+
+**브릿지핀 안착 확인은 범위에서 제외했다**(2026-09-18, 기획서 v1.2 / PR #2).
 
 **최종 검증 패스가 필요한 이유**: 6줄 합계 약 715N이 넥을 당겨, 한 줄을 조이면
 다른 줄이 틀어진다. 그래서 마지막에 다시 측정해 실제 상태를 확인한다.
@@ -112,9 +120,9 @@ src/
 
 ### 노드 관계
 - task_manager ─ measure_pitch Action ─ audio_analyzer
-- task_manager ─ play_string / adjust_peg / press_pin / strum_all Action ─ robot_controller
+- task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
 - task_manager ─ /tuning/state Topic ─ hmi_node ─ PyQt
-- task_manager ─ get_history / settings Service ─ result_store ─ SQLite
+- task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
 
 ### 3 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID)
 - 서버 PC: tunio_server
@@ -125,22 +133,33 @@ src/
 
 ## 7. ROS 2 인터페이스 (tunio_interfaces)
 
-**Action**
+**기준 문서는 `docs/TUNIO_INTERFACE_SPEC.md`다. 코드와 다르면 문서가 기준.**
+아래는 요약이며, 필드 단위는 명세나 `ros2 interface show`로 확인할 것.
+
+**Action (4)**
 - /robot/play_string — 줄 번호 → 발현
-- /robot/adjust_peg — 줄 번호, 높이기/낮추기, 각도(°). 조이는 방향으로 마무리
-- /robot/press_pin — 줄 번호 → 힘 제어로 브릿지핀 눌러 안착 확인
+- /robot/adjust_peg — 줄 번호, direction(±1), angle_deg(양수).
+  백래시 마무리(풀었다 조이기)는 **task_manager가 결정**하고 로봇은 시킨 대로만 한다
 - /robot/strum_all — 전체 줄 훑어 화음 (측정 없는 연출)
-- /audio/measure_pitch — job_id, string_no, measure_id → 준비 Feedback, 측정 Result
+- /audio/measure_pitch — job_id, string_number, measurement_id, target_hz,
+  timeout_sec, onset_timeout_sec → 준비 Feedback, 측정 Result
 
-**Service**
-- /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel
-- /tuning/get_history, /tuning/get_settings, /tuning/set_settings
+**Service (5)**
+- /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel — 넷이 CommandTuning 공유.
+  어느 이름으로 불렸는지가 곧 명령이다
+- /tuning/get_settings, /tuning/set_settings, /tuning/get_history, /tuning/save_job
 
-**Topic**
-- /tuning/state — 작업 단계·현재 줄·목표/측정 주파수·Hz 오차·조절 횟수·줄별 결과
+**Message (4)** — TuningState, StringResult, TuningSettings, JobSummary
+- /tuning/state — reliable, depth 1, **transient local** (늦게 켠 UI도 마지막 상태를 받는다)
 
-> measure_pitch Result에는 요청 식별자(job_id·string_no·measure_id)를 그대로 실어,
-> 늦게 도착한 이전 결과가 현재 결과로 쓰이지 않도록 대조한다.
+> measure_pitch Result에는 요청 식별자(job_id·string_number·measurement_id)를 그대로
+> 실어, 늦게 도착한 이전 결과가 현재 결과로 쓰이지 않도록 대조한다.
+
+**열거 상수 규칙** — 뒤에 추가만 한다. 기존 번호를 당기거나 재사용하지 않는다.
+> ⚠️ `MeasurePitch`의 `FAIL_*`에 상수를 추가할 때는 **반드시 `StringResult`에도 같은
+> 번호로** 넣어야 한다. 명세 6절이 0~4를 "그대로 옮겨 담을 수 있다"고 보장하는데
+> `StringResult`는 5·6·7을 이미 쓴다. 한쪽에만 5를 추가하면 서버가 복사했을 때
+> 전혀 다른 뜻으로 둔갑하고, 에러 없이 조용히 틀린다.
 
 ---
 
@@ -157,8 +176,18 @@ src/
 - 합성 신호 검증에서 전 줄 1센트 이내 확인됨
 - 온라인 웹 튜너도 같은 계열(자기상관/YIN)이다. 특별한 기술 아님. 이식할 필요 없음.
 
-**개선 방향(구현 시)**: 한 번 판정이 아니라 짧게 여러 번 연속 측정해서
-최근 값들이 1센트 내로 모이면 그 값을 반환하는 "안정화 판정" 방식으로 만든다.
+**안정화 판정 (구현 완료, 2026-09-18)**: 원안은 "짧게 여러 번 독립 측정해 모이면 채택"
+이었으나 저음현에서 성립하지 않는다. 6번 줄은 1.0초로 자르면 그것만으로 50센트가 흔들려
+짧은 측정끼리는 절대 안 모인다. 그래서 **"긴 창을 겹쳐서 여러 번"** 재고 서로 일치하는지를
+본다. 반환값은 전체 구간으로 내고(정밀도 최대) 겹친 창들은 신뢰 확인에만 쓴다.
+
+**유효 측정 판정**: RMS(`min_db`)만으로는 방 소음을 못 거른다. 실측에서 방 소음 RMS가
+실제 연주와 완전히 겹쳤다. 그래서 두 관문을 더 건다 —
+FFT 피크 돌출 ≥16dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+
+**onset 검출**: 타임아웃 기준점은 마이크가 스스로 잡는 onset이다(명세 4절).
+onset은 느슨하게 후보를 내고 진짜 발현인지는 위 관문이 판정한다.
+근거는 `src/tunio_audio/tunio_audio/recorder.py` 주석.
 
 ---
 
