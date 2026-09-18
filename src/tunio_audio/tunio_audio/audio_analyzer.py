@@ -1,6 +1,6 @@
 """
 audio_analyzer — measure_pitch Action 서버.
-요청 시에만 녹음/분석. 녹음 준비 완료를 Feedback으로 알림(기획서 4.3).
+요청 시에만 녹음/분석. 녹음 준비 완료를 Feedback으로 알림(기획서 5.2).
 
 TODO(정정인):
   - Goal 수신 -> ready Feedback -> 녹음 -> pitch.estimate -> Result

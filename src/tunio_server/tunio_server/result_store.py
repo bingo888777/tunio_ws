@@ -1,6 +1,6 @@
 """
 result_store — SQLite 저장/조회 서비스.
-정상 종료 시 일괄 저장, 취소·부분 결과는 저장 안 함(기획서 9.2).
+정상 종료 시 일괄 저장, 취소·부분 결과는 저장 안 함(기획서 10.2).
 TODO(정동휘): GetHistory / SaveJob 구현, db.py 스키마를 새 인터페이스에 맞추기.
 """
 import rclpy

@@ -1,6 +1,6 @@
 """
 SQLite 접근. 테이블 3개: jobs / string_results / settings_snapshot.
-기획서 9.2. 컬럼은 tunio_interfaces 의 JobSummary / StringResult / TuningSettings 에 맞춘다.
+기획서 10.2. 컬럼은 tunio_interfaces 의 JobSummary / StringResult / TuningSettings 에 맞춘다.
 
 열거값은 정수로 저장한다. 의미는 메시지 정의가 기준:
   result          -> StringResult.RESULT_*

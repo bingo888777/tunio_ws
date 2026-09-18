@@ -1,6 +1,6 @@
 """
 hmi_node — PyQt UI와 ROS2를 잇는다. 버튼 -> Service, /tuning/state -> 화면.
-탭 3개: 실시간 작업 / 작업 이력 / 설정 (기획서 9.1)
+탭 3개: 실시간 작업 / 작업 이력 / 설정 (기획서 10.1)
 TODO(정동휘): PyQt 이벤트 루프와 rclpy spin을 QTimer로 통합.
 """
 import rclpy
