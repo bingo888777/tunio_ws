@@ -238,15 +238,33 @@ def main():
     print(f"  관절은 명령대로 움직였다 (마지막 {rows[-1][1]:+.2f}도 / "
           f"명령 {rows[-1][0]:+.2f}도)" if lag == 0 else
           f"  ⚠️ 관절이 명령만큼 안 움직인 구간이 {lag}개 있다")
-    peak = max(rows, key=lambda r: abs(r[3]))
-    print(f"  토크 최대 변화 {peak[3]:+.2f} (누적 {peak[0]:+.2f}도 지점)")
 
-    rise = next((r for r in rows if abs(r[3]) > 0.5 * abs(peak[3])), None)
-    if rise and abs(peak[3]) > 0.3:
-        print(f"  저항이 붙기 시작한 지점 약 {abs(rise[0]):.2f}도 "
-              f"— 헛돎(백래시) 구간의 대략치다")
-    elif not args.no_grip:
-        print("  저항이 거의 안 붙었다. 헛물었거나 각도가 백래시보다 작다")
+    # 정지 상태와 도는 중의 차이가 후보 신호다. 도는 순간 한 번 바뀌고
+    # 그 뒤로 평평하면 그건 마찰이고, 각도에 따라 커지면 장력이다
+    during = [r[2] for r in rows]
+    mean = sum(during) / len(during)
+    spread = max(during) - min(during)
+    print(f"  회전 전(정지)  {base_t[joint - 1]:+.3f}")
+    print(f"  회전 중 평균   {mean:+.3f}   흩어짐 {spread:.3f}")
+    print(f"  정지→회전 단차 {mean - base_t[joint - 1]:+.3f}  <- 파지 확인의 후보 신호")
+
+    # 기울기가 있나. 앞 1/3 과 뒤 1/3 의 평균을 흩어짐과 견준다
+    k = max(2, len(during) // 3)
+    head, tail = during[:k], during[-k:]
+    slope = abs(sum(tail) / k) - abs(sum(head) / k)
+    if spread > 0 and slope > max(0.5 * spread, 0.1):
+        knee = next((r for r in rows
+                     if abs(r[2]) > abs(sum(head) / k) + 0.5 * slope), None)
+        print(f"  각도가 커질수록 저항이 늘었다 (뒤쪽이 {slope:+.3f} 더 크다)")
+        if knee:
+            print(f"  꺾이는 지점 약 {abs(knee[0]):.2f}도 — 헛돎(백래시) 대략치다")
+    else:
+        print(f"  **기울기 없음.** 앞뒤 차이 {slope:+.3f} 가 흩어짐 {spread:.3f} 안에 있다.")
+        print("  각도가 늘어도 저항이 안 는다는 뜻이다. 두 가지로 읽힌다 —")
+        print("    · 저항이 마찰뿐이고 줄 장력 몫은 이 센서로 안 보인다")
+        print("    · 또는 헛돌아서 애초에 페그를 안 돌렸다")
+        if not args.no_grip:
+            print("  --no-grip 으로 허공 값을 재서 단차를 비교해야 갈린다.")
 
     if heard:
         print(f"\n  소리: {heard}")
