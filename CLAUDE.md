@@ -8,7 +8,7 @@
 ## 0. 한 줄 요약
 
 두산 M0609 협동로봇이 **비전 없이** 기타 줄을 튕겨 소리로 주파수를 측정하고,
-페그를 돌려 자동 조율하는 시스템. UI는 PyQt, 통신은 ROS 2 Jazzy.
+페그를 돌려 자동 조율하는 시스템. UI는 관제 웹, 통신은 ROS 2 Jazzy.
 
 ---
 
@@ -27,7 +27,15 @@
 - ROS 2: Jazzy
 - 언어: 전부 Python (rclpy). C++ 쓰지 않는다.
 - 로봇: 두산 M0609 (6축 협동로봇) + OnRobot RG2 그리퍼
-- 그리퍼 손가락 외측에 기타 피크를 부착 (피크 집기·반환 동작 없음)
+- 피크는 **거치대에서 집었다 반환하는 방식**이다 (2026-09-19 변경).
+  - v1.2까지는 그리퍼 손가락 외측에 부착하고 집기·반환 동작이 없었다.
+  - 페그를 잡으려면 손가락을 써야 하므로, 발현과 페그 조절 사이마다
+    피크를 놓고 다시 집는다. 조절 1회마다 반환·집기가 한 번씩 더 붙는다.
+  - 거치대 위치·피크 파지 폭/힘은 교시 대상이다 (tunio_robot 의 teach_points.yaml).
+  - 놓친 피크는 비전이 없어 되찾을 수 없다. 집기 실패 감지 수단이 필요하다
+    (RG2 의 grip detected 는 지금 ROS 토픽으로 안 나온다. 3.6 참조)
+  - 집기·반환을 **언제 할지는 로봇이 스스로 판단한다.** 서버는 지시하지 않는다.
+    인터페이스(msg/srv/action)는 이 변경으로 바뀌지 않는다.
 - 마이크: **USB 외장 마이크로 확정(구매 완료).** 노트북 내장은 게인 조절 폭이 좁아 쓰지 않는다
 - 두산/그리퍼 드라이버(dsr_*, onrobot_rg2)는 시스템에 이미 설치돼 있다.
   **이 저장소에 복사해 넣지 말 것.** package.xml에 의존성으로만 선언한다.
@@ -43,7 +51,9 @@
 - 페그 축 토크 경로는 웜기어 자기잠금으로 신호가 차단됨 → 측정 불가.
 - 따라서 **주파수는 마이크로 측정하고, 장력이 필요하면 T=4L²f²μ 로 역산**한다.
 - 힘 센서는 조율 판정이 아니라 아래에만 쓴다:
-  타현 세기 유지(2~5N), 접촉 탐색, 파지 확인, 과토크 안전정지.
+  타현 세기 유지(2~5N), 접촉 탐색, 과토크 안전정지.
+- 파지 확인은 지금 수단이 없다(3.6 참조). **잡았다고 가정하고 진행하며, 결과적으로
+  실패하면 그 줄을 실패로 처리한다.** 잡았는지 확인하는 기능은 추가 기능으로 둔다.
 
 ### 3.2 페그 백래시 — 최종 접근은 항상 조이는 방향
 - 목표보다 음이 높으면, 목표 아래로 충분히 풀었다가 조여 올린다.
@@ -65,6 +75,21 @@
 ### 3.5 마이크
 - OS의 마이크 향상 기능(노이즈 제거·자동 음량 AGC·에코 제거)은 반드시 끈다.
 - 측정은 반드시 한 줄씩. 여러 줄 동시 발현은 주파수가 겹쳐 분리 불가.
+
+### 3.6 RG2 그리퍼로 되는 것과 안 되는 것
+- 쥐는 힘 0~40N, 벌리는 폭 0~110mm 를 수치로 지정할 수 있다.
+- 다만 `/onrobot/sendCommand` 는 힘을 숫자로 못 받는다. 40N에서 시작해
+  2.5N 단위로 올리고 내린다. 단계 수 계산은 tunio_robot/gripper.py 가 한다.
+- **파지 확인(grip detected)을 못 읽는다.** 하드웨어는 알려주지만
+  이 ROS 2 포팅본에 `OnRobotRGInput` 을 발행하는 노드가 없다.
+  **현재 방침(2026-09-19): 잡았다고 가정하고 진행한다.** 피크를 놓쳤으면 발현이
+  안 되고, 그 줄은 측정 재시도를 소진해 실패로 기록된다. 원인이 로그에 바로
+  드러나지 않는다는 한계를 안고 간다. 확인 수단은 추가 기능으로 둔다.
+- 런치에 `gripper:=rg2` 를 반드시 준다. 기본값이 rg6 라서 한계값이
+  120N·160mm 로 잡히고, RG2 가 못 내는 값을 걸러주지 못한다.
+- 페그는 **여유를 준 폭**으로 문다. 꽉 물면 손목 회전축과 페그 축이
+  어긋날 때 옆힘이 걸려 많이 못 돌린다. 단 그 여유가 그대로 백래시가 되므로
+  **파지 폭을 확정한 뒤에 백래시를 잰다** (tools/peg_cal.py --backlash).
 
 ---
 
@@ -103,6 +128,10 @@
 → 벗어나면 페그 조절 후 재측정(최대 5회) / 측정 실패면 재측정(최대 3회)
 → 성공 기록 → 다음 줄
 
+피크를 집었다 놓는 방식이라, 위의 "튕기기"와 "페그 조절" 사이마다
+피크 반환·집기가 낀다. 조절 1회당 왕복 한 번이다. 줄당 최대 5회,
+4줄이면 최대 20회라 사이클 타임에 그대로 반영된다(9/22 실측 항목).
+
 **Phase 2 · 검증·마무리·저장**
 4줄 최종 검증 패스(조절 없이 측정만, 틀어진 줄은 실패 재기록)
 → 전체 화음 한 번 튕겨 완료 알림 (측정 안 함, 연출)
@@ -122,7 +151,7 @@
 ```
 src/
 ├── tunio_interfaces/   msg·srv·action 정의 (가장 먼저 합의·고정)
-├── tunio_server/       task_manager, hmi_node(PyQt), result_store(SQLite)   [정동휘]
+├── tunio_server/       task_manager, web_node(관제 웹), result_store(SQLite)  [정동휘]
 ├── tunio_robot/        robot_controller, motion_primitives (두산 API)       [정묵·성현]
 ├── tunio_audio/        audio_analyzer, pitch, recorder                      [정정인]
 └── tunio_bringup/      통합 런치 (단일 PC 테스트용)
@@ -131,7 +160,7 @@ src/
 ### 노드 관계
 - task_manager ─ measure_pitch Action ─ audio_analyzer
 - task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
-- task_manager ─ /tuning/state Topic ─ hmi_node ─ PyQt
+- task_manager ─ /tuning/state Topic ─ web_node ─ 브라우저(localhost)
 - task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
 - 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
   작업 진행 여부를 아는 유일한 노드라 '작업 중 변경 거부'를 스스로 판단)
@@ -247,9 +276,13 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 ## 12. 참고 문서
 
 - **docs/TUNIO_INTERFACE_SPEC.md — 인터페이스 기준본.** 코드와 다르면 이 문서가 기준
+- docs/TUNIO_ICD_v1.0.md — 인터페이스 필드 상세(단위·허용 범위·송수신자·시퀀스).
+  **기준본이 아니다.** SPEC 과 다르면 SPEC 을 따른다
+- docs/TUNIO_인터페이스_요약.md — 인터페이스 한눈에 보기. 상세는 SPEC·ICD 참조
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
 - docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
+- docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
 - tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
 - tools/peg_cal.py — 페그 각도-센트 캘리브레이션 도구
@@ -263,9 +296,20 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 - 측정 타임아웃 주체와 기준 시점 — 마이크가 직접 재고, 오디오 onset 검출 시점부터
 - 설정 Service 제공 노드 — task_manager
 - 브릿지핀 안착 확인 — 범위 제외
-- 완료 결과 저장 — task_manager가 result_store에 save_job 호출
+- 완료 결과 저장 — task_manager가 result_store에 save_job 호출.
+  4줄을 완주했으면 PARTIAL·FAILED 도 저장한다(중간에 끊긴 작업만 제외)
+- UI — 관제 웹(rclpy 노드 안 http.server, 서버 PC localhost 전용). PyQt 대체
+- 피크 — 거치대에서 집었다 반환. 시점은 로봇이 판단하고 서버는 지시하지 않는다
+- 대기 자세 복귀 — 전용 Action 없이 strum_all 이 책임진다
+- 파지 확인 — 수단 없음. 잡았다고 가정하고 실패 시 그 줄을 실패 처리
 
 **미확정 (실측 후 확정)**
 - 허용 센트 확정값 (현재 10.0으로 시작)
 - onset 제한 시간 확정값 (현재 10.0)
-- 페그 회전량 계산식 — tuning_logic.peg_angle()의 k=0.15는 실측 전 임시값
+- 페그 회전량 계산식 — `config/peg_calibration.yaml` 의 줄별 실측값이 들어와야 한다.
+  `measured: false` 인 동안 task_manager 는 페그를 돌리지 않고 PHASE_ERROR 로 멈춘다
+- **피크 거치대 왕복 시간** — onset_timeout_sec 확정에 필요하다. 피크를 가지러 가는
+  시간이 onset 제한 시간 예산에 들어가, 넘기면 발현 실패(FAIL_LOW_SIGNAL)로 오보고된다
+- 로봇 오류가 연속으로 날 때 작업 전체를 중단할지 (지금은 줄마다 재시도를 소진한다)
+- GetHistory 응답에 실패 사유 필드를 둘지 (지금은 found=false 만 와서 UI가
+  '기록 없음'과 'DB 오류'를 구분하지 못한다)
