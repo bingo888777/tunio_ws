@@ -13,7 +13,8 @@
   노드가 dsr01 네임스페이스에 있어야 /dsr01/dsr_controller2/... 로 풀린다.
   (우리 Action 이름은 '/robot/...' 로 절대 경로라 네임스페이스 영향을 받지 않는다)
 
-그리퍼는 OnRobot RG2 다 (2026-09-19 확정). 폭·힘을 수치로 준다. gripper.py 참조.
+그리퍼는 OnRobot RG2 이고, Compute Box 의 WebLogic 을 디지털 I/O 로 부른다
+(2026-09-19 확정). 폭·힘은 웹에서 정하고 코드는 프리셋만 고른다. gripper.py 참조.
 
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
@@ -34,11 +35,12 @@ class MotionError(Exception):
     """동작 실패. 메시지가 Action Result 의 message 로 그대로 나간다."""
 
 
-def connect(robot_cfg, logger=None):
+def connect(robot_cfg, gripper_cfg=None, logger=None):
     """
-    두산 API를 초기화한다.
+    두산 API와 그리퍼를 초기화한다.
 
-    robot_cfg — teach_points.yaml 의 robot 절 (id, model, tool, tcp)
+    robot_cfg   — teach_points.yaml 의 robot 절 (id, model, tool, tcp)
+    gripper_cfg — 같은 파일의 gripper 절 (presets, settle_sec)
     executor 에 넣지 않은 전용 노드를 만들어 DR_init 에 물린다.
     """
     global _api, _node, _gripper
@@ -62,9 +64,10 @@ def connect(robot_cfg, logger=None):
 
     _api = api
 
-    # 그리퍼. 서비스가 안 떠 있으면 여기서 걸리는 편이 동작 중에 걸리는 것보다 낫다
-    from tunio_robot.gripper import RG2
-    _gripper = RG2(_node)
+    if gripper_cfg:
+        from tunio_robot.gripper import RG2, parse_presets
+        _gripper = RG2(api, parse_presets(gripper_cfg.get("presets")),
+                       settle_sec=gripper_cfg.get("settle_sec", 0.3))
 
     if robot_cfg.get("tool"):
         api.set_tool(robot_cfg["tool"])
@@ -90,29 +93,23 @@ def _movej(joints, motion, relative=False):
                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
 
 
-def _grip(width_mm, force_n):
+def _grip(preset_name):
     """
-    페그·피크를 잡는다.
+    프리셋 이름으로 잡는다.
 
-    width_mm — 목표 폭. 페그 축을 정확히 안 잡아도 되게 여유를 준다.
-      꽉 물면 손목 회전축과 페그 축이 조금만 어긋나도 페그에 옆힘이 걸려
-      더 못 돌린다. 헐겁게 물면 그 어긋남을 흡수해 한 번에 많이 돌릴 수 있다.
-      대신 그 여유가 그대로 헛돎(백래시)이 된다. 폭을 바꾸면 백래시도 바뀌므로
-      **폭을 확정한 뒤에 백래시를 재야 한다** (tools/peg_cal.py --backlash).
-    force_n — 쥐는 힘. RG2 범위 0~40N
+    폭·힘은 WebLogic 에 설정된 값이고 여기서 못 바꾼다. 'peg' 프리셋은
+    페그 두께보다 1~2mm 여유를 준 폭이다. 꽉 물면 손목 회전축과 페그 축이
+    조금만 어긋나도 옆힘이 걸려 많이 못 돌린다. 대신 그 여유(와 고무 골무의
+    비틀림)가 그대로 헛돎이 되어 백래시에 더해진다.
     """
     if _gripper is None:
         raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
-    if width_mm is None or force_n is None:
-        raise MotionError("파지 폭·힘이 교시점 YAML 에 없다 (grip_width_mm / grip_force_n)")
-    _gripper.grip(float(width_mm), float(force_n))
+    return _gripper.select(preset_name)
 
 
 def _release():
     """그리퍼를 연다."""
-    if _gripper is None:
-        raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
-    _gripper.release()
+    return _grip("open")
 
 
 def pluck_string(pose, motion):
@@ -134,7 +131,7 @@ def adjust_peg(pose, joint, delta_deg, motion):
     """
     _require_api()
     _movej(pose.joints, motion)                     # 페그 앞으로
-    _grip(pose.grip_width_mm, pose.grip_force_n)    # 여유를 준 폭으로 파지
+    _grip("peg")                                    # 여유를 준 폭으로 파지
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)

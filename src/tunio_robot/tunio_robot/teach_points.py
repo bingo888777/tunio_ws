@@ -74,6 +74,7 @@ class TeachPoints:
         self._raw = data
         self.robot = data.get("robot", {})
         self.motion = data.get("motion", {})
+        self.gripper = data.get("gripper", {})
         self._frames = {}
         self._pegs = {}
         self._plucks = {}
@@ -85,7 +86,7 @@ class TeachPoints:
         d = self._raw
         _require(isinstance(d, dict), "최상위가 매핑이 아니다")
 
-        for key in ("robot", "motion", "frames", "pegs", "pluck"):
+        for key in ("robot", "motion", "gripper", "frames", "pegs", "pluck"):
             _require(key in d, f"'{key}' 항목이 없다")
 
         # 로봇 식별 — DR_init 에 넣을 값. 예제 기준 dsr01 / m0609
@@ -96,6 +97,8 @@ class TeachPoints:
         joint = self.motion.get("peg_joint")
         _require(isinstance(joint, int) and 1 <= joint <= 6,
                  f"motion.peg_joint 는 1~6 이어야 한다 (지금 {joint!r})")
+
+        _require(self.gripper.get("presets"), "gripper.presets 가 비었다")
 
         limit = self.motion.get("max_angle_deg")
         _require(isinstance(limit, (int, float)) and limit > 0,

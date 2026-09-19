@@ -46,7 +46,8 @@ class RobotController(Node):
         if self.dry_run:
             self.get_logger().warn("dry_run=true — 로봇을 움직이지 않는다")
         else:
-            MP.connect(self.points.robot, logger=self.get_logger())
+            MP.connect(self.points.robot, self.points.gripper,
+                       logger=self.get_logger())
 
         # 팔은 하나뿐이라 세 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
