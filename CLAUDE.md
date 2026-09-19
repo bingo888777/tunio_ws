@@ -282,6 +282,7 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
 - docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
+- docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
 - tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
 - tools/peg_cal.py — 페그 각도-센트 캘리브레이션 도구
