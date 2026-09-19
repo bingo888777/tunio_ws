@@ -62,8 +62,13 @@ def generate_launch_description():
         fake(real_delays, UnlessCondition(is_fast)),
         fake(fast_delays, IfCondition(is_fast)),
 
+        # string_done_hold_sec — 줄 하나가 끝난 뒤 잠깐 쉰다. 실제 로봇은 다음 줄로
+        # 이동하는 시간이 있어 결과를 볼 여유가 생기지만, 대역에는 그 시간이 없어
+        # 판정이 순식간에 지나간다. 기본값은 0 이라 real_all 에는 영향이 없다.
         Node(package='tunio_server', executable='task_manager', name='task_manager',
-             output='screen', parameters=[{'peg_calibration_file': sim_cal}]),
+             output='screen',
+             parameters=[{'peg_calibration_file': sim_cal,
+                          'string_done_hold_sec': 2.5}]),
         Node(package='tunio_server', executable='result_store', name='result_store',
              output='screen', parameters=[{'db_path': db}]),
         Node(package='tunio_server', executable='web_node', name='web_node',

@@ -688,3 +688,96 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 }
 
 .select:focus { outline: none; border-color: var(--accent); }
+
+/* ═══════════════ 줄이 방금 확정됐을 때 ═══════════════
+   서버는 판정이 끝나면 바로 다음 줄로 넘어간다. 그냥 두면 결과가 눈에 들어오기 전에
+   지나가므로, 화면에서 잠깐 붙잡아 보여 준다. 서버 동작 시간은 건드리지 않는다. */
+
+/* 기타 그림 — 페그에서 링이 퍼져 나간다. 작은 원이 조금 커지는 정도로는
+   멀리서 안 보여서, 바깥으로 번지는 고리로 바꿨다. */
+.gs-ring {
+  stroke: transparent;
+  transform-box: fill-box;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.gstring.just-done.ok  .gs-ring { stroke: var(--ok); }
+.gstring.just-done.bad .gs-ring { stroke: var(--bad); }
+.gstring.just-done .gs-ring { animation: ringOut 1.1s ease-out 3; }
+
+@keyframes ringOut {
+  0%   { transform: scale(1);   opacity: 0.95; stroke-width: 3; }
+  70%  { transform: scale(3.2); opacity: 0;    stroke-width: 1; }
+  100% { transform: scale(3.2); opacity: 0;    stroke-width: 1; }
+}
+
+/* 페그 자체도 같이 커졌다 돌아온다 */
+.gstring.just-done .gs-peg {
+  animation: pegDone 1.1s ease-out 3;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes pegDone {
+  0%   { transform: scale(1); }
+  25%  { transform: scale(1.6); }
+  100% { transform: scale(1); }
+}
+
+/* 현 전체가 굵어졌다 돌아온다 */
+.gstring.just-done .gs-line { animation: lineDone 1.1s ease-out 3; }
+
+@keyframes lineDone {
+  0%, 100% { stroke-width: 3; }
+  25%      { stroke-width: 7; }
+}
+
+/* 줄 번호도 커진다 */
+.gstring.just-done .gs-label {
+  animation: labelDone 1.1s ease-out 3;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+@keyframes labelDone {
+  0%, 100% { transform: scale(1); }
+  25%      { transform: scale(1.3); }
+}
+
+/* 줄별 카드 — 테두리가 맥박치고 살짝 떠오른다 */
+.scard.just-done {
+  animation: cardDone 0.85s ease-out 3;
+  position: relative;
+  z-index: 1;
+}
+
+.scard.just-done.ok  { --done-ring: var(--ok); }
+.scard.just-done.bad { --done-ring: var(--bad); }
+
+@keyframes cardDone {
+  0% {
+    box-shadow: 0 0 0 0 var(--done-ring, var(--accent));
+    transform: translateY(0);
+  }
+  30% {
+    box-shadow: 0 0 0 4px var(--done-ring, var(--accent)),
+                0 6px 18px var(--shadow);
+    transform: translateY(-3px);
+  }
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+    transform: translateY(0);
+  }
+}
+
+/* 움직임을 줄여 달라는 설정을 존중한다 */
+@media (prefers-reduced-motion: reduce) {
+  .gstring.just-done .gs-ring,
+  .gstring.just-done .gs-peg,
+  .gstring.just-done .gs-line,
+  .gstring.just-done .gs-label,
+  .scard.just-done { animation: none; }
+  .gstring.just-done .gs-ring { stroke-width: 3; opacity: 1; }
+  .scard.just-done { box-shadow: 0 0 0 3px var(--done-ring, var(--accent)); }
+}

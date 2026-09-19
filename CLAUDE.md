@@ -290,6 +290,21 @@ colcon build && source install/setup.bash
 cd src/tunio_server && python3 -m pytest test/ -q
 ```
 
+**실행은 단계별 launch 셋 중 하나로 한다** (docs/TUNIO_관제웹_구현.md 2절).
+
+```bash
+# 1 전부 가짜 — 화면과 서버 흐름 확인. 페그를 돌리면 실제로 수렴한다
+ros2 launch tunio_bringup sim_all.launch.py            # speed:=fast 로 빠르게
+# 2 마이크만 진짜 — 사람이 직접 줄을 튕겨 측정을 검증한다
+ros2 launch tunio_bringup sim_robot.launch.py device:=2
+# 3 전부 진짜 — 최종. dry_run 기본 true 라 그냥 띄우면 로봇은 안 움직인다
+ros2 launch tunio_bringup real_all.launch.py dry_run:=false gripper:=rg2
+```
+
+1·2 는 `config/peg_calibration.sim.yaml` 을 쓴다. **지어낸 값이라 수렴해도 조율
+성능의 근거가 되지 않는다.** 3 은 그 파일을 지정하지 않으므로 실측 전에는
+조절 단계에서 PHASE_ERROR 로 멈춘다.
+
 **`tunio_server` 에서는 `colcon test` 를 그대로 믿지 말 것.** 테스트를 0개 실행한다.
 (`tunio_robot` 과 `tunio_audio` 는 정상으로 돈다. `tunio_interfaces`·`tunio_bringup` 도
 같은 설정이 없지만 아직 테스트 파일이 없어 증상이 드러나지 않는다.)
@@ -321,7 +336,13 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 - docs/TUNIO_인터페이스_요약.md — 인터페이스 한눈에 보기. 상세는 SPEC·ICD 참조
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
-- docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
+- **docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거.**
+  페그 실측도 이 문서가 기준이다 (마이크·분석 담당)
+- docs/페그_실측표.md — 페그 회전량 대 음정 변화 실측 결과. 원자료는 docs/peg_data/
+- docs/페그_캘리브레이션_가이드.md — 페그 실측 절차
+- docs/로봇구동음_측정결과.md — 로봇 구동음이 측정을 오염시키는 정도. 돌출 문턱 근거
+- docs/로봇점검_체크리스트.md — 로봇 기동 전 점검 순서
+- docs/task_manager_구현_브리핑.md — 구현 전 미결 항목 질문 양식 (기록용)
 - docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
 - tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)

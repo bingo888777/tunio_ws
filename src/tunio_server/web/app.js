@@ -45,6 +45,42 @@ let defaults = null;
 let selectedJob = null;
 let historyJobs = [];        // 서버에서 받은 이력 원본. 검색은 이 위에서 한다
 
+// 줄이 성공·실패로 확정되는 순간을 잡아 잠깐 강조한다.
+// 서버는 판정이 끝나면 바로 다음 줄로 넘어가므로, 그냥 두면 결과가 화면에
+// 나타나기도 전에 지나간다. 서버에 대기를 넣으면 실제 로봇 동작 시간이 늘어나므로
+// 화면에서만 붙잡는다.
+const DONE_HOLD_MS = 2600;
+const prevResult = new Map();   // 줄 번호 -> 직전 result
+const justDone = new Map();     // 줄 번호 -> 강조가 끝나는 시각
+let holdTimer = null;
+
+// results 를 훑어 '방금 확정된' 줄을 표시하고, 강조가 끝날 때 다시 그리도록 예약한다.
+function markJustDone(state) {
+  const now = Date.now();
+  if (state && state.results) {
+    state.results.forEach((r) => {
+      const before = prevResult.get(r.string_number);
+      // RESULT_PENDING(0) 에서 성공(1)·실패(2) 로 넘어간 순간만 잡는다
+      if (before === 0 && r.result !== 0) justDone.set(r.string_number, now + DONE_HOLD_MS);
+      prevResult.set(r.string_number, r.result);
+    });
+  }
+  // 만료된 것 정리
+  let next = 0;
+  justDone.forEach((until, n) => {
+    if (until <= now) justDone.delete(n);
+    else next = next === 0 ? until : Math.min(next, until);
+  });
+  // 남은 강조가 끝나는 시점에 한 번 더 그린다. 그때까지 새 상태가 안 올 수 있다.
+  if (holdTimer) { clearTimeout(holdTimer); holdTimer = null; }
+  if (next > 0) holdTimer = setTimeout(() => renderLive(lastState), next - now + 30);
+}
+
+function isJustDone(n) {
+  const until = justDone.get(n);
+  return until !== undefined && until > Date.now();
+}
+
 // 검색용으로 넉넉히 받는다. GetHistory.limit 은 uint16 이다.
 const HISTORY_FETCH_LIMIT = 200;
 const THEME_KEY = 'tunio-theme';
@@ -154,6 +190,7 @@ function buildGuitar() {
             stroke-width="${st.thick}" stroke-linecap="round"></line>
       <line class="gs-line" x1="${PEG_X + 9}" y1="${y}" x2="${NUT_X}" y2="${y}"
             stroke-width="1.4"></line>
+      <circle class="gs-ring" cx="${PEG_X}" cy="${y}" r="9" fill="none" stroke-width="3"></circle>
       <circle class="gs-peg" cx="${PEG_X}" cy="${y}" r="9" stroke-width="2"></circle>
       <text class="gs-label" x="${PEG_X}" y="${y + 4.5}" text-anchor="middle">${st.n}</text>
       <text class="gs-note" x="${END_X}" y="${y - 7}" text-anchor="end">${st.name}</text>
@@ -188,6 +225,7 @@ function renderGuitar(state) {
       else if (r && r.result === 2) cls += ' bad';
       else cls += ' wait';
     }
+    if (isJustDone(n)) cls += ' just-done';
     g.setAttribute('class', cls);
   });
 }
@@ -271,6 +309,7 @@ function renderTuner(state) {
 }
 
 function renderLive(state) {
+  markJustDone(state);
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 
   const phaseEl = $('phase');
@@ -302,6 +341,7 @@ function renderStringCards(state) {
     if (state && state.current_string === n && isRunning(state)) cls += ' current';
     if (r && r.result === 1) cls += ' ok';
     if (r && r.result === 2) cls += ' bad';
+    if (isJustDone(n)) cls += ' just-done';
     card.className = cls;
 
     // 지금 이 줄을 조율 중인가. 그렇다면 아직 확정되지 않은 값 대신
