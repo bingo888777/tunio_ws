@@ -22,8 +22,16 @@
     peg_calibration:
       measured: false       # tools/peg_cal.py 실측을 마치고 아래 값을 채우면 true
       measured_at: ''       # 실측 날짜 'YYYY-MM-DD'. 줄을 갈면 다시 재야 한다
+                            # cents_per_deg 는 2026-09-19 실측(정정인). 나머지 3칸이
+                            # 차면 이 날짜를 채우고 measured 를 true 로 올린다
 
       # 줄별 실측값. 넷 다 0 이 아니어야 measured: true 로 올릴 수 있다.
+      #
+      # cents_per_deg 만 실측됐다 (2026-09-19, docs/페그_실측표.md).
+      # 넣은 값은 '전 구간 평균'이 아니라 '목표 ±30센트 구간' 값이다. 조율 루프가
+      # 그 구간에서만 돌기 때문이고, peg_angle() 이 |오차| / cents_per_deg 이라
+      # 작게 잡으면 각도를 크게 계산해 과조정한다. 애매하면 큰 쪽으로 잡는다.
+      # 나머지 세 칸은 페그 교시가 끝나야 잴 수 있다 (이슈 #8, #10).
       #   cents_per_deg          페그 1도당 음정 변화량(센트). 회전량 = |오차| / 이 값
       #   min_effective_deg      이보다 작게 돌리면 페그가 실제로 안 움직이는 각도.
       #                          없으면 오차가 작을 때 0에 가까운 각도를 반복 전송하며
@@ -34,22 +42,22 @@
       #                          조여 올릴지(센트). CLAUDE.md 3.2 의 '충분히'에 해당한다.
       #                          백래시 양보다 넉넉해야 한다
       s6:   # 6번 E2 82.4069Hz
-        cents_per_deg: 0.0
+        cents_per_deg: 2.219
         min_effective_deg: 0.0
         max_angle_deg: 0.0
         backlash_release_cents: 0.0
       s5:   # 5번 A2 110.0000Hz
-        cents_per_deg: 0.0
+        cents_per_deg: 0.865
         min_effective_deg: 0.0
         max_angle_deg: 0.0
         backlash_release_cents: 0.0
       s2:   # 2번 B3 246.9417Hz
-        cents_per_deg: 0.0
+        cents_per_deg: 1.065
         min_effective_deg: 0.0
         max_angle_deg: 0.0
         backlash_release_cents: 0.0
       s1:   # 1번 E4 329.6276Hz
-        cents_per_deg: 0.0
+        cents_per_deg: 0.502
         min_effective_deg: 0.0
         max_angle_deg: 0.0
         backlash_release_cents: 0.0

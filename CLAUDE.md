@@ -224,7 +224,12 @@ src/
 
 **유효 측정 판정**: RMS(`min_db`)만으로는 방 소음을 못 거른다. 실측에서 방 소음 RMS가
 실제 연주와 완전히 겹쳤다. 그래서 두 관문을 더 건다 —
-FFT 피크 돌출 ≥16dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+FFT 피크 돌출 ≥20dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+2026-09-19 로봇 구동음 5분 실측 후 16 → 20dB 로 올렸다. 16dB 에서는 **발현이 없는데도**
+로봇 구동음 1194구간 중 35개(2.9%)가 유효 측정으로 통과했고, 그 값이 목표에서
+-133 ~ +92센트 벗어나 있었다. 그대로 두면 서버가 그 값으로 페그를 크게 잘못 돌린다.
+대가로 약한 발현 통과율이 96% → 64% 로 떨어지므로 **타현을 충분히 세게 해야 한다
+(분석 구간 RMS ≥ -18dBFS).** 근거는 `docs/로봇구동음_측정결과.md`.
 
 **onset 검출**: 타임아웃 기준점은 마이크가 스스로 잡는 onset이다(명세 4절).
 onset은 느슨하게 후보를 내고 진짜 발현인지는 위 관문이 판정한다.
@@ -252,7 +257,9 @@ colcon build && source install/setup.bash
 cd src/tunio_server && python3 -m pytest test/ -q
 ```
 
-**`colcon test`를 그대로 믿지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
+**`tunio_server` 에서는 `colcon test` 를 그대로 믿지 말 것.** 테스트를 0개 실행한다.
+(`tunio_robot` 과 `tunio_audio` 는 정상으로 돈다. `tunio_interfaces`·`tunio_bringup` 도
+같은 설정이 없지만 아직 테스트 파일이 없어 증상이 드러나지 않는다.)
 colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
 아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
 러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
@@ -306,8 +313,14 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 **미확정 (실측 후 확정)**
 - 허용 센트 확정값 (현재 10.0으로 시작)
 - onset 제한 시간 확정값 (현재 10.0)
-- 페그 회전량 계산식 — `config/peg_calibration.yaml` 의 줄별 실측값이 들어와야 한다.
-  `measured: false` 인 동안 task_manager 는 페그를 돌리지 않고 PHASE_ERROR 로 멈춘다
+- 페그 캘리브레이션 — 네 칸 중 `cents_per_deg` 만 실측됐다(2026-09-19).
+  `min_effective_deg`·`backlash_release_cents` 는 **페그 교시가 끝나야** 잴 수 있고,
+  `max_angle_deg` 는 로봇 담당이 가동 범위를 보고 정한다. 네 칸이 다 차기 전에는
+  `measured: true` 로 못 올리고, task_manager 는 조절이 필요한 순간 PHASE_ERROR 로
+  멈춘다. (이슈 #8, #10)
+- 5번 A2 줄의 로봇 소음 오검출 3.1% 를 감수할지 — 문턱을 22dB 로 올리면 0.17% 로
+  떨어지지만 약한 발현 통과율이 22% 로 무너진다. (이슈 #7)
+- 로봇 타현 세기 목표 — 분석 구간 RMS ≥ -18dBFS 를 만족하는 타현 조건. (이슈 #6)
 - **피크 거치대 왕복 시간** — onset_timeout_sec 확정에 필요하다. 피크를 가지러 가는
   시간이 onset 제한 시간 예산에 들어가, 넘기면 발현 실패(FAIL_LOW_SIGNAL)로 오보고된다
 - 로봇 오류가 연속으로 날 때 작업 전체를 중단할지 (지금은 줄마다 재시도를 소진한다)
