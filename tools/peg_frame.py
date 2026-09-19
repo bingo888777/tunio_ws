@@ -120,6 +120,32 @@ def predict(no, poses, origin, rot, step):
     return pos, poses[base][3:]
 
 
+def report_rows(poses):
+    """
+    양쪽 열의 한 칸 간격을 비교한다.
+
+    같은 기타 같은 튜너면 양쪽 간격이 같아야 한다. 어긋나면 페그 배치가
+    아니라 교시 사이에 기타가 움직였다는 뜻이다. 재교시가 제대로 됐는지
+    판단하는 지표가 이것이다.
+    """
+    left, lp, lhave = axis_from_pair(poses, LEFT_ORDER)
+    right, rp, rhave = axis_from_pair(poses, RIGHT_ORDER)
+    if left is None or right is None:
+        return
+    ul, ur = left / lp, right / rp
+    ang = np.degrees(np.arccos(np.clip(float(ul @ ur), -1.0, 1.0)))
+    gap = rp - lp
+    print("\n양쪽 열 비교 (같은 기타면 간격이 같아야 한다)")
+    print(f"  왼쪽  {lhave[0]}→{lhave[1]}  {lp:6.2f} mm")
+    print(f"  오른쪽 {rhave[0]}→{rhave[1]}  {rp:6.2f} mm")
+    print(f"  간격 차이 {gap:+.2f} mm ({gap / lp * 100:+.1f}%),  방향 차이 {ang:.2f} 도")
+    if abs(gap) <= 1.5 and ang <= 2.0:
+        print("  → 한 벌로 맞는다. 네 좌표를 같은 기준으로 쓸 수 있다.")
+    else:
+        print("  → 안 맞는다. 교시 사이에 기타가 움직였을 가능성이 높다.")
+        print("     페그 배치가 이만큼 다를 수는 없다. 한 자리에서 다시 잡아라.")
+
+
 def report_alignment(step, pitch):
     """X축 축정렬이 얼마나 틀어졌는지 각도로 보여준다."""
     yaw = np.degrees(np.arctan2(step[1], step[0]))
@@ -139,8 +165,9 @@ def main():
     ap.add_argument("--yaml", default=DEFAULT_YAML, help="교시점 파일")
     ap.add_argument("--verify", nargs=4, metavar=("줄번호", "X", "Y", "Z"),
                     help="실측값과 추정값을 대조한다")
-    ap.add_argument("--repeat", nargs=4, metavar=("줄번호", "X", "Y", "Z"),
-                    help="이미 교시한 페그를 다시 잡아 재현성을 본다")
+    ap.add_argument("--repeat", nargs="+", metavar="값",
+                    help="재현성 측정. '줄번호 X Y Z' 면 기록된 값과 비교하고, "
+                         "'줄번호 X1 Y1 Z1 X2 Y2 Z2' 면 새로 잰 두 값끼리 비교한다")
     args = ap.parse_args()
 
     poses, meta = load_poses(os.path.abspath(args.yaml))
@@ -161,6 +188,7 @@ def main():
     origin, rot, step = build_frame(poses)
     _, pitch, _ = axis_from_pair(poses, LEFT_ORDER)
     report_alignment(step, pitch)
+    report_rows(poses)
 
     print("\n헤드스톡 좌표계에서 본 위치 (원점=기준 페그, X=헤드 끝 방향)")
     for no in sorted(poses, reverse=True):
@@ -180,15 +208,21 @@ def main():
 
     if args.repeat:
         no = int(args.repeat[0])
-        again = np.array([float(v) for v in args.repeat[1:]])
-        if no not in poses:
-            raise SystemExit(f"{no}번은 교시된 적이 없다. --verify 를 쓰라")
-        err = again - poses[no][:3]
+        rest = [float(v) for v in args.repeat[1:]]
+        if len(rest) == 6:
+            first, again = np.array(rest[:3]), np.array(rest[3:])
+        elif len(rest) == 3:
+            if no not in poses:
+                raise SystemExit(f"{no}번은 기록된 값이 없다. 두 값을 다 넘겨라")
+            first, again = poses[no][:3], np.array(rest)
+        else:
+            raise SystemExit("--repeat 는 값 3개(기록과 비교) 또는 6개(둘끼리 비교)")
+        err = again - first
         dist = float(np.linalg.norm(err))
         print(f"\n{'=' * 60}")
         print(f"재현성 — {no}번 페그를 다시 잡았을 때")
         print(f"{'=' * 60}")
-        print(f"  처음  [{poses[no][0]:.1f}, {poses[no][1]:.1f}, {poses[no][2]:.1f}]")
+        print(f"  처음  [{first[0]:.1f}, {first[1]:.1f}, {first[2]:.1f}]")
         print(f"  다시  [{again[0]:.1f}, {again[1]:.1f}, {again[2]:.1f}]")
         print(f"  차이  X {err[0]:+.1f}  Y {err[1]:+.1f}  Z {err[2]:+.1f} mm"
               f"   (거리 {dist:.1f} mm)")
