@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""
+페그 회전 확인 — 로봇 점검 체크리스트 3단계. 토크 기록(6단계)도 같이 얻는다.
+
+페그를 물고 **조금씩 돌리면서 관절 토크를 읽는다.** 세 가지를 한 번에 본다.
+
+  1. 회전 방향 — 반시계가 조임이라는 전제(turn_sign)가 맞는지
+  2. 백래시 — 헛돎을 지나 저항이 걸리기 시작하는 각도
+  3. 파지 확인 임계값 — 제대로 물었을 때와 헛잡았을 때의 토크 차이
+
+⚠️ **첫 시험은 반드시 푸는 방향으로 한다.** 그게 기본값이다.
+   조이는 쪽으로 방향이 틀리면 줄이 끊어진다. 푸는 쪽은 틀려도 음이 올라갈 뿐이다.
+   음이 내려가면 turn_sign 이 맞는 것이고, 올라가면 네 줄 전부 부호를 뒤집는다.
+   여기에는 마이크가 없다. 귀로 판정하거나 정정인 쪽 도구를 같이 돌려라.
+
+왜 조금씩 나눠 도는가
+  두산 API 의 movej 는 끝날 때까지 안 돌아와서 도는 중에 토크를 못 읽는다.
+  그래서 작은 각도씩 끊어 돌고 멈춘 자리에서 읽는다. 그러면 각도별 토크가
+  줄줄이 남아, 헛돎이 끝나고 저항이 붙는 지점이 눈에 보인다.
+
+헛잡은 것과 비교하려면
+  --no-grip 으로 한 번 더 돌려라. 그리퍼를 안 닫고 허공에서 도는 토크가 바닥값이다.
+  그 둘이 갈리는 지점이 파지 확인 임계값이다 (CLAUDE.md 3.6).
+
+쓰는 법
+  source /opt/ros/jazzy/setup.bash && source install/setup.bash
+  python3 tools/peg_turn_check.py --peg 6                    # 푸는 쪽 20도
+  python3 tools/peg_turn_check.py --peg 6 --angle 30 --step 2.5
+  python3 tools/peg_turn_check.py --peg 6 --no-grip          # 허공 바닥값
+  python3 tools/peg_turn_check.py --peg 6 --direction tighten   # 방향 확인 뒤에만
+  python3 tools/peg_turn_check.py --peg 6 --dry-run
+"""
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
+                                "src", "tunio_robot"))
+
+DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot",
+                            "config", "teach_points.yaml")
+
+
+def fmt(vals, d=2):
+    return "[" + ", ".join(f"{v:7.{d}f}" for v in vals) + "]"
+
+
+def confirm(msg):
+    if input(f"{msg} (엔터=진행, n=중단) ").strip().lower().startswith("n"):
+        raise KeyboardInterrupt
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--peg", type=int, required=True, choices=[1, 2, 5, 6])
+    ap.add_argument("--yaml", default=DEFAULT_YAML)
+    ap.add_argument("--direction", choices=["loosen", "tighten"], default="loosen",
+                    help="첫 시험은 푸는 쪽(loosen)으로 한다. 기본값이다")
+    ap.add_argument("--angle", type=float, default=20.0, help="총 회전량(도)")
+    ap.add_argument("--step", type=float, default=2.5, help="한 번에 도는 각도(도)")
+    ap.add_argument("--approach", type=float, default=None)
+    ap.add_argument("--speed", type=float, default=30.0)
+    ap.add_argument("--no-grip", action="store_true",
+                    help="그리퍼를 안 닫고 허공에서 돈다. 토크 바닥값을 얻는다")
+    ap.add_argument("--no-return", action="store_true",
+                    help="돌린 만큼 되돌리지 않는다. 기본은 되돌린다")
+    ap.add_argument("--preset", default="peg")
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--id", default="dsr01")
+    ap.add_argument("--model", default="m0609")
+    args = ap.parse_args()
+
+    from tunio_robot import teach_points as TP
+    points = TP.load(os.path.abspath(args.yaml))
+    peg = points.peg(args.peg)
+    back_mm = args.approach if args.approach is not None \
+        else points.motion.get("approach_mm", 100.0)
+    back = TP.backed_off(peg.task, back_mm)
+    route = points.route()
+    if route is None:
+        raise SystemExit("경유지(routes.transit)가 미교시다")
+
+    direction = TP.TIGHTEN if args.direction == "tighten" else TP.LOOSEN
+    joint, total = points.joint_delta(args.peg, direction, args.angle)
+    step_signed = (total / abs(total)) * min(args.step, abs(total))
+    n_steps = int(round(abs(total) / abs(step_signed)))
+
+    motion = dict(points.motion)
+    scale = max(0.05, args.speed / 100.0)
+    for key, default in (("vel", 30), ("acc", 30)):
+        motion[key] = points.motion.get(key, default) * scale
+    for key, default in (("travel_vel", [50.0, 30.0]), ("travel_acc", [100.0, 60.0])):
+        motion[key] = [v * scale for v in points.motion.get(key, default)]
+
+    print()
+    print("=" * 70)
+    print(f"{args.peg}번 페그 회전 확인  ({TP.side_of(args.peg)} 쪽)")
+    print("=" * 70)
+    print(f"  방향       {args.direction}  "
+          f"({'조임 — 줄이 끊어질 수 있다' if direction == TP.TIGHTEN else '풀기 — 안전한 쪽'})")
+    print(f"  회전 관절  J{joint}   turn_sign {peg.turn_sign}")
+    print(f"  총 {args.angle:.1f}도 를 {abs(step_signed):.2f}도씩 {n_steps}번 나눠 돈다")
+    print(f"  관절 변화  {total:+.2f}도 (부호 포함)")
+    print(f"  파지       {'안 한다 — 허공 바닥값' if args.no_grip else args.preset}")
+    print(f"  되돌리기   {'안 한다' if args.no_return else '돌린 만큼 되돌린다'}")
+    if direction == TP.TIGHTEN:
+        print()
+        print("  ⚠️  조이는 방향이다. 푸는 쪽으로 방향을 먼저 확인했나?")
+        print("     확인 안 했으면 지금 멈추고 --direction loosen 부터 하라.")
+    if args.dry_run:
+        print("\n--dry-run 이라 여기서 멈춘다")
+        return 0
+
+    import rclpy
+
+    import DR_init
+    DR_init.__dsr__id = args.id
+    DR_init.__dsr__model = args.model
+    rclpy.init()
+    node = rclpy.create_node("tunio_turn_check", namespace=args.id)
+    DR_init.__dsr__node = node
+
+    from tunio_robot import motion_primitives as MP
+    MP.connect(points.robot, points.gripper)
+    from DSR_ROBOT2 import get_current_posj, get_external_torque
+
+    rows = []
+    heard = ""
+    try:
+        confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
+        MP._grip("open")
+        confirm("경유지로 올라간다. 팔이 크게 움직인다.")
+        MP.goto_route(route, motion)
+        confirm("접근점으로 간다.")
+        MP._movejx(back, motion, sol=peg.sol)
+        confirm("페그 앞까지 직선으로 들어간다.")
+        MP._movel(list(peg.task), motion)
+
+        if not args.no_grip:
+            confirm(f"'{args.preset}' 로 문다.")
+            MP._grip(args.preset)
+
+        base_j = list(get_current_posj())
+        base_t = list(get_external_torque())
+        print(f"\n  돌리기 전  J{joint} {base_j[joint - 1]:.2f}도   "
+              f"토크 {base_t[joint - 1]:+.2f}")
+        print("\n  줄 소리를 들어라. 음이 내려가면 turn_sign 이 맞는 것이다.")
+        confirm(f"\n{args.angle:.1f}도를 {abs(step_signed):.2f}도씩 돌린다.")
+
+        print(f"\n  {'누적각':>8}  {'실제 J':>8}  {'토크':>8}  {'바닥대비':>8}")
+        for i in range(1, n_steps + 1):
+            d = [0.0] * 6
+            d[joint - 1] = step_signed
+            MP._movej(d, motion, relative=True)
+            j = list(get_current_posj())
+            t = list(get_external_torque())
+            moved = j[joint - 1] - base_j[joint - 1]
+            tq = t[joint - 1]
+            rows.append((i * step_signed, moved, tq, tq - base_t[joint - 1]))
+            print(f"  {i * step_signed:8.2f}  {moved:8.2f}  {tq:+8.2f}  "
+                  f"{tq - base_t[joint - 1]:+8.2f}")
+
+        print("\n  다 돌았다.")
+        heard = input("  소리가 어떻게 됐나? (내려감 / 올라감 / 모르겠음) ").strip()
+
+        if not args.no_return:
+            confirm("  돌린 만큼 되돌린다. 원래 자리로만 가니 줄이 더 당겨지지 않는다.")
+            d = [0.0] * 6
+            d[joint - 1] = -total
+            MP._movej(d, motion, relative=True)
+            print(f"  되돌렸다. J{joint} {get_current_posj()[joint - 1]:.2f}도")
+
+        if not args.no_grip:
+            confirm("  놓는다.")
+            MP._release()
+        confirm("  물러나 경유지로 돌아간다.")
+        MP._movel(back, motion)
+        MP.goto_route(route, motion)
+        print("  끝났다.")
+    except KeyboardInterrupt:
+        print("\n중단했다. 그리퍼를 열고 멈춘다. 팔은 그 자리에 선다.")
+        try:
+            MP._release()
+        except Exception as e:                          # noqa: B902
+            print(f"  여는 데 실패: {e}")
+    except Exception as e:                              # noqa: B902
+        print(f"\n실패: {e}")
+        try:
+            MP._release()
+        except Exception:                               # noqa: B902
+            pass
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+    print(f"\n{'=' * 70}")
+    print(f"결과 — {args.peg}번, {args.direction}, "
+          f"{'허공' if args.no_grip else args.preset}")
+    print("=" * 70)
+    if not rows:
+        print("  회전 기록 없음")
+        return 0
+
+    lag = sum(1 for _, moved, _, _ in rows if abs(moved) < 0.1)
+    print(f"  관절은 명령대로 움직였다 (마지막 {rows[-1][1]:+.2f}도 / "
+          f"명령 {rows[-1][0]:+.2f}도)" if lag == 0 else
+          f"  ⚠️ 관절이 명령만큼 안 움직인 구간이 {lag}개 있다")
+    peak = max(rows, key=lambda r: abs(r[3]))
+    print(f"  토크 최대 변화 {peak[3]:+.2f} (누적 {peak[0]:+.2f}도 지점)")
+
+    rise = next((r for r in rows if abs(r[3]) > 0.5 * abs(peak[3])), None)
+    if rise and abs(peak[3]) > 0.3:
+        print(f"  저항이 붙기 시작한 지점 약 {abs(rise[0]):.2f}도 "
+              f"— 헛돎(백래시) 구간의 대략치다")
+    elif not args.no_grip:
+        print("  저항이 거의 안 붙었다. 헛물었거나 각도가 백래시보다 작다")
+
+    if heard:
+        print(f"\n  소리: {heard}")
+        if heard.startswith("올라"):
+            print("  ⚠️ 푸는 쪽으로 돌렸는데 음이 올라갔다면 turn_sign 이 반대다.")
+            print("     teach_points.yaml 의 네 페그 turn_sign 을 전부 +1 로 뒤집어라.")
+        elif heard.startswith("내려"):
+            print("  turn_sign 이 맞다. 조이는 쪽도 시험해도 된다.")
+    print()
+    print("다음 —")
+    print("  · 허공 바닥값과 비교하려면 같은 각도로 --no-grip 을 한 번 더")
+    print("  · 정밀 백래시는 마이크를 붙이고 tools/peg_cal.py --backlash --step 15")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
