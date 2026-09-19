@@ -612,6 +612,10 @@ class TaskManager(Node):
 
             self.adjust_count += 1
             rec.adjust_count = self.adjust_count
+            # 조절이 끝난 직후에 알린다. 여기서 발행하지 않으면 다음 측정이 끝날 때까지
+            # 화면의 조절 횟수가 그대로라, 측정값과 조절 횟수가 한꺼번에 바뀌는 것처럼
+            # 보이고 페그를 돌리는 동안은 화면이 멈춘 것처럼 보인다.
+            self._publish_state()
             if MEASURE_RETRY_RESET_AFTER_ADJUST:
                 retry_budget = self.active_settings.max_measure_retry
 

@@ -43,6 +43,11 @@ const $ = (id) => document.getElementById(id);
 let lastState = null;
 let defaults = null;
 let selectedJob = null;
+let historyJobs = [];        // 서버에서 받은 이력 원본. 검색은 이 위에서 한다
+
+// 검색용으로 넉넉히 받는다. GetHistory.limit 은 uint16 이다.
+const HISTORY_FETCH_LIMIT = 200;
+const THEME_KEY = 'tunio-theme';
 
 // ─────────────────────────────── 표시 헬퍼
 
@@ -72,6 +77,32 @@ function overallClass(v) {
 function stringName(n) {
   const s = STRINGS.find((x) => x.n === n);
   return s ? `${n}번 ${s.name}` : `${n}번`;
+}
+
+// job_id 는 task_manager 가 작업을 '시작'할 때 만든 시각 문자열이다 ("20260919_125643").
+// finished_at 은 '끝난' 시각이라 둘이 몇 초에서 몇 분까지 벌어진다. 목록과 검색은
+// 시작 시각(job_id)으로 통일하고, 종료 시각은 상세에서만 보여준다.
+function startedText(jobId) {
+  const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(jobId || '');
+  if (!m) return jobId || '—';
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
+}
+
+// job_id 를 epoch 초로. 소요 시간 계산에 쓴다. 로컬 시간으로 해석한다
+// (task_manager 가 로컬 시각으로 만든 문자열이다).
+function startedEpoch(jobId) {
+  const m = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/.exec(jobId || '');
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  return isNaN(d.getTime()) ? null : d.getTime() / 1000;
+}
+
+function durationText(jobId, finishedEpoch) {
+  const a = startedEpoch(jobId);
+  if (a === null || !finishedEpoch) return null;
+  const sec = Math.max(0, Math.round(finishedEpoch - a));
+  if (sec < 60) return `${sec}초`;
+  return `${Math.floor(sec / 60)}분 ${String(sec % 60).padStart(2, '0')}초`;
 }
 
 function whenText(epoch) {
@@ -131,7 +162,7 @@ function buildGuitar() {
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기타 줄 상태">
     <rect x="${NUT_X - 6}" y="${TOP - 16}" width="6"
-          height="${GAP * (FRETBOARD.length - 1) + 32}" rx="2" fill="#3a4450"></rect>
+          height="${GAP * (FRETBOARD.length - 1) + 32}" rx="2" fill="var(--nut)"></rect>
     ${parts}
   </svg>`;
 }
@@ -404,32 +435,76 @@ async function loadHistory() {
   const list = $('history-list');
   list.innerHTML = '<p class="empty">읽는 중…</p>';
   try {
-    const res = await fetch('/api/history');
+    const res = await fetch(`/api/history?limit=${HISTORY_FETCH_LIMIT}`);
     const data = await res.json();
     if (!res.ok) {
+      historyJobs = [];
       list.innerHTML = `<p class="empty">${data.error || '이력을 읽지 못했다'}</p>`;
+      $('history-hint').textContent = '';
       return;
     }
-    if (!data.found || data.jobs.length === 0) {
-      // GetHistory 응답에는 사유 필드가 없다. DB 를 못 열어도 found=false 로만 오므로
-      // '기록이 없음'과 '조회 실패'를 화면에서 구분할 수 없다. 확인 경로를 같이 적어 둔다.
-      list.innerHTML = '<p class="empty">저장된 작업이 없다.<br>' +
-        '<span class="hint">저장한 적이 있는데도 비어 보이면 result_store 로그를 확인한다 — ' +
-        'get_history 응답에 사유 필드가 없어 DB 오류와 구분할 수 없다.</span></p>';
-      return;
-    }
-    list.innerHTML = '';
-    data.jobs.forEach((j) => {
-      const b = document.createElement('button');
-      b.className = 'hitem' + (selectedJob === j.job_id ? ' active' : '');
-      b.innerHTML = `<span class="when">${whenText(j.finished_at)}</span>` +
-                    `<span class="${overallClass(j.overall_result)}">${j.overall_label}</span>`;
-      b.addEventListener('click', () => { selectedJob = j.job_id; loadHistory(); loadDetail(j); });
-      list.appendChild(b);
-    });
+    historyJobs = (data.found && data.jobs) ? data.jobs : [];
+    renderHistoryList();
   } catch (e) {
+    historyJobs = [];
     list.innerHTML = `<p class="empty">이력을 읽지 못했다: ${e}</p>`;
+    $('history-hint').textContent = '';
   }
+}
+
+// 검색·필터는 서버가 아니라 받아 온 목록 위에서 한다.
+// GetHistory 에 검색 조건 필드가 없어서인데, 최근 몇백 건이면 화면에서 거르는 편이 빠르다.
+// 검색은 시작 시각 기준으로만 한다. 원본 job_id("20260919_125643")와
+// 보기 좋게 푼 형태("2026-09-19 12:56:43") 둘 다 맞춘다 — 화면에 보이는 대로 쳐도
+// 걸리고, 작업 번호를 그대로 붙여 넣어도 걸린다.
+function matchesQuery(job, q) {
+  if (!q) return true;
+  const id = (job.job_id || '').toLowerCase();
+  return id.includes(q) || startedText(job.job_id).toLowerCase().includes(q);
+}
+
+function renderHistoryList() {
+  const list = $('history-list');
+  const hint = $('history-hint');
+  const q = $('history-q').value.trim().toLowerCase();
+  const f = $('history-filter').value;
+
+  if (historyJobs.length === 0) {
+    // GetHistory 응답에는 사유 필드가 없다. DB 를 못 열어도 found=false 로만 오므로
+    // '기록이 없음'과 '조회 실패'를 화면에서 구분할 수 없다. 확인 경로를 같이 적어 둔다.
+    list.innerHTML = '<p class="empty">저장된 작업이 없다.<br>' +
+      '<span class="hint">저장한 적이 있는데도 비어 보이면 result_store 로그를 확인한다 — ' +
+      'get_history 응답에 사유 필드가 없어 DB 오류와 구분할 수 없다.</span></p>';
+    hint.textContent = '';
+    return;
+  }
+
+  const rows = historyJobs
+    .filter((j) => (f === '' || String(j.overall_result) === f))
+    .filter((j) => matchesQuery(j, q));
+
+  hint.textContent = (q || f)
+    ? `${historyJobs.length}건 중 ${rows.length}건`
+    : `${historyJobs.length}건`;
+
+  if (rows.length === 0) {
+    list.innerHTML = '<p class="empty">검색 조건에 맞는 작업이 없다.</p>';
+    return;
+  }
+
+  list.innerHTML = '';
+  rows.forEach((j) => {
+    const b = document.createElement('button');
+    b.className = 'hitem' + (selectedJob === j.job_id ? ' active' : '');
+    b.innerHTML = `<span class="when">${startedText(j.job_id)}</span>` +
+                  `<span class="${overallClass(j.overall_result)}">${j.overall_label}</span>`;
+    b.addEventListener('click', () => {
+      selectedJob = j.job_id;
+      renderHistoryList();     // 선택 표시만 갱신. 다시 읽지 않는다
+      loadDetail(j);
+    });
+    list.appendChild(b);
+  });
 }
 
 async function loadDetail(job) {
@@ -444,8 +519,13 @@ async function loadDetail(job) {
     }
     const s = data.settings;
     box.innerHTML = `
-      <h3>${job.job_id}</h3>
-      <p class="hint">${whenText(job.finished_at)} 종료 · ${job.overall_label}</p>
+      <h3>${startedText(job.job_id)}</h3>
+      <p class="hint">
+        시작 ${startedText(job.job_id)} · 종료 ${whenText(job.finished_at)}${
+          durationText(job.job_id, job.finished_at)
+            ? ' · 소요 ' + durationText(job.job_id, job.finished_at) : ''
+        }<br>작업 번호 <code>${job.job_id}</code> · ${job.overall_label}
+      </p>
       <h4>줄별 기록</h4>
       <div class="dlist">
         ${data.strings.map((r) => `
@@ -509,13 +589,42 @@ function initTabs() {
   });
 }
 
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  const btn = $('btn-theme');
+  if (btn) {
+    btn.textContent = (t === 'dark') ? '☀' : '☾';
+    btn.title = (t === 'dark') ? '밝은 화면으로' : '어두운 화면으로';
+  }
+  // 사생활 보호 모드나 저장소 차단 환경에서는 실패할 수 있다. 화면은 그대로 동작한다.
+  try { localStorage.setItem(THEME_KEY, t); } catch (e) { /* 무시 */ }
+}
+
+function initTheme() {
+  let t = 'light';
+  try { t = localStorage.getItem(THEME_KEY) || 'light'; } catch (e) { /* 무시 */ }
+  applyTheme(t);
+  $('btn-theme').addEventListener('click', () => {
+    const now = document.documentElement.getAttribute('data-theme');
+    applyTheme(now === 'dark' ? 'light' : 'dark');
+  });
+}
+
 function init() {
+  initTheme();
   initTabs();
   $('btn-start').addEventListener('click', () => sendCommand('start'));
   $('btn-pause').addEventListener('click', () => sendCommand('pause'));
   $('btn-resume').addEventListener('click', () => sendCommand('resume'));
   $('btn-cancel').addEventListener('click', () => sendCommand('cancel'));
   $('btn-history-reload').addEventListener('click', loadHistory);
+  $('history-q').addEventListener('input', renderHistoryList);
+  $('history-filter').addEventListener('change', renderHistoryList);
+  $('btn-history-clear').addEventListener('click', () => {
+    $('history-q').value = '';
+    $('history-filter').value = '';
+    renderHistoryList();
+  });
   $('btn-settings-reload').addEventListener('click', loadSettings);
   $('btn-settings-save').addEventListener('click', saveSettings);
   $('btn-settings-default').addEventListener('click', () => {

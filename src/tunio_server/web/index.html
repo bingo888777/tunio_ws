@@ -16,6 +16,7 @@
   <div class="topmeta">
     <span id="job-id" class="jobid">작업 없음</span>
     <span id="link" class="badge badge-wait">연결 중</span>
+    <button id="btn-theme" class="btn btn-icon" title="밝은/어두운 화면 전환">◐</button>
   </div>
 </header>
 
@@ -110,7 +111,19 @@
 <section id="tab-history" class="panel">
   <div class="controls">
     <button id="btn-history-reload" class="btn">새로 읽기</button>
-    <span class="hint" id="history-hint">최신순으로 최근 20건까지 보여준다.</span>
+    <div class="search">
+      <input id="history-q" type="search" placeholder="시작 시각으로 검색 (예: 2026-09-19, 12:56, 20260919)"
+             autocomplete="off">
+      <button id="btn-history-clear" class="btn btn-icon" title="검색어 지우기">✕</button>
+    </div>
+    <select id="history-filter" class="select" title="판정으로 거르기">
+      <option value="">전체 판정</option>
+      <option value="1">성공만</option>
+      <option value="2">일부 성공만</option>
+      <option value="3">실패만</option>
+    </select>
+    <div class="spacer"></div>
+    <span class="hint" id="history-hint">최신순으로 보여준다.</span>
   </div>
   <div class="history-wrap">
     <div id="history-list" class="history-list"></div>

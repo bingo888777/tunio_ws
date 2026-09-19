@@ -1,23 +1,103 @@
-/* TUNIO 관제 웹 — 어두운 바탕 고정. 외부 폰트/CDN 을 쓰지 않는다(시연장 인터넷 없이 동작). */
+/* TUNIO 관제 웹 — 라이트/다크 두 테마. 외부 폰트·CDN 을 쓰지 않는다(시연장 인터넷 없이 동작).
+   테마는 <html data-theme="light|dark"> 로 고르고 localStorage 에 기억한다. */
 
 :root {
-  --bg: #0e1116;
-  --bg-elev: #161b22;
-  --bg-elev-2: #1c232c;
-  --line: #2a313c;
-  --text: #e6edf3;
-  --text-dim: #9aa7b4;
-  --text-faint: #6b7784;
+  /* 라이트 — 파스텔. 배경에 옅은 라벤더 기운을 줘서 순회색보다 부드럽게 보이게 한다.
+     글자는 순검정 대신 보랏빛이 도는 짙은 회색이라 눈이 덜 피로하다. */
+  --bg: #f6f3fa;
+  --bg-elev: #ffffff;
+  --bg-elev-2: #efeaf6;
+  --line: #e0d9ec;
+  --text: #3a3444;
+  --text-dim: #6b6380;
+  --text-faint: #9a92ad;
 
-  --accent: #4da3ff;
-  --ok: #3fb950;
-  --warn: #d29922;
-  --bad: #f85149;
-  --idle: #6b7784;
+  --accent: #6d8fd6;
+  --ok: #4fad85;
+  --warn: #c99a58;
+  --bad: #d47b88;
+  --idle: #9a92ad;
+
+  --tint-idle: #eeeaf4;
+  --tint-run: #e7eefb;
+  --tint-ok: #e4f4ec;
+  --tint-warn: #fbf2e3;
+  --tint-bad: #fbeaed;
+  --edge-run: #bcd0f0;
+  --edge-ok: #b3e0c8;
+  --edge-warn: #e8cd9e;
+  --edge-bad: #f0bcc4;
+  --on-accent: #ffffff;
+  --on-fill: #2b2635;
+  --sel-bg: #f0ecf8;
+
+  --peg-fill: #e6e1ee;
+  --peg-stroke: #bfb6cf;
+  --peg-fill-off: #f0edf5;
+  --peg-stroke-off: #ddd6e6;
+  --string: #ada4bd;
+  --string-wait: #8f86a0;
+  --string-off: #ddd6e6;
+  --nut: #c4bad2;
+  --peg-ring-current: #a8c0ea;
+  --peg-ring-ok: #8fd4ae;
+  --peg-ring-bad: #eba8b2;
+
+  --zone-bg: rgba(79, 173, 133, 0.15);
+  --zone-edge: rgba(79, 173, 133, 0.42);
+  --needle-glow: rgba(79, 173, 133, .40);
+  --shadow: rgba(58, 52, 68, .14);
 
   --radius: 10px;
   --mono: ui-monospace, SFMono-Regular, "JetBrains Mono", Consolas, monospace;
   --sans: system-ui, -apple-system, "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+:root[data-theme="dark"] {
+  /* 다크도 같은 파스텔 계열. 채도를 낮추고 밝기를 올려 어두운 바탕에서 부드럽게 뜬다. */
+  --bg: #16141c;
+  --bg-elev: #1e1b26;
+  --bg-elev-2: #262231;
+  --line: #363040;
+  --text: #e8e3f0;
+  --text-dim: #a49cb5;
+  --text-faint: #7a7288;
+
+  --accent: #9db8ea;
+  --ok: #8fd4a8;
+  --warn: #e5c58f;
+  --bad: #eda3ac;
+  --idle: #7a7288;
+
+  --tint-idle: #262231;
+  --tint-run: #1e2940;
+  --tint-ok: #1c3329;
+  --tint-warn: #332a1c;
+  --tint-bad: #33212a;
+  --edge-run: #35486b;
+  --edge-ok: #2f5742;
+  --edge-warn: #5a4a2c;
+  --edge-bad: #5c3740;
+  --on-accent: #16141c;
+  --on-fill: #16141c;
+  --sel-bg: #232030;
+
+  --peg-fill: #322c3e;
+  --peg-stroke: #554d66;
+  --peg-fill-off: #221e2b;
+  --peg-stroke-off: #322c3e;
+  --string: #443d52;
+  --string-wait: #5a5269;
+  --string-off: #2a2533;
+  --nut: #453e54;
+  --peg-ring-current: #c3d4f5;
+  --peg-ring-ok: #b3e5c8;
+  --peg-ring-bad: #f5c3ca;
+
+  --zone-bg: rgba(143, 212, 168, 0.16);
+  --zone-edge: rgba(143, 212, 168, 0.40);
+  --needle-glow: rgba(143, 212, 168, .50);
+  --shadow: rgba(0, 0, 0, .45);
 }
 
 * { box-sizing: border-box; }
@@ -121,11 +201,11 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 
 .btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-.btn-primary { background: var(--accent); border-color: var(--accent); color: #06121f; font-weight: 600; }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 
-.btn-danger { color: var(--bad); border-color: #5c2a28; }
-.btn-danger:hover:not(:disabled) { background: #2a1917; }
+.btn-danger { color: var(--bad); border-color: var(--edge-bad); }
+.btn-danger:hover:not(:disabled) { background: var(--tint-bad); }
 
 .label { color: var(--text-faint); font-size: 12px; }
 
@@ -149,12 +229,12 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   white-space: nowrap;
 }
 
-.badge-idle { background: #21272f; color: var(--text-dim); border-color: var(--line); }
-.badge-run  { background: #10263d; color: var(--accent); border-color: #1d4269; }
-.badge-ok   { background: #10281a; color: var(--ok); border-color: #1d4a2b; }
-.badge-warn { background: #2a2210; color: var(--warn); border-color: #4d3d14; }
-.badge-bad  { background: #2a1516; color: var(--bad); border-color: #5c2a28; }
-.badge-wait { background: #21272f; color: var(--text-faint); border-color: var(--line); }
+.badge-idle { background: var(--tint-idle); color: var(--text-dim); border-color: var(--line); }
+.badge-run  { background: var(--tint-run); color: var(--accent); border-color: var(--edge-run); }
+.badge-ok   { background: var(--tint-ok); color: var(--ok); border-color: var(--edge-ok); }
+.badge-warn { background: var(--tint-warn); color: var(--warn); border-color: var(--edge-warn); }
+.badge-bad  { background: var(--tint-bad); color: var(--bad); border-color: var(--edge-bad); }
+.badge-wait { background: var(--tint-idle); color: var(--text-faint); border-color: var(--line); }
 
 /* 알림 — 명령 접수/거부 사유를 잠깐 띄운다 */
 .toast {
@@ -167,8 +247,8 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   font-size: 13.5px;
 }
 .toast.show { display: block; }
-.toast.ok  { border-color: #1d4a2b; color: #7ee39a; }
-.toast.bad { border-color: #5c2a28; color: #ff9d97; }
+.toast.ok  { border-color: var(--edge-ok); color: var(--ok); }
+.toast.bad { border-color: var(--edge-bad); color: var(--bad); }
 
 /* ─────────────── 현재 측정 ─────────────── */
 
@@ -200,7 +280,7 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   border-radius: var(--radius);
 }
 
-.readout-main { border-color: #1d4269; }
+.readout-main { border-color: var(--edge-run); }
 
 .hz {
   font-family: var(--mono);
@@ -234,7 +314,7 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   padding: 14px 16px;
 }
 
-.scard.current { border-color: #1d4269; border-left-color: var(--accent); background: #131a24; }
+.scard.current { border-color: #1d4269; border-left-color: var(--accent); background: var(--sel-bg); }
 .scard.ok { border-left-color: var(--ok); }
 .scard.bad { border-left-color: var(--bad); }
 
@@ -284,7 +364,7 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 }
 
 .hitem:hover { border-color: var(--text-faint); }
-.hitem.active { border-color: var(--accent); background: #131a24; }
+.hitem.active { border-color: var(--accent); background: var(--sel-bg); }
 
 .hitem .when { font-family: var(--mono); font-size: 13px; }
 
@@ -385,23 +465,23 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 }
 
 /* 줄 1개 = 페그 + 현 + 라벨. 상태별로 색이 바뀐다. */
-.gs-line { stroke: #39424e; transition: stroke .25s, stroke-width .25s; }
-.gs-peg  { fill: #2b3441; stroke: #4a5566; transition: fill .25s, stroke .25s; }
+.gs-line { stroke: var(--string); transition: stroke .25s, stroke-width .25s; }
+.gs-peg  { fill: var(--peg-fill); stroke: var(--peg-stroke); transition: fill .25s, stroke .25s; }
 .gs-label, .gs-note { fill: var(--text-faint); transition: fill .25s; }
 .gs-label { font-size: 13px; font-weight: 700; }
 .gs-note  { font-size: 10.5px; }
 
 /* 조율 대상이 아닌 줄 (4·3번) */
-.gstring.off .gs-line { stroke: #232a34; stroke-dasharray: 3 4; }
-.gstring.off .gs-peg  { fill: #1a2029; stroke: #2a323d; }
+.gstring.off .gs-line { stroke: var(--string-off); stroke-dasharray: 3 4; }
+.gstring.off .gs-peg  { fill: var(--peg-fill-off); stroke: var(--peg-stroke-off); }
 
 /* 아직 처리 전 대상 줄 */
-.gstring.wait .gs-line { stroke: #4a5566; }
+.gstring.wait .gs-line { stroke: var(--string-wait); }
 .gstring.wait .gs-label { fill: var(--text-dim); }
 
 /* 지금 조율 중 */
 .gstring.current .gs-line { stroke: var(--accent); stroke-width: 3.4; }
-.gstring.current .gs-peg  { fill: var(--accent); stroke: #9ccaff; }
+.gstring.current .gs-peg  { fill: var(--accent); stroke: var(--peg-ring-current); }
 .gstring.current .gs-note { fill: var(--accent); }
 .gstring.current .gs-peg  { animation: pegPulse 1.4s ease-in-out infinite; }
 
@@ -413,10 +493,10 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 
 /* 성공 / 실패 */
 .gstring.ok  .gs-line { stroke: var(--ok); }
-.gstring.ok  .gs-peg  { fill: var(--ok); stroke: #7ee08a; }
+.gstring.ok  .gs-peg  { fill: var(--ok); stroke: var(--peg-ring-ok); }
 .gstring.ok  .gs-note { fill: var(--ok); }
 .gstring.bad .gs-line { stroke: var(--bad); }
-.gstring.bad .gs-peg  { fill: var(--bad); stroke: #ff9e97; }
+.gstring.bad .gs-peg  { fill: var(--bad); stroke: var(--peg-ring-bad); }
 .gstring.bad .gs-note { fill: var(--bad); }
 
 /* 페그가 색으로 채워지면 줄 번호를 어두운 글자로 바꾼다.
@@ -424,7 +504,7 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 .gstring.current .gs-label,
 .gstring.ok .gs-label,
 .gstring.bad .gs-label {
-  fill: #0b0e13;
+  fill: var(--on-fill);
   font-weight: 800;
 }
 
@@ -494,9 +574,9 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   left: 50%;
   width: 0;
   transform: translateX(-50%);
-  background: rgba(63, 185, 80, 0.16);
-  border-left: 1px solid rgba(63, 185, 80, 0.4);
-  border-right: 1px solid rgba(63, 185, 80, 0.4);
+  background: var(--zone-bg);
+  border-left: 1px solid var(--zone-edge);
+  border-right: 1px solid var(--zone-edge);
   transition: width .2s;
 }
 
@@ -518,10 +598,10 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   border-radius: 2px;
   background: var(--text-faint);
   transition: transform .28s cubic-bezier(.3, 1.4, .5, 1), background .2s;
-  box-shadow: 0 0 10px rgba(0, 0, 0, .5);
+  box-shadow: 0 0 10px var(--shadow);
 }
 .needle.live { background: var(--accent); }
-.needle.ok   { background: var(--ok); box-shadow: 0 0 14px rgba(63, 185, 80, .55); }
+.needle.ok   { background: var(--ok); box-shadow: 0 0 14px var(--needle-glow); }
 .needle.off  { background: var(--warn); }
 
 .meter-labels {
@@ -562,3 +642,49 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
 .hz-item .u { color: var(--text-faint); font-size: 11.5px; }
 .hz-sep { color: var(--text-faint); }
 
+
+/* ═══════════════ 검색 · 아이콘 버튼 ═══════════════ */
+
+.btn-icon {
+  padding: 6px 10px;
+  line-height: 1;
+  font-size: 15px;
+  min-width: 34px;
+}
+
+.search { position: relative; display: flex; align-items: center; gap: 6px; }
+
+.search input[type="search"] {
+  width: 280px;
+  max-width: 44vw;
+  padding: 7px 11px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+}
+
+.search input[type="search"]:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--tint-run);
+}
+
+.search input[type="search"]::placeholder { color: var(--text-faint); }
+
+/* 브라우저 기본 X 를 숨긴다. 우리 버튼이 필터까지 같이 지운다. */
+.search input[type="search"]::-webkit-search-cancel-button { display: none; }
+
+.select {
+  padding: 7px 10px;
+  background: var(--bg-elev-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font-family: var(--sans);
+  font-size: 13.5px;
+}
+
+.select:focus { outline: none; border-color: var(--accent); }
