@@ -11,7 +11,7 @@
 경로
   1. 경유지로     movej  — 관절 이동이라 특이점과 무관하다
   2. 접근점으로   movejx — 관절 보간. 경유지가 특이점 자세라 직선으로 못 나간다
-  3. 페그로       movel  — 직선 60mm. 페그에 똑바로 들어가야 한다
+  3. 페그로       movel  — 직선. 페그에 똑바로 들어가야 한다
   나올 때는 3 → 2 → 1 역순. 들어온 직선 그대로 나온다.
 
 팔 자세(sol)
@@ -58,8 +58,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--peg", type=int, required=True, choices=[1, 2, 5, 6])
     ap.add_argument("--yaml", default=DEFAULT_YAML)
-    ap.add_argument("--approach", type=float, default=60.0,
-                    help="접근축을 따라 뒤로 물러나는 거리(mm)")
+    ap.add_argument("--approach", type=float, default=None,
+                    help="접근축을 따라 뒤로 물러나는 거리(mm). 기본은 motion.approach_mm")
     ap.add_argument("--depth", type=float, default=None,
                     help="깊이를 바꿔 시험한다. 접근축 좌표를 이 값으로 덮어쓴다")
     ap.add_argument("--sol", type=int, default=None, help="팔 자세(역기구학 해)")
@@ -77,6 +77,8 @@ def main():
     if peg.kind != "task":
         raise SystemExit(f"{args.peg}번이 작업 좌표가 아니다. 이 스크립트는 작업 좌표용이다")
 
+    if args.approach is None:
+        args.approach = points.motion.get("approach_mm", 100.0)
     target = list(peg.task)
     if args.depth is not None:
         k = depth_axis(TP, target)

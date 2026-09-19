@@ -46,7 +46,12 @@ def main():
     ap.add_argument("--from", dest="src", type=int, required=True, choices=[1, 2, 5, 6])
     ap.add_argument("--to", dest="dst", type=int, required=True, choices=[1, 2, 5, 6])
     ap.add_argument("--yaml", default=DEFAULT_YAML)
-    ap.add_argument("--approach", type=float, default=60.0)
+    ap.add_argument("--approach", type=float, default=None,
+                    help="페그에서 물러나는 거리(mm). 기본은 motion.approach_mm")
+    ap.add_argument("--src-sol", type=int, default=None,
+                    help="출발 접근점의 팔 자세. yaml 의 sol 을 덮어쓴다")
+    ap.add_argument("--dst-sol", type=int, default=None,
+                    help="도착 접근점의 팔 자세. tools/sol_check.py 로 고른다")
     ap.add_argument("--speed", type=float, default=30.0,
                     help="설정 속도의 몇 %% 로 움직일지. 처음에는 30 쯤으로")
     ap.add_argument("--dry-run", action="store_true")
@@ -60,8 +65,13 @@ def main():
         print(f"경고 — {args.src}번과 {args.dst}번은 같은 쪽이다. "
               f"실제로는 경유지를 안 거친다")
 
-    src_back = TP.backed_off(points.peg(args.src).task, args.approach)
-    dst_back = TP.backed_off(points.peg(args.dst).task, args.approach)
+    back = args.approach if args.approach is not None \
+        else points.motion.get("approach_mm", 100.0)
+    src_peg, dst_peg = points.peg(args.src), points.peg(args.dst)
+    src_sol = args.src_sol if args.src_sol is not None else src_peg.sol
+    dst_sol = args.dst_sol if args.dst_sol is not None else dst_peg.sol
+    src_back = TP.backed_off(src_peg.task, back)
+    dst_back = TP.backed_off(dst_peg.task, back)
     route = points.route()
     if route is None:
         raise SystemExit("경유지(routes.transit)가 미교시다. 먼저 채워라")
@@ -79,9 +89,11 @@ def main():
     print(f"좌우 전환 검증  {args.src}번({TP.side_of(args.src)}) "
           f"→ {args.dst}번({TP.side_of(args.dst)})")
     print("=" * 62)
-    print(f"  출발 접근점  {fmt(src_back)}")
+    print(f"  출발 접근점  {fmt(src_back)}  (페그에서 {back:.0f}mm 뒤)")
     print(f"  경유지       {route.joints}")
     print(f"  도착 접근점  {fmt(dst_back)}")
+    print(f"  팔 자세(sol) 출발 {src_sol if src_sol is not None else '미지정'} / "
+          f"도착 {dst_sol if dst_sol is not None else '미지정 — 현재 자세 유지'}")
     print(f"  속도         설정값의 {args.speed:.0f}% "
           f"(관절 {motion['vel']:.1f} deg/s)")
     print("  그리퍼       열어둔다(90mm). 이동 중 가장 넓은 상태라 최악을 본다")
@@ -101,13 +113,18 @@ def main():
 
     from tunio_robot import motion_primitives as MP
     MP.connect(points.robot, points.gripper)
-    from DSR_ROBOT2 import get_current_posj, get_current_posx
+    from DSR_ROBOT2 import (get_current_posj, get_current_posx,
+                            get_current_solution_space)
+    from tunio_robot.kinematics import fk
 
     def report(label):
         posx = get_current_posx()
         pos = posx[0] if isinstance(posx, (list, tuple)) and len(posx) == 2 else posx
+        posj = list(get_current_posj())
         print(f"    {label} 손끝 {fmt(list(pos)[:6])}")
-        print(f"    {label} 관절 {fmt(get_current_posj())}")
+        print(f"    {label} 관절 {fmt(posj)}   sol {get_current_solution_space()}")
+        o = fk(posj)["origins"]
+        print(f"    {label} 어깨팔꿈치 {fmt(o[2])}  손목중심 {fmt(o[3])}")
 
     notes = []
     try:
@@ -116,7 +133,7 @@ def main():
 
         print("\n[1/3] 출발 접근점으로 간다. 지금 팔이 기타 근처면 주의해서 보라.")
         confirm("  진행할까")
-        MP._movejx(src_back, motion, sol=points.peg(args.src).sol)
+        MP._movejx(src_back, motion, sol=src_sol)
         report("출발점")
         notes.append(input("  부딪힐 뻔한 데 있었나? (없으면 엔터) ").strip())
 
@@ -129,7 +146,7 @@ def main():
 
         print(f"\n[3/3] {args.dst}번 접근점으로 내려간다.")
         confirm("  진행할까")
-        MP._movejx(dst_back, motion, sol=points.peg(args.dst).sol)
+        MP._movejx(dst_back, motion, sol=dst_sol)
         report("도착점")
         notes.append(input("  부딪힐 뻔한 데 있었나? (없으면 엔터) ").strip())
 
@@ -139,7 +156,7 @@ def main():
             MP.goto_route(route, motion)
             report("경유지")
             confirm(f"  {args.src}번 접근점으로")
-            MP._movejx(src_back, motion, sol=points.peg(args.src).sol)
+            MP._movejx(src_back, motion, sol=src_sol)
             report("출발점")
             notes.append(input("  돌아올 때 문제 있었나? (없으면 엔터) ").strip())
     except KeyboardInterrupt:
@@ -155,10 +172,12 @@ def main():
     if said:
         for n in said:
             print(f"  · {n}")
-        print("\n걸리는 데가 있으면 경유지를 고친다 —")
-        print("  · 손끝이 기타를 쓸면 J5 를 묶어서 안전한 데서 뒤집게 한다")
-        print("  · 높이가 모자라면 J2·J3 를 바꾼다")
-        print("  routes.transit.j 에서 null 을 값으로 바꾸면 된다")
+        print("\n걸리는 데가 있으면 —")
+        print("  · 손목 케이싱(J5 쪽)이 걸리면 **팔 자세(sol)** 를 바꾼다.")
+        print("    손끝을 안 바꾸고 케이싱만 반대로 넘길 수 있다 —")
+        print(f"      python3 tools/sol_check.py --peg {args.dst}")
+        print("  · 페그에 너무 붙으면 motion.approach_mm 을 늘린다")
+        print("  · 높이가 모자라면 routes.transit.j 의 J2·J3 를 바꾼다")
     else:
         print("  걸리는 데 없었다. 속도를 올려 다시 한 번 보고 확정하라.")
         print(f"  python3 tools/transit_check.py --from {args.src} "

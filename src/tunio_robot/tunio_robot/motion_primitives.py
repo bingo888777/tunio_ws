@@ -143,7 +143,7 @@ def _goto_pose(pose, motion):
     """
     if pose.kind == "joint":
         return _movej(pose.joints, motion)
-    back = motion.get("approach_mm", 60.0)
+    back = motion.get("approach_mm", 100.0)
     # 접근점까지는 관절 보간. 경유지가 특이점 자세라 직선으로 출발하면 안 된다
     _movejx(TP.backed_off(pose.task, back), motion, sol=getattr(pose, "sol", None))
     # 마지막 짧은 구간만 직선. 페그에 똑바로 들어가야 한다
@@ -153,7 +153,7 @@ def _goto_pose(pose, motion):
 def _retreat(pose, motion):
     """들어온 직선 그대로 물러난다."""
     if pose.kind == "task":
-        _movel(TP.backed_off(pose.task, motion.get("approach_mm", 60.0)), motion)
+        _movel(TP.backed_off(pose.task, motion.get("approach_mm", 100.0)), motion)
 
 
 def _grip(preset_name):

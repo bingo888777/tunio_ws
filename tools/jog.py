@@ -55,7 +55,7 @@ def main():
                     help="설정 속도의 몇 %% 로 움직일지")
     ap.add_argument("--confirm-over", type=float, default=15.0,
                     help="이 각도를 넘으면 움직이기 전에 확인을 받는다")
-    ap.add_argument("--approach", type=float, default=60.0)
+    ap.add_argument("--approach", type=float, default=None)
     ap.add_argument("--id", default="dsr01")
     ap.add_argument("--model", default="m0609")
     args = ap.parse_args()
@@ -63,6 +63,8 @@ def main():
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
 
+    if args.approach is None:
+        args.approach = points.motion.get("approach_mm", 100.0)
     motion = dict(points.motion)
     scale = max(0.05, args.speed / 100.0)
     motion["vel"] = points.motion.get("vel", 30) * scale
