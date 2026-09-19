@@ -58,6 +58,7 @@ class TeachPoints:
         self._frames = {}
         self._pegs = {}
         self._plucks = {}
+        self._pick = None
         self._parse()
 
     # -------------------------------------------------- 파싱·검증
@@ -97,6 +98,11 @@ class TeachPoints:
         missing = [s for s in STRINGS if s not in self._plucks]
         _require(not missing, f"pluck 에 빠진 줄: {missing}")
 
+        # 피크 거치대. 없는 YAML 도 로드는 되고, 조회할 때 걸린다
+        holder = d.get("pick", {}).get("holder")
+        if holder is not None:
+            self._pick = self._grip_pose("pick.holder", holder)
+
     @staticmethod
     def _string_no(section, key):
         try:
@@ -116,14 +122,18 @@ class TeachPoints:
             _require(isinstance(v, (int, float)), f"{name}.j 에 숫자가 아닌 값이 있다")
         return Pose(name, joints, item.get("taught", False))
 
+    def _grip_pose(self, name, item):
+        """자세 + 파지 설정(폭·힘)을 묶어 읽는다."""
+        pose = self._pose(name, item)
+        pose.grip_width_mm = item.get("grip_width_mm")
+        pose.grip_force_n = item.get("grip_force_n")
+        return pose
+
     def _peg(self, no, item):
-        pose = self._pose(f"pegs.{no}", item)
+        pose = self._grip_pose(f"pegs.{no}", item)
         sign = item.get("turn_sign")
         _require(sign in (1, -1), f"pegs.{no}.turn_sign 은 1 또는 -1 이어야 한다 (지금 {sign!r})")
         pose.turn_sign = sign
-        # 파지 설정. 그리퍼 방식이 확정되면 쓴다. 미확정이라 있으면 읽고 없으면 None
-        pose.grip_width_mm = item.get("grip_width_mm")
-        pose.grip_force_n = item.get("grip_force_n")
         return pose
 
     # -------------------------------------------------- 조회
@@ -135,6 +145,12 @@ class TeachPoints:
     def peg(self, string_number):
         _require(string_number in self._pegs, f"pegs 에 {string_number}번 줄이 없다")
         return self._taught(self._pegs[string_number])
+
+    def pick_holder(self):
+        """피크 거치대 자세. 피크를 집고 반환하는 자리다."""
+        _require(self._pick is not None,
+                 "교시점 파일에 pick.holder 가 없다. 피크를 집었다 놓는 방식이라 필요하다")
+        return self._taught(self._pick)
 
     def pluck(self, string_number):
         _require(string_number in self._plucks, f"pluck 에 {string_number}번 줄이 없다")

@@ -128,3 +128,31 @@ def test_peg_joint_범위를_벗어나면_걸린다():
     d["motion"]["peg_joint"] = 7
     with pytest.raises(tp.TeachPointsError, match="peg_joint"):
         tp.TeachPoints(d)
+
+
+# ---------------------------------------------------------- 피크 거치대
+def test_피크_거치대도_교시_전에는_거부한다():
+    """놓친 피크는 비전이 없어 되찾을 수 없다. 좌표 없이 움직이면 안 된다."""
+    points = tp.TeachPoints(_data())
+    with pytest.raises(tp.TeachPointsError, match="교시"):
+        points.pick_holder()
+
+
+def test_피크_거치대_교시가_끝나면_파지_설정까지_읽힌다():
+    d = _taught()
+    d["pick"]["holder"]["taught"] = True
+    d["pick"]["holder"]["grip_width_mm"] = 3.0
+    d["pick"]["holder"]["grip_force_n"] = 10.0
+    points = tp.TeachPoints(d)
+    holder = points.pick_holder()
+    assert holder.grip_width_mm == 3.0
+    assert holder.grip_force_n == 10.0
+
+
+def test_pick_절이_없는_파일도_로드는_된다():
+    """조회할 때만 걸린다. 예전 형식 YAML 로 노드가 뜨는 것까지는 막지 않는다."""
+    d = _data()
+    del d["pick"]
+    points = tp.TeachPoints(d)
+    with pytest.raises(tp.TeachPointsError, match="pick.holder"):
+        points.pick_holder()
