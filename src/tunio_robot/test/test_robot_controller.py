@@ -86,10 +86,10 @@ def test_교시_끝난_상태에서_페그_조절_goal_이_성공한다(ros, tau
 
 
 def test_미교시_상태면_실패하고_사유가_담긴다(ros):
-    """좌표가 placeholder 인 채로 움직이면 기타와 부딪힌다. 2번이 아직 미교시다."""
+    """교시가 한 벌로 안 맞으면 움직이지 않는다. 지금 페그가 전부 그 상태다."""
     h = Harness(os.path.abspath(CONFIG))
     try:
-        goal = AdjustPeg.Goal(string_number=2, direction=1, angle_deg=30.0)
+        goal = AdjustPeg.Goal(string_number=6, direction=1, angle_deg=30.0)
         handle = h.send(AdjustPeg, "/robot/adjust_peg", goal)
         assert handle.result.success is False
         assert "교시" in handle.result.message

@@ -37,15 +37,22 @@ RIGHT_ORDER = [1, 2, 3]
 
 
 def load_poses(path):
-    """교시점 YAML 에서 작업 좌표(x)가 있는 페그만 꺼낸다."""
+    """
+    교시점 YAML 에서 작업 좌표(x)가 있는 페그를 꺼낸다.
+
+    taught 가 false 여도 가져온다. 값이 서로 안 맞는지 보는 게 이 도구의 일이라
+    "아직 못 믿는 값"이야말로 봐야 할 대상이다. 대신 교시 시점을 같이 돌려준다.
+    """
     with open(path, "r", encoding="utf-8") as f:
         data = yaml.safe_load(f)
-    out = {}
+    out, meta = {}, {}
     for key, item in (data.get("pegs") or {}).items():
         pose = item.get("x")
-        if pose and item.get("taught"):
-            out[int(key)] = np.array(pose, dtype=float)
-    return out
+        if pose and any(v != 0 for v in pose):
+            no = int(key)
+            out[no] = np.array(pose, dtype=float)
+            meta[no] = (item.get("session"), bool(item.get("taught")))
+    return out, meta
 
 
 def side_of(no):
@@ -132,13 +139,25 @@ def main():
     ap.add_argument("--yaml", default=DEFAULT_YAML, help="교시점 파일")
     ap.add_argument("--verify", nargs=4, metavar=("줄번호", "X", "Y", "Z"),
                     help="실측값과 추정값을 대조한다")
+    ap.add_argument("--repeat", nargs=4, metavar=("줄번호", "X", "Y", "Z"),
+                    help="이미 교시한 페그를 다시 잡아 재현성을 본다")
     args = ap.parse_args()
 
-    poses = load_poses(os.path.abspath(args.yaml))
+    poses, meta = load_poses(os.path.abspath(args.yaml))
     if not poses:
-        raise SystemExit(f"교시된 작업 좌표가 없다: {args.yaml}")
+        raise SystemExit(f"기록된 작업 좌표가 없다: {args.yaml}")
 
-    print(f"교시된 페그: {sorted(poses, reverse=True)}\n")
+    print("기록된 페그")
+    sessions = set()
+    for no in sorted(poses, reverse=True):
+        session, taught = meta[no]
+        sessions.add(session)
+        mark = "" if taught else "  (taught: false — 아직 못 믿는 값)"
+        print(f"  {no}번  교시 {session}{mark}")
+    if len(sessions) > 1:
+        print("\n  ⚠️ 교시 시점이 서로 다르다. 그 사이 기타가 움직였다면")
+        print("     아래 분석의 불일치는 페그 배치가 아니라 기타 이동 때문이다.")
+    print()
     origin, rot, step = build_frame(poses)
     _, pitch, _ = axis_from_pair(poses, LEFT_ORDER)
     report_alignment(step, pitch)
@@ -158,6 +177,31 @@ def main():
             continue
         print(f"  {no}번  [{pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f}, "
               f"{ori[0]:.1f}, {ori[1]:.1f}, {ori[2]:.1f}]")
+
+    if args.repeat:
+        no = int(args.repeat[0])
+        again = np.array([float(v) for v in args.repeat[1:]])
+        if no not in poses:
+            raise SystemExit(f"{no}번은 교시된 적이 없다. --verify 를 쓰라")
+        err = again - poses[no][:3]
+        dist = float(np.linalg.norm(err))
+        print(f"\n{'=' * 60}")
+        print(f"재현성 — {no}번 페그를 다시 잡았을 때")
+        print(f"{'=' * 60}")
+        print(f"  처음  [{poses[no][0]:.1f}, {poses[no][1]:.1f}, {poses[no][2]:.1f}]")
+        print(f"  다시  [{again[0]:.1f}, {again[1]:.1f}, {again[2]:.1f}]")
+        print(f"  차이  X {err[0]:+.1f}  Y {err[1]:+.1f}  Z {err[2]:+.1f} mm"
+              f"   (거리 {dist:.1f} mm)")
+        print()
+        if dist <= 1.5:
+            print("  교시가 재현된다. 페그 사이 불일치는 교시 손떨림이 아니라")
+            print("  실제 배치 차이다. 좌표를 그대로 믿고 쓰면 된다.")
+        elif dist <= 4.0:
+            print("  같은 페그를 잡아도 이만큼 달라진다. 페그끼리의 불일치도")
+            print("  상당 부분 이 탓이다. 파지 폭 여유가 이 크기를 덮어야 한다.")
+        else:
+            print("  교시 자체가 안 흔들리게 잡는 게 먼저다. 이 상태로는")
+            print("  어떤 좌표를 넣어도 헛잡는다. 접근 자세·조명·받침대 고정을 보라.")
 
     if args.verify:
         no = int(args.verify[0])
