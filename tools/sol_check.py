@@ -15,8 +15,13 @@
 
 읽는 법
   손목 갈래는 J5 부호로 갈린다. 어깨·팔꿈치 갈래는 J1·J3 로 갈린다.
-  어깨팔꿈치(J3 축)와 손목중심(J4=J5 축) 위치를 같이 찍어 준다.
-  손목 뒤집기끼리는 축 원점이 똑같다 — 케이싱 방향만 다르다. 눈으로 봐야 한다.
+  손목 뒤집기끼리는 **축 원점이 똑같다.** 그래서 축 위치만 봐서는 구분이 안 된다.
+  대신 link_4 의 L자 케이싱이 부푼 자리를 같이 찍는다 (kinematics.py 참조).
+  부딪힐 뻔한 게 그 케이싱이다.
+
+  걸러내는 기준 두 가지를 자동으로 붙여 준다 —
+    · 어깨팔꿈치가 베이스 면(Z=0) 아래로 내려가면 받침·책상을 파고든다. 못 쓴다.
+    · 경유지 J1 에서 많이 돌아야 하는 해는 가는 길에 기타를 쓸고 간다.
 
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
@@ -33,6 +38,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
 
 DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot",
                             "config", "teach_points.yaml")
+
+
+def _sign(v):
+    return 1 if v >= 0 else -1
 
 
 def fmt(vals, w=7, d=1):
@@ -79,6 +88,9 @@ def main():
     node = rclpy.create_node("tunio_sol_check", namespace=args.id)
     DR_init.__dsr__node = node
 
+    route = points.route()
+    route_j1 = route.joints[0] if route and route.joints[0] is not None else None
+
     rows = []
     try:
         from DR_common2 import posx
@@ -107,29 +119,54 @@ def main():
         return 1
 
     print()
+    ok = []
     for sol, j in rows:
         r = fk(j)
-        mark = "  <- 지금 자세" if abs(j[4] - now_j[4]) < 1.0 and \
-            abs(j[1] - now_j[1]) < 1.0 and abs(j[0] - now_j[0]) < 1.0 else ""
-        wrist_side = "손목 뒤집힘(J5<0)" if j[4] < 0 else "손목 안 뒤집힘(J5>0)"
-        print(f"sol {sol}   {fmt(j, 7, 2)}{mark}")
-        print(f"        {wrist_side}")
-        print(f"        어깨팔꿈치(J3축) {fmt(r['origins'][2])}   "
+        # 같은 갈래인가. 값 자체는 접근 거리에 따라 몇 도씩 달라지므로
+        # 부호(어느 갈래인지)로 본다
+        same = (_sign(j[2]) == _sign(now_j[2]) and _sign(j[4]) == _sign(now_j[4])
+                and abs(j[0] - now_j[0]) < 90.0)
+        bad = []
+        if r["origins"][2][2] < 0.0:
+            bad.append(f"어깨팔꿈치가 베이스 면 아래 {-r['origins'][2][2]:.0f}mm "
+                       f"— 받침을 파고든다")
+        if route_j1 is not None and abs(j[0] - route_j1) > 100.0:
+            bad.append(f"경유지 J1({route_j1:.0f})에서 {abs(j[0] - route_j1):.0f}도 "
+                       f"돌아야 한다 — 가는 길이 길다")
+        tag = "  <- 지금 자세" if same else ""
+        print(f"sol {sol}   {fmt(j, 7, 2)}{tag}")
+        print(f"        {'손목 뒤집힘(J5<0)' if j[4] < 0 else '손목 안 뒤집힘(J5>0)'}"
+              f"    케이싱 {fmt(r['wrist_casing'])}")
+        print(f"        어깨팔꿈치 {fmt(r['origins'][2])}   "
               f"손목중심 {fmt(r['origins'][3])}")
-        print(f"        손끝 {fmt(r['tcp'])}")
+        for b in bad:
+            print(f"        X  {b}")
         print()
+        if not bad:
+            ok.append((sol, j, r, same))
 
     print("=" * 70)
     print("고르는 법")
     print("=" * 70)
-    print("  1. J5 부호가 지금과 반대인 해가 손목 케이싱을 반대편으로 넘긴 것이다.")
-    print("     축 원점이 같아도 케이싱은 정반대로 간다. 손끝은 안 바뀐다.")
-    print("  2. 어깨팔꿈치가 기타에서 먼 쪽인 해를 고른다.")
-    print("  3. 골랐으면 실제로 가보고 확인한다 —")
-    print(f"       python3 tools/transit_check.py --from 6 --to {args.peg} "
+    if not ok:
+        print("  쓸 만한 해가 없다. 페그 좌표나 경유지부터 다시 보라.")
+        return 1
+    print("  걸러지고 남은 해 — " + ", ".join(f"sol {s}" for s, _, _, _ in ok))
+    cur = next((r for _, _, r, same in ok if same), None)
+    if cur is not None:
+        far = max(ok, key=lambda t: abs(t[2]["wrist_casing"][0]
+                                        - cur["wrist_casing"][0]))
+        if far[3]:
+            print("  지금 자세 말고 케이싱이 다른 데로 가는 해가 없다.")
+        else:
+            d = [far[2]["wrist_casing"][i] - cur["wrist_casing"][i] for i in range(3)]
+            print(f"  케이싱을 가장 많이 옮기는 건 sol {far[0]} 이다 "
+                  f"(X {d[0]:+.0f}, Y {d[1]:+.0f}, Z {d[2]:+.0f} mm).")
+    print("  케이싱이 기타에서 먼 쪽(X 작고 Z 낮은 쪽)인 해를 고른다.")
+    print("  실제로 가보고 확인한 뒤에 적는다 —")
+    print(f"    python3 tools/transit_check.py --from 6 --to {args.peg} "
           f"--dst-sol <번호> --speed 30")
-    print("  4. 괜찮으면 teach_points.yaml 의 "
-          f"pegs.{args.peg}.sol 에 그 번호를 적는다.")
+    print(f"    teach_points.yaml 의 pegs.{args.peg}.sol 에 그 번호를 적는다")
     return 0
 
 

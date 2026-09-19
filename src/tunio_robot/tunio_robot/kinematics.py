@@ -18,6 +18,7 @@ M0609 정기구학 — 관절각으로 팔꿈치·손목이 어디 있는지 계
   r["tcp"]      -> 손끝 [X, Y, Z] mm
   r["elbow"]    -> 팔꿈치(J3 축 원점) [X, Y, Z] mm
   r["wrist"]    -> 손목(J5 축 원점) [X, Y, Z] mm
+  r["wrist_casing"] -> J5 쪽 L자 케이싱이 부푼 자리 [X, Y, Z] mm
   r["origins"]  -> 관절 1~6 축 원점 전부
 """
 import math
@@ -35,6 +36,11 @@ _CHAIN = (
 
 # teach_points.yaml 의 robot.tcp 오프셋. 툴 Z 로 208mm
 DEFAULT_TCP_MM = 208.0
+
+# link_4 의 무게중심(xacro 의 inertial origin, 단위 m). 자기 축에서 146mm 벗어나 있다.
+# J5 쪽 L자 케이싱이 부푼 자리라, "손목이 어느 쪽으로 뻗었나"를 이 점으로 본다.
+# 손목 뒤집기 갈래는 축 원점이 전부 같아서 이 점으로만 구분된다.
+_WRIST_CASING = (0.00004, 0.097079, -0.10981)
 
 
 def _matmul(a, b):
@@ -75,21 +81,32 @@ def fk(joints_deg, tcp_mm=DEFAULT_TCP_MM):
         raise ValueError("관절각 6개가 필요하다")
     m = _homog(((1, 0, 0), (0, 1, 0), (0, 0, 1)), (0.0, 0.0, 0.0))
     origins = []
-    for (rpy_, xyz), q in zip(_CHAIN, joints_deg[:6]):
+    link4 = None
+    for n, ((rpy_, xyz), q) in enumerate(zip(_CHAIN, joints_deg[:6])):
         m = _matmul(m, _homog(_rpy(*rpy_), xyz))
         m = _matmul(m, _homog(_rotz(math.radians(q)), (0.0, 0.0, 0.0)))
         origins.append([m[i][3] * 1000.0 for i in range(3)])
+        if n == 3:
+            link4 = [row[:] for row in m]
     flange = [m[i][3] * 1000.0 for i in range(3)]
     tool_z = [m[i][2] for i in range(3)]
     tcp = [flange[i] + tool_z[i] * tcp_mm for i in range(3)]
+    casing = [sum(link4[i][k] * _WRIST_CASING[k] for k in range(3)) * 1000.0
+              + origins[3][i] for i in range(3)]
     return {
         "origins": origins,
+        "wrist_casing": casing,    # J5 쪽 L자 케이싱이 부푼 자리
         "flange": flange,
         "tcp": tcp,
         "tool_z": tool_z,
         "elbow": origins[2],        # J3 축 원점
         "wrist": origins[4],        # J5 축 원점
     }
+
+
+def wrist_casing(joints_deg):
+    """J5 쪽 L자 케이싱이 부푼 자리만 [X, Y, Z] mm 로."""
+    return fk(joints_deg)["wrist_casing"]
 
 
 def elbow(joints_deg):
