@@ -52,6 +52,7 @@ class RobotController(Node):
         # 팔은 하나뿐이라 세 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
         self._running = None
+        self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
 
         cb = ReentrantCallbackGroup()
         self.play_srv = ActionServer(
@@ -106,6 +107,22 @@ class RobotController(Node):
                 self._running = None
         return res
 
+    def _cross_to(self, side):
+        """
+        헤드스톡 반대쪽으로 넘어갈 때만 경유지를 거친다.
+
+        같은 쪽 페그끼리는 37mm 밖에 안 떨어져 있어 바로 간다.
+        반대쪽은 손목이 뒤집혀야 하고, TCP 가 208mm 라 그 뒤집힘이
+        기타 근처에서 일어나면 손끝이 큰 호를 그리며 부딪힌다.
+        """
+        if self._side == side:
+            return
+        for name in (self._side, side):     # 있던 쪽에서 빠져나와 가는 쪽으로
+            route = self.points.route(name) if name else None
+            if route is not None:
+                self.get_logger().info(f"경유지 {name}")
+                MP.goto_route(route, self.points.motion)
+
     # ------------------------------------------------------ Action
     def on_play(self, goal):
         no = goal.request.string_number
@@ -127,11 +144,16 @@ class RobotController(Node):
             # 백래시 대응(풀었다 조이기)은 task_manager 가 결정한다. 여기서 덧붙이지 않는다.
             joint, delta = self.points.joint_delta(r.string_number, r.direction, r.angle_deg)
             pose = self.points.peg(r.string_number)
+            side = TP.side_of(r.string_number)
             if self.dry_run:
+                via = "" if side == self._side else f" (경유: {side})"
                 self.get_logger().info(
-                    f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도")
+                    f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도{via}")
+                self._side = side
                 return
+            self._cross_to(side)
             MP.adjust_peg(pose, joint, delta, self.points.motion)
+            self._side = side
 
         return self._run("adjust_peg", goal, AdjustPeg.Result, work)
 

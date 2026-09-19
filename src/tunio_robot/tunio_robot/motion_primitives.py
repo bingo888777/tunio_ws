@@ -25,6 +25,8 @@ TODO(정묵·성현):
     티칭 펜던트에 각각 등록해야 한다
 """
 
+from tunio_robot import teach_points as TP
+
 # 두산 API 핸들. connect() 가 채운다. dry_run 이면 None 그대로다
 _api = None
 _node = None
@@ -93,6 +95,46 @@ def _movej(joints, motion, relative=False):
                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
 
 
+def _movel(task, motion):
+    """작업 좌표로 직선 이동. BASE 기준 [X, Y, Z, A, B, C]."""
+    api = _require_api()
+    from DR_common2 import posx
+    v = motion.get("travel_vel", [50.0, 30.0])
+    a = motion.get("travel_acc", [100.0, 60.0])
+    return api.movel(posx(list(task)), vel=v, acc=a)
+
+
+def goto_route(route, motion):
+    """
+    경유지로 간다. null 인 관절은 지금 값을 그대로 둔다.
+
+    관절 이동이라 특이점과 무관하다. 특이점이 문제가 되는 건 직선 이동뿐이다.
+    """
+    api = _require_api()
+    current = list(api.get_current_posj())
+    _movej(route.resolve(current), motion)
+
+
+def _goto_pose(pose, motion):
+    """
+    교시 자세로 이동한다. 관절각이면 movej, 작업 좌표면 접근축을 따라 들어간다.
+
+    작업 좌표는 물러난 지점까지 먼저 가고 거기서 직선으로 들어간다.
+    바로 가면 경로가 기타를 쓸고 갈 수 있다.
+    """
+    if pose.kind == "joint":
+        return _movej(pose.joints, motion)
+    back = motion.get("approach_mm", 60.0)
+    _movel(TP.backed_off(pose.task, back), motion)
+    _movel(pose.task, motion)
+
+
+def _retreat(pose, motion):
+    """들어온 직선 그대로 물러난다."""
+    if pose.kind == "task":
+        _movel(TP.backed_off(pose.task, motion.get("approach_mm", 60.0)), motion)
+
+
 def _grip(preset_name):
     """
     프리셋 이름으로 잡는다.
@@ -130,7 +172,7 @@ def adjust_peg(pose, joint, delta_deg, motion):
     이중으로 겹쳐 결과가 어긋난다.
     """
     _require_api()
-    _movej(pose.joints, motion)                     # 페그 앞으로
+    _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
     try:
         delta = [0.0] * 6
@@ -138,6 +180,7 @@ def adjust_peg(pose, joint, delta_deg, motion):
         _movej(delta, motion, relative=True)        # 그 관절만 상대 회전
     finally:
         _release()                                  # 실패해도 페그는 놓는다
+        _retreat(pose, motion)                      # 들어온 직선 그대로 나온다
 
 
 def strum_all(string_numbers, points):

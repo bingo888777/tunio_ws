@@ -184,3 +184,44 @@ def test_pick_절이_없는_파일도_로드는_된다():
     points = tp.TeachPoints(d)
     with pytest.raises(tp.TeachPointsError, match="pick.holder"):
         points.pick_holder()
+
+
+# ---------------------------------------------------------- 경유지
+def test_null_인_관절은_현재값을_유지한다():
+    """부딪히지 않는 데 필요한 관절만 적으면 된다는 게 경유지의 요점이다."""
+    d = _data()
+    d["routes"]["left"] = {"j": [30.0, None, 60.0, None, None, None], "taught": True}
+    route = tp.TeachPoints(d).route("left")
+    got = route.resolve([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    assert got == [30.0, 2.0, 60.0, 4.0, 5.0, 6.0]
+
+
+def test_전부_적으면_자세가_완전히_고정된다():
+    d = _data()
+    d["routes"]["left"] = {"j": [1, 2, 3, 4, 5, 6], "taught": True}
+    route = tp.TeachPoints(d).route("left")
+    assert route.resolve([9.0] * 6) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_미교시_경유지는_None_이라_경유하지_않는다():
+    """값을 안 채운 상태로 경유하면 엉뚱한 자세로 간다."""
+    assert tp.TeachPoints(_data()).route("left") is None
+
+
+def test_줄_번호로_좌우를_가른다():
+    assert tp.side_of(6) == tp.side_of(5) == "left"
+    assert tp.side_of(2) == tp.side_of(1) == "right"
+
+
+def test_경유지_관절값이_6개가_아니면_걸린다():
+    d = _data()
+    d["routes"]["left"] = {"j": [1, 2, 3], "taught": True}
+    with pytest.raises(tp.TeachPointsError, match="6개"):
+        tp.TeachPoints(d)
+
+
+def test_경유지에_숫자도_null도_아닌_값이_있으면_걸린다():
+    d = _data()
+    d["routes"]["left"] = {"j": ["x", None, None, None, None, None], "taught": True}
+    with pytest.raises(tp.TeachPointsError, match="null"):
+        tp.TeachPoints(d)

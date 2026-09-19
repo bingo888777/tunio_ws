@@ -13,6 +13,7 @@
 교시 전에는 좌표가 전부 0이다. 그 상태로 움직이면 기타·로봇이 부딪히므로
 taught: false 인 항목은 조회 시 거부한다. 교시를 마치면 true 로 바꾼다.
 """
+import math
 import os
 
 import yaml
@@ -23,6 +24,41 @@ STRINGS = (6, 5, 2, 1)
 # AdjustPeg.Goal.direction 규약
 TIGHTEN = 1     # 음 높이기
 LOOSEN = -1     # 음 낮추기
+
+
+# 헤드스톡 좌우. 같은 쪽끼리는 가깝고, 반대쪽은 손목이 뒤집혀야 한다
+SIDES = {6: "left", 5: "left", 2: "right", 1: "right"}
+
+
+def side_of(string_number):
+    """그 줄의 페그가 헤드스톡 어느 쪽에 있는지."""
+    side = SIDES.get(string_number)
+    _require(side is not None, f"{string_number}번은 헤드스톡 배치에 없다")
+    return side
+
+
+class Route:
+    """
+    경유지. 관절 일부만 지정한다.
+
+    None 인 자리는 그때의 현재 관절값을 그대로 쓴다. 부딪히지 않는 데
+    필요한 관절(보통 J1 과 J3)만 적으면 된다. 전부 적으면 자세가 완전히
+    고정되고, 일부만 적으면 오던 자세를 최대한 유지한 채 그 관절만 옮긴다.
+    """
+
+    def __init__(self, name, joints, taught):
+        self.name = name
+        self.joints = list(joints)
+        self.taught = bool(taught)
+
+    def resolve(self, current):
+        """현재 관절값을 받아 실제로 명령할 6개 값을 만든다."""
+        _require(len(current) == 6, f"현재 관절값이 6개가 아니다: {current}")
+        return [current[i] if v is None else float(v)
+                for i, v in enumerate(self.joints)]
+
+    def __repr__(self):
+        return f"<Route {self.name} {self.joints}>"
 
 
 class TeachPointsError(Exception):
@@ -79,6 +115,7 @@ class TeachPoints:
         self._pegs = {}
         self._plucks = {}
         self._pick = None
+        self._routes = {}
         self._parse()
 
     # -------------------------------------------------- 파싱·검증
@@ -119,6 +156,17 @@ class TeachPoints:
         _require(not missing, f"pegs 에 빠진 줄: {missing}")
         missing = [s for s in STRINGS if s not in self._plucks]
         _require(not missing, f"pluck 에 빠진 줄: {missing}")
+
+        # 좌우 전환 경유지. 없으면 경유 없이 바로 간다
+        for name, item in (d.get("routes") or {}).items():
+            joints = item.get("j")
+            _require(isinstance(joints, list) and len(joints) == 6,
+                     f"routes.{name}.j 는 값 6개 목록이어야 한다 (지금 {joints!r})")
+            for v in joints:
+                _require(v is None or isinstance(v, (int, float)),
+                         f"routes.{name}.j 는 숫자 아니면 null 이어야 한다")
+            self._routes[name] = Route(f"routes.{name}", joints,
+                                       item.get("taught", False))
 
         # 피크 거치대. 없는 YAML 도 로드는 되고, 조회할 때 걸린다
         holder = d.get("pick", {}).get("holder")
@@ -172,6 +220,16 @@ class TeachPoints:
         _require(string_number in self._pegs, f"pegs 에 {string_number}번 줄이 없다")
         return self._taught(self._pegs[string_number])
 
+    def route(self, side):
+        """
+        그 쪽으로 갈 때 거칠 경유지. 없거나 미교시면 None 이다.
+
+        None 이면 경유 없이 간다. 경로가 기타를 쓸고 갈 수 있으니
+        교시가 끝나면 taught 를 올려야 한다.
+        """
+        r = self._routes.get(side)
+        return r if (r is not None and r.taught) else None
+
     def pick_holder(self):
         """피크 거치대 자세. 피크를 집고 반환하는 자리다."""
         _require(self._pick is not None,
@@ -212,6 +270,32 @@ class TeachPoints:
         validate_goal(string_number, direction, angle_deg, self.max_angle_deg)
         peg = self.peg(string_number)
         return self.peg_joint, direction * peg.turn_sign * float(angle_deg)
+
+
+def approach_axis(task_pose):
+    """
+    그리퍼가 다가가는 방향(툴 Z)을 BASE 기준 단위벡터로 돌려준다.
+
+    자세는 intrinsic ZYZ. R = Rz(A)Ry(B)Rz(C) 의 3열이 툴 Z 다.
+    Rz(C) 는 툴 Z 를 그대로 두므로 C 는 영향이 없다.
+    """
+    a, b = math.radians(task_pose[3]), math.radians(task_pose[4])
+    return (math.sin(b) * math.cos(a), math.sin(b) * math.sin(a), math.cos(b))
+
+
+def backed_off(task_pose, distance_mm):
+    """
+    같은 자세로 접근축을 따라 뒤로 물러난 자세를 만든다.
+
+    페그로 바로 가면 경로가 기타를 쓸고 갈 수 있다. 접근축 위에서 물러난
+    지점까지 먼저 가고, 거기서 직선으로 들어가면 경로가 예측 가능해진다.
+    나올 때도 같은 직선으로 나온다.
+    """
+    axis = approach_axis(task_pose)
+    out = list(task_pose)
+    for i in range(3):
+        out[i] = task_pose[i] - axis[i] * distance_mm
+    return out
 
 
 def validate_goal(string_number, direction, angle_deg, max_angle_deg):
