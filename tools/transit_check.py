@@ -14,11 +14,12 @@
 어떻게 보는가
   한 구간 가고 멈춘다. 눈으로 보고, 괜찮으면 다음 구간.
   중간에 아니다 싶으면 n 이나 Ctrl+C. 팔은 그 자리에 선다.
-  처음에는 --speed 30 쯤으로 느리게 하고, 비상정지에 손을 올려두고 본다.
+  처음 가보는 경로는 --speed 30 쯤으로 낮추고, 비상정지에 손을 올려두고 본다.
 
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
-  python3 tools/transit_check.py --from 6 --to 1 --speed 30
+  python3 tools/transit_check.py --from 6 --to 1
+  python3 tools/transit_check.py --from 6 --to 1 --speed 30   # 처음 가보는 경로
   python3 tools/transit_check.py --from 6 --to 1 --dry-run
 """
 import argparse
@@ -52,8 +53,9 @@ def main():
                     help="출발 접근점의 팔 자세. yaml 의 sol 을 덮어쓴다")
     ap.add_argument("--dst-sol", type=int, default=None,
                     help="도착 접근점의 팔 자세. tools/sol_check.py 로 고른다")
-    ap.add_argument("--speed", type=float, default=30.0,
-                    help="설정 속도의 몇 %% 로 움직일지. 처음에는 30 쯤으로")
+    ap.add_argument("--speed", type=float, default=100.0,
+                    help="설정 속도의 몇 %% 로 움직일지. "
+                         "처음 가보는 경로는 30 쯤으로 낮춰라")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--id", default="dsr01")
     ap.add_argument("--model", default="m0609")
@@ -194,10 +196,12 @@ def main():
         print(f"      python3 tools/sol_check.py --peg {args.dst}")
         print("  · 페그에 너무 붙으면 motion.approach_mm 을 늘린다")
         print("  · 높이가 모자라면 routes.transit.j 의 J2·J3 를 바꾼다")
-    else:
-        print("  걸리는 데 없었다. 속도를 올려 다시 한 번 보고 확정하라.")
+    elif args.speed < 100.0:
+        print("  걸리는 데 없었다. 기본 속도로 다시 한 번 보고 확정하라.")
         print(f"  python3 tools/transit_check.py --from {args.src} "
-              f"--to {args.dst} --speed 100")
+              f"--to {args.dst}")
+    else:
+        print("  걸리는 데 없었다. 기본 속도로 본 것이니 이 경로는 확정이다.")
     return 0
 
 

@@ -59,7 +59,8 @@ def main():
     ap.add_argument("--angle", type=float, default=20.0, help="총 회전량(도)")
     ap.add_argument("--step", type=float, default=2.5, help="한 번에 도는 각도(도)")
     ap.add_argument("--approach", type=float, default=None)
-    ap.add_argument("--speed", type=float, default=30.0)
+    ap.add_argument("--speed", type=float, default=100.0,
+                    help="설정 속도의 몇 %% 로. 처음 가보는 경로는 30 쯤으로 낮춰라")
     ap.add_argument("--no-grip", action="store_true",
                     help="그리퍼를 안 닫고 허공에서 돈다. 토크 바닥값을 얻는다")
     ap.add_argument("--no-return", action="store_true",

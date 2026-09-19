@@ -17,7 +17,7 @@
 
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
-  python3 tools/peg_tour.py --speed 30              # 6 5 1 차례로
+  python3 tools/peg_tour.py                         # 6 5 1 차례로
   python3 tools/peg_tour.py --pegs 6 5 2 1          # 네 줄 전부
   python3 tools/peg_tour.py --no-grip               # 잡지 않고 이동만
   python3 tools/peg_tour.py --dry-run               # 좌표만 계산
@@ -48,8 +48,8 @@ def main():
                     choices=[1, 2, 5, 6], help="돌 순서")
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--approach", type=float, default=None)
-    ap.add_argument("--speed", type=float, default=30.0,
-                    help="설정 속도의 몇 %% 로. 처음에는 30 쯤으로")
+    ap.add_argument("--speed", type=float, default=100.0,
+                    help="설정 속도의 몇 %% 로. 처음 가보는 경로는 30 쯤으로 낮춰라")
     ap.add_argument("--preset", default="peg")
     ap.add_argument("--no-grip", action="store_true", help="잡지 않고 이동만")
     ap.add_argument("--dry-run", action="store_true")
