@@ -247,6 +247,9 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 ## 12. 참고 문서
 
 - **docs/TUNIO_INTERFACE_SPEC.md — 인터페이스 기준본.** 코드와 다르면 이 문서가 기준
+- docs/TUNIO_ICD_v1.0.md — 인터페이스 필드 상세(단위·허용 범위·송수신자·시퀀스).
+  **기준본이 아니다.** SPEC 과 다르면 SPEC 을 따른다
+- docs/TUNIO_인터페이스_요약.md — 인터페이스 한눈에 보기. 상세는 SPEC·ICD 참조
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
 - docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
