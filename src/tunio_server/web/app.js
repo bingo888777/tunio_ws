@@ -18,6 +18,21 @@ const STRINGS = [
   { n: 1, name: 'E4' },
 ];
 
+// 기타 그림용 6줄. 4·3번은 조율하지 않지만 빠지면 기타로 안 보인다.
+// thick 은 현 굵기(저음현이 굵다). TARGET 은 STRINGS 에 있는 줄만 true.
+const FRETBOARD = [
+  { n: 6, name: 'E2', thick: 4.2 },
+  { n: 5, name: 'A2', thick: 3.6 },
+  { n: 4, name: 'D3', thick: 3.0 },
+  { n: 3, name: 'G3', thick: 2.5 },
+  { n: 2, name: 'B3', thick: 2.0 },
+  { n: 1, name: 'E4', thick: 1.6 },
+];
+const TARGET_STRINGS = new Set(STRINGS.map((s) => s.n));
+
+// 미터가 보여주는 센트 범위. 실제 튜너들이 대개 ±50 을 쓴다.
+const METER_RANGE = 50;
+
 const SETTING_FIELDS = [
   'tolerance_cents', 'max_adjust_count', 'max_measure_retry',
   'measure_timeout_sec', 'onset_timeout_sec',
@@ -33,12 +48,6 @@ let selectedJob = null;
 
 function hz(v) {
   return (v === null || v === undefined) ? '—' : Number(v).toFixed(2);
-}
-
-function signedHz(v) {
-  if (v === null || v === undefined) return '—';
-  const n = Number(v);
-  return (n > 0 ? '+' : '') + n.toFixed(2);
 }
 
 function cents(v) {
@@ -90,6 +99,146 @@ function isRunning(state) {
       || state.phase === PHASE.PAUSED;
 }
 
+// 센트 오차 = 1200 * log2(측정 / 목표) (CLAUDE.md 4절)
+function centsOf(measured, target) {
+  if (!measured || !target || measured <= 0 || target <= 0) return null;
+  return 1200 * Math.log2(measured / target);
+}
+
+function centsText(v) {
+  if (v === null || !isFinite(v)) return '—';
+  const r = Math.round(v * 10) / 10;
+  return (r > 0 ? '+' : '') + r.toFixed(1);
+}
+
+// 기타 헤드스톡을 그린다. 줄 하나가 <g class="gstring">, 상태는 class 로만 바꾼다.
+function buildGuitar() {
+  const W = 260, TOP = 22, GAP = 30, PEG_X = 42, NUT_X = 92, END_X = 236;
+  const H = TOP + GAP * (FRETBOARD.length - 1) + 26;
+
+  const parts = FRETBOARD.map((st, i) => {
+    const y = TOP + GAP * i;
+    return `<g class="gstring" data-n="${st.n}">
+      <line class="gs-line" x1="${NUT_X}" y1="${y}" x2="${END_X}" y2="${y}"
+            stroke-width="${st.thick}" stroke-linecap="round"></line>
+      <line class="gs-line" x1="${PEG_X + 9}" y1="${y}" x2="${NUT_X}" y2="${y}"
+            stroke-width="1.4"></line>
+      <circle class="gs-peg" cx="${PEG_X}" cy="${y}" r="9" stroke-width="2"></circle>
+      <text class="gs-label" x="${PEG_X}" y="${y + 4.5}" text-anchor="middle">${st.n}</text>
+      <text class="gs-note" x="${END_X}" y="${y - 7}" text-anchor="end">${st.name}</text>
+    </g>`;
+  }).join('');
+
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기타 줄 상태">
+    <rect x="${NUT_X - 6}" y="${TOP - 16}" width="6"
+          height="${GAP * (FRETBOARD.length - 1) + 32}" rx="2" fill="#3a4450"></rect>
+    ${parts}
+  </svg>`;
+}
+
+function renderGuitar(state) {
+  const wrap = $('guitar');
+  if (!wrap.firstChild) wrap.innerHTML = buildGuitar();
+
+  const byNumber = new Map();
+  if (state) state.results.forEach((r) => byNumber.set(r.string_number, r));
+  const running = isRunning(state);
+
+  wrap.querySelectorAll('.gstring').forEach((g) => {
+    const n = Number(g.dataset.n);
+    let cls = 'gstring';
+    if (!TARGET_STRINGS.has(n)) {
+      cls += ' off';                       // 4·3번 — 조율하지 않는다
+    } else if (state && state.current_string === n && running) {
+      cls += ' current';
+    } else {
+      const r = byNumber.get(n);
+      if (r && r.result === 1) cls += ' ok';
+      else if (r && r.result === 2) cls += ' bad';
+      else cls += ' wait';
+    }
+    g.setAttribute('class', cls);
+  });
+}
+
+// 튜너 바늘과 큰 음이름.
+function renderTuner(state) {
+  const noteEl = $('now-note');
+  const octEl = $('now-octave');
+  const needle = $('needle');
+  const centsEl = $('now-cents');
+  const zone = document.querySelector('.meter-zone');
+
+  const tol = state && state.active_settings
+    ? Number(state.active_settings.tolerance_cents) : null;
+
+  // 허용 구간을 미터 위에 녹색 띠로 그린다
+  if (tol && tol > 0) {
+    zone.style.width = Math.min(100, (tol / METER_RANGE) * 100) + '%';
+  } else {
+    zone.style.width = '0';
+  }
+
+  const no = state ? state.current_string : 0;
+  $('now-stringno').textContent = no ? `${no}번 줄` : '—';
+  $('now-adjust').textContent = no ? `조절 ${state.adjust_count}회` : '—';
+
+  if (!no) {
+    noteEl.textContent = '—';
+    noteEl.className = 'note';
+    octEl.textContent = '';
+    needle.className = 'needle';
+    needle.style.transform = 'translateX(0)';
+    centsEl.textContent = '—';
+    centsEl.className = 'cents-big';
+    $('now-measured').textContent = '—';
+    $('now-target').textContent = '—';
+    return;
+  }
+
+  // 음이름은 표에서 직접 꺼낸다. "E2" -> 음 'E' + 옥타브 '2'
+  const info = FRETBOARD.find((x) => x.n === no);
+  const note = info ? info.name.slice(0, -1) : '—';
+  octEl.textContent = info ? info.name.slice(-1) : '';
+  $('now-target').textContent = hz(state.target_hz);
+
+  if (!state.measurement_valid) {
+    noteEl.textContent = '측정 불가';
+    noteEl.className = 'note invalid';
+    octEl.textContent = '';
+    needle.className = 'needle';
+    needle.style.transform = 'translateX(0)';
+    centsEl.textContent = '—';
+    centsEl.className = 'cents-big';
+    $('now-measured').textContent = '—';
+    return;
+  }
+
+  noteEl.textContent = note;
+  $('now-measured').textContent = hz(state.measured_hz);
+
+  const c = centsOf(state.measured_hz, state.target_hz);
+  centsEl.textContent = centsText(c);
+
+  if (c === null) {
+    noteEl.className = 'note';
+    needle.className = 'needle';
+    needle.style.transform = 'translateX(0)';
+    centsEl.className = 'cents-big';
+    return;
+  }
+
+  const inTune = tol ? Math.abs(c) <= tol : false;
+  // 트랙 절반 폭만큼 좌우로 민다. ±50센트를 넘으면 끝에 붙는다.
+  const clamped = Math.max(-METER_RANGE, Math.min(METER_RANGE, c));
+  const half = needle.parentElement.clientWidth / 2;
+  needle.style.transform = `translateX(${(clamped / METER_RANGE) * half}px)`;
+
+  noteEl.className = 'note' + (inTune ? ' ok' : '');
+  needle.className = 'needle ' + (inTune ? 'ok' : (Math.abs(c) > METER_RANGE ? 'off' : 'live'));
+  centsEl.className = 'cents-big ' + (inTune ? 'ok' : (c > 0 ? 'high' : 'low'));
+}
+
 function renderLive(state) {
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 
@@ -101,31 +250,8 @@ function renderLive(state) {
   overallEl.textContent = state ? state.overall_label : '—';
   overallEl.className = state ? overallClass(state.overall_result) : 'badge badge-idle';
 
-  // 현재 줄과 측정값
-  $('now-string').textContent = state && state.current_string
-    ? stringName(state.current_string) : '—';
-  $('now-target').textContent = state && state.current_string ? hz(state.target_hz) : '—';
-
-  const measured = $('now-measured');
-  const error = $('now-error');
-  if (!state || !state.current_string) {
-    measured.textContent = '—';
-    measured.className = 'hz hz-big';
-    error.textContent = '—';
-    error.className = 'hz';
-  } else if (!state.measurement_valid) {
-    measured.textContent = '측정 불가';
-    measured.className = 'hz hz-big invalid';
-    error.textContent = '—';
-    error.className = 'hz';
-  } else {
-    measured.textContent = hz(state.measured_hz);
-    measured.className = 'hz hz-big';
-    error.textContent = signedHz(state.error_hz);
-    error.className = 'hz ' + (state.error_hz > 0 ? 'high' : 'low');
-  }
-  $('now-adjust').textContent = state && state.current_string ? state.adjust_count : '—';
-
+  renderGuitar(state);
+  renderTuner(state);
   renderStringCards(state);
   renderButtons(state);
   renderSettingsLock(state);

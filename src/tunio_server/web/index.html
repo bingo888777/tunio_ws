@@ -46,30 +46,59 @@
 
   <div id="toast" class="toast"></div>
 
-  <div class="now">
-    <div class="now-head">
-      <span class="label">현재 줄</span>
-      <span id="now-string" class="now-string">—</span>
+  <div class="stage">
+
+    <!-- 기타 헤드스톡. 지금 어느 줄을 하고 있는지 한눈에 보이게 한다. -->
+    <div class="guitar-wrap">
+      <div id="guitar" class="guitar"></div>
+      <p class="guitar-cap">대상 줄 6 · 5 · 2 · 1 (4 · 3번은 조율하지 않는다)</p>
     </div>
-    <div class="readouts">
-      <div class="readout">
-        <span class="label">목표</span>
-        <strong id="now-target" class="hz">—</strong><span class="unit">Hz</span>
+
+    <!-- 튜너. 큰 음이름 + 센트 바늘. -->
+    <div class="tuner">
+      <div class="tuner-top">
+        <span id="now-stringno" class="tuner-stringno">—</span>
+        <div class="tuner-note">
+          <strong id="now-note" class="note">—</strong>
+          <span id="now-octave" class="octave"></span>
+        </div>
+        <span id="now-adjust" class="tuner-adjust">—</span>
       </div>
-      <div class="readout readout-main">
-        <span class="label">측정</span>
-        <strong id="now-measured" class="hz hz-big">—</strong><span class="unit">Hz</span>
+
+      <div class="meter">
+        <div class="meter-scale">
+          <span class="flat">♭</span>
+          <div class="meter-track">
+            <div class="meter-zone"></div>
+            <div class="meter-ticks">
+              <i style="left:0%"></i><i style="left:25%"></i>
+              <i class="mid" style="left:50%"></i>
+              <i style="left:75%"></i><i style="left:100%"></i>
+            </div>
+            <div id="needle" class="needle"></div>
+          </div>
+          <span class="sharp">♯</span>
+        </div>
+        <div class="meter-labels">
+          <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+        </div>
       </div>
-      <div class="readout">
-        <span class="label">오차</span>
-        <strong id="now-error" class="hz">—</strong><span class="unit">Hz</span>
-      </div>
-      <div class="readout">
-        <span class="label">조절 횟수</span>
-        <strong id="now-adjust" class="hz">—</strong>
+
+      <div class="tuner-bottom">
+        <div class="cents-wrap">
+          <strong id="now-cents" class="cents-big">—</strong>
+          <span class="cents-unit">센트</span>
+        </div>
+        <div class="hzline">
+          <span class="hz-item"><span class="k">측정</span>
+            <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
+          <span class="hz-sep">/</span>
+          <span class="hz-item"><span class="k">목표</span>
+            <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
+        </div>
       </div>
     </div>
-    <p class="hint">판정은 센트로 하고 화면 표시는 Hz 다. 오차가 양수면 목표보다 높은 음이다.</p>
+
   </div>
 
   <h2 class="section-title">줄별 결과</h2>
