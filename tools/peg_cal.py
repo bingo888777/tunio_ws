@@ -25,11 +25,11 @@
   - 줄을 갈고 하루 이상 지난 상태에서 잰다. 새 줄은 계속 늘어난다
 """
 import argparse
+from datetime import datetime
 import json
 import math
 import sys
 import time
-from datetime import datetime
 
 import numpy as np
 
