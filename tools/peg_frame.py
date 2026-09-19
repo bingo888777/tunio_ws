@@ -55,6 +55,31 @@ def load_poses(path):
     return out, meta
 
 
+def approach_axis(pose):
+    """
+    그리퍼가 페그로 다가가는 방향(툴 Z)을 BASE 기준 단위벡터로 돌려준다.
+
+    자세는 intrinsic ZYZ. R = Rz(A)Ry(B)Rz(C) 의 3열이 툴 Z 다.
+    Rz(C) 는 툴 Z 를 그대로 두므로 C 는 영향이 없다.
+    """
+    a, b = np.radians(pose[3]), np.radians(pose[4])
+    return np.array([np.sin(b) * np.cos(a), np.sin(b) * np.sin(a), np.cos(b)])
+
+
+def split_error(err, pose):
+    """
+    오차를 '페그에 얼마나 깊이 물렸나'와 '페그를 얼마나 빗나갔나'로 가른다.
+
+    직접교시는 접근 방향(깊이)이 제일 많이 흔들린다. 그런데 깊이는 좀 어긋나도
+    페그 손잡이 안에만 들어오면 잡힌다. 위험한 건 옆 방향 오차다.
+    둘을 뭉뚱그리면 멀쩡한 교시를 나쁘다고 판정한다.
+    """
+    axis = approach_axis(pose)
+    along = float(err @ axis)
+    lateral = float(np.linalg.norm(err - along * axis))
+    return along, lateral
+
+
 def side_of(no):
     if no in LEFT_ORDER:
         return "left"
@@ -139,11 +164,15 @@ def report_rows(poses):
     print(f"  왼쪽  {lhave[0]}→{lhave[1]}  {lp:6.2f} mm")
     print(f"  오른쪽 {rhave[0]}→{rhave[1]}  {rp:6.2f} mm")
     print(f"  간격 차이 {gap:+.2f} mm ({gap / lp * 100:+.1f}%),  방향 차이 {ang:.2f} 도")
-    if abs(gap) <= 1.5 and ang <= 2.0:
-        print("  → 한 벌로 맞는다. 네 좌표를 같은 기준으로 쓸 수 있다.")
+    if abs(gap) <= 1.5:
+        print("  → 간격이 맞는다. 네 좌표를 같은 기준으로 쓸 수 있다.")
     else:
-        print("  → 안 맞는다. 교시 사이에 기타가 움직였을 가능성이 높다.")
-        print("     페그 배치가 이만큼 다를 수는 없다. 한 자리에서 다시 잡아라.")
+        print("  → 간격이 안 맞는다. 페그 배치가 이만큼 다를 수는 없으니")
+        print("     교시 사이에 기타가 움직였다고 봐야 한다. 한 자리에서 다시 잡아라.")
+    if ang > 2.0:
+        print(f"  방향 차이 {ang:.1f}도는 깊이 잡음 탓일 수 있다. 직접교시는 접근")
+        print("     방향으로 제일 많이 흔들리는데, 그게 열 방향 계산에 섞여 든다.")
+        print("     간격이 맞는데 방향만 틀어졌다면 깊이를 한쪽에 하나씩 정해서 쓰라.")
 
 
 def report_alignment(step, pitch):
@@ -226,16 +255,22 @@ def main():
         print(f"  다시  [{again[0]:.1f}, {again[1]:.1f}, {again[2]:.1f}]")
         print(f"  차이  X {err[0]:+.1f}  Y {err[1]:+.1f}  Z {err[2]:+.1f} mm"
               f"   (거리 {dist:.1f} mm)")
-        print()
-        if dist <= 1.5:
-            print("  교시가 재현된다. 페그 사이 불일치는 교시 손떨림이 아니라")
-            print("  실제 배치 차이다. 좌표를 그대로 믿고 쓰면 된다.")
-        elif dist <= 4.0:
-            print("  같은 페그를 잡아도 이만큼 달라진다. 페그끼리의 불일치도")
-            print("  상당 부분 이 탓이다. 파지 폭 여유가 이 크기를 덮어야 한다.")
+        if no in poses:
+            along, lateral = split_error(err, poses[no])
+            print(f"    깊이 방향 {along:+.2f} mm   <- 페그에 얼마나 깊이 물렸나")
+            print(f"    옆  방향 {lateral:.2f} mm   <- 페그를 빗나간 정도")
+            print()
+            if lateral <= 2.0:
+                print("  옆 방향은 잘 맞는다. 페그를 빗나가지는 않는다.")
+                print("  깊이는 접근 거리를 값마다 두지 말고 한 번 정해서 쓰면 된다.")
+            elif lateral <= 4.0:
+                print("  옆 방향 오차가 있다. 파지 폭 여유가 이 크기는 덮어야 한다.")
+            else:
+                print("  옆 방향이 이만큼 흔들리면 헛잡는다. 교시를 다시 하거나")
+                print("  접근 자세를 고정하고 잡아라.")
         else:
-            print("  교시 자체가 안 흔들리게 잡는 게 먼저다. 이 상태로는")
-            print("  어떤 좌표를 넣어도 헛잡는다. 접근 자세·조명·받침대 고정을 보라.")
+            print()
+            print(f"  옆/깊이 구분은 자세가 있어야 한다. {no}번 기록이 없다.")
 
     if args.verify:
         no = int(args.verify[0])

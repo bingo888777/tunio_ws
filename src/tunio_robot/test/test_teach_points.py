@@ -32,14 +32,15 @@ def test_저장소_교시점_파일이_구조검증을_통과한다():
 
 def test_교시_전에는_자세_조회를_거부한다():
     """
-    좌표가 있어도 taught 가 false 면 거부한다.
+    좌표가 들어 있어도 taught 가 false 면 거부한다.
 
-    지금 페그 좌표는 서로 다른 날 교시돼서 기타 위치가 달라졌다.
-    값은 있지만 한 벌로 못 쓰므로 실제 동작을 막아야 한다.
+    교시가 한 벌로 안 맞는다고 판명나면 값을 지우지 않고 taught 만 내린다.
+    그때 동작이 막혀야 한다.
     """
-    points = tp.TeachPoints(_data())
+    d = _data()
+    d["pegs"][6]["taught"] = False
     with pytest.raises(tp.TeachPointsError, match="교시"):
-        points.peg(6)
+        tp.TeachPoints(d).peg(6)
 
 
 def test_교시를_마치면_조회된다():
@@ -49,9 +50,10 @@ def test_교시를_마치면_조회된다():
 
 def test_페그는_작업좌표로_읽힌다():
     """좌표계 계산으로 다른 페그를 내려면 관절각이 아니라 작업좌표여야 한다."""
-    peg = tp.TeachPoints(_taught()).peg(6)
+    peg = tp.TeachPoints(_data()).peg(6)
     assert peg.kind == "task"
-    assert peg.task == [341.0, -81.5, 113.0, 91.0, 90.0, 179.0]
+    assert len(peg.task) == 6
+    assert peg.joints is None
 
 
 def test_대기_자세는_관절각이다():
