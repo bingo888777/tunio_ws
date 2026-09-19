@@ -13,7 +13,7 @@
 | 패키지 | 실행 PC | 담당 | 역할 |
 |---|---|---|---|
 | `tunio_interfaces` | 공용 | 전원 | msg / srv / action 정의 |
-| `tunio_server` | 서버 | 정동휘 | task_manager, hmi_node(PyQt), result_store(SQLite) |
+| `tunio_server` | 서버 | 정동휘 | task_manager, web_node(관제 웹), result_store(SQLite) |
 | `tunio_robot` | 로봇 제어 | 정묵·성현 | robot_controller (두산 API) |
 | `tunio_audio` | 마이크 | 정정인 | audio_analyzer (녹음·주파수 분석) |
 | `tunio_bringup` | - | 공용 | 통합 런치 (단일 PC 테스트용) |
@@ -25,7 +25,7 @@ task_manager ─ measure_pitch Action ─ audio_analyzer
       │
       ├─ play_string / adjust_peg / strum_all Action ─ robot_controller
       │
-      ├─ /tuning/state (Topic) ─ hmi_node ─ PyQt
+      ├─ /tuning/state (Topic) ─ web_node ─ 브라우저
       └─ save_job / get_history (Service) ─ result_store ─ SQLite
 
 설정 조회·변경 Service는 task_manager 자신이 제공한다.
