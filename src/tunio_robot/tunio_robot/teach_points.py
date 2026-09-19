@@ -205,6 +205,12 @@ class TeachPoints:
 
     def _peg(self, no, item):
         pose = self._grip_pose(f"pegs.{no}", item)
+        # 팔 자세(역기구학 해). 경유지에서 접근점으로 갈 때 movejx 가 쓴다.
+        # None 이면 그때의 현재 자세를 유지한다
+        sol = item.get("sol")
+        _require(sol is None or isinstance(sol, int),
+                 f"pegs.{no}.sol 은 정수 아니면 null 이어야 한다 (지금 {sol!r})")
+        pose.sol = sol
         sign = item.get("turn_sign")
         _require(sign in (1, -1), f"pegs.{no}.turn_sign 은 1 또는 -1 이어야 한다 (지금 {sign!r})")
         pose.turn_sign = sign
@@ -220,14 +226,14 @@ class TeachPoints:
         _require(string_number in self._pegs, f"pegs 에 {string_number}번 줄이 없다")
         return self._taught(self._pegs[string_number])
 
-    def route(self, side):
+    def route(self, name="transit"):
         """
-        그 쪽으로 갈 때 거칠 경유지. 없거나 미교시면 None 이다.
+        경유지. 없거나 미교시면 None 이고, 그러면 경유 없이 간다.
 
-        None 이면 경유 없이 간다. 경로가 기타를 쓸고 갈 수 있으니
-        교시가 끝나면 taught 를 올려야 한다.
+        경유 없이 가면 경로가 기타를 쓸고 갈 수 있다. 교시가 끝나면
+        taught 를 올려야 한다.
         """
-        r = self._routes.get(side)
+        r = self._routes.get(name)
         return r if (r is not None and r.taught) else None
 
     def pick_holder(self):

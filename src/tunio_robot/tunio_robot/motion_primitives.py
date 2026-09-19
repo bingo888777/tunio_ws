@@ -104,6 +104,25 @@ def _movel(task, motion):
     return api.movel(posx(list(task)), vel=v, acc=a)
 
 
+def _movejx(task, motion, sol=None):
+    """
+    작업 좌표로 가되 **관절 보간**으로 간다. 경로는 직선이 아니다.
+
+    특이점에서 출발하거나 특이점을 지나도 괜찮다. 직선 이동과 달리
+    손끝 경로를 구속하지 않기 때문이다. 경유지에서 페그 접근점까지처럼
+    "가기만 하면 되는" 구간에 쓴다.
+
+    sol — 팔 자세(어느 역기구학 해를 쓸지). None 이면 지금 자세를 유지한다.
+          엉뚱한 값을 주면 팔이 통째로 뒤집힌다.
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    if sol is None:
+        sol = api.get_current_solution_space()
+    return api.movejx(posx(list(task)),
+                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
+
+
 def goto_route(route, motion):
     """
     경유지로 간다. null 인 관절은 지금 값을 그대로 둔다.
@@ -125,7 +144,9 @@ def _goto_pose(pose, motion):
     if pose.kind == "joint":
         return _movej(pose.joints, motion)
     back = motion.get("approach_mm", 60.0)
-    _movel(TP.backed_off(pose.task, back), motion)
+    # 접근점까지는 관절 보간. 경유지가 특이점 자세라 직선으로 출발하면 안 된다
+    _movejx(TP.backed_off(pose.task, back), motion, sol=getattr(pose, "sol", None))
+    # 마지막 짧은 구간만 직선. 페그에 똑바로 들어가야 한다
     _movel(pose.task, motion)
 
 

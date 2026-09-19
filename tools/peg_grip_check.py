@@ -108,6 +108,14 @@ def main():
         confirm("페그 앞까지 직선으로 들어간다. 그리퍼는 아직 안 닫는다.")
         MP._movel(target, points.motion)
 
+        # 이 자세의 관절값과 팔 자세(sol)를 기록해 둔다.
+        # 경유지에서 여기로 올 때 movejx 가 같은 팔 자세를 골라야 한다
+        from DSR_ROBOT2 import get_current_posj, get_current_solution_space
+        posj = [round(v, 2) for v in get_current_posj()]
+        sol = get_current_solution_space()
+        print(f"\n  지금 관절값  {posj}")
+        print(f"  팔 자세(sol) {sol}   <- teach_points.yaml 의 pegs.{args.peg}.sol 에 적어라")
+
         confirm(f"'{args.preset}' 프리셋으로 닫는다.")
         MP._grip(args.preset)
 
@@ -142,6 +150,7 @@ def main():
         print("확정되면 teach_points.yaml 에 적는다 —")
         print("  폭: gripper.presets.peg.width_mm")
         print("  깊이: 같은 쪽 페그 네 개의 좌표를 같은 값으로")
+        print("  팔 자세: pegs.<번호>.sol (위에 찍힌 값)")
     return 0
 
 

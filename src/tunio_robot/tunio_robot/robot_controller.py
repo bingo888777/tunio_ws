@@ -117,11 +117,10 @@ class RobotController(Node):
         """
         if self._side == side:
             return
-        for name in (self._side, side):     # 있던 쪽에서 빠져나와 가는 쪽으로
-            route = self.points.route(name) if name else None
-            if route is not None:
-                self.get_logger().info(f"경유지 {name}")
-                MP.goto_route(route, self.points.motion)
+        route = self.points.route()
+        if route is not None:
+            self.get_logger().info(f"경유지를 거쳐 {side} 쪽으로")
+            MP.goto_route(route, self.points.motion)
 
     # ------------------------------------------------------ Action
     def on_play(self, goal):
