@@ -1,6 +1,8 @@
 # 완료된 작업 한 건을 일괄 저장한다.
 # task_manager -> result_store
-# 정상 종료 시에만 호출한다. 취소 작업과 부분 결과는 저장하지 않는다.
+# 정상 종료 시에만 호출한다. 중간에 끊긴 작업(취소·오류)은 저장하지 않는다.
+# 4줄을 끝까지 돌았다면 판정이 OVERALL_PARTIAL·OVERALL_FAILED 여도 정상 종료이므로
+# 저장한다. 실패한 줄은 주파수를 NULL 로 남긴다 (기획 2.4).
 
 string job_id                       # 작업 식별자
 builtin_interfaces/Time finished_at # 종료 시각

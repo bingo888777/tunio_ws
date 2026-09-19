@@ -81,12 +81,23 @@ def test_조임과_풀림은_관절_부호가_반대다():
 def test_turn_sign_이_음수면_관절_부호가_뒤집힌다():
     """줄마다 헤드에서의 방향이 달라 같은 조임도 관절 부호가 반대일 수 있다."""
     d = _taught()
+    d["pegs"][6]["turn_sign"] = 1
     d["pegs"][1]["turn_sign"] = -1
     points = tp.TeachPoints(d)
     _, six = points.joint_delta(6, tp.TIGHTEN, 30.0)
     _, one = points.joint_delta(1, tp.TIGHTEN, 30.0)
     assert six == 30.0
     assert one == -30.0
+
+
+def test_저장소_파일은_네_줄_모두_반시계가_조임이다():
+    """2026-09-19 사용자 확인. 반시계 = 조임 = 관절 음(-) 회전이라 전부 -1 이다."""
+    points = tp.TeachPoints(_taught())
+    for string in tp.STRINGS:
+        _, delta = points.joint_delta(string, tp.TIGHTEN, 30.0)
+        assert delta == -30.0, f"{string}번이 {delta} 다"
+        _, back = points.joint_delta(string, tp.LOOSEN, 30.0)
+        assert back == 30.0
 
 
 def test_회전_관절_번호를_YAML에서_가져온다():

@@ -6,6 +6,8 @@
   <maintainer email="team@example.com">tunio-team</maintainer>
   <license>MIT</license>
 
+  <exec_depend>python3-yaml</exec_depend>
+
   <exec_depend>rclpy</exec_depend>
   <exec_depend>tunio_interfaces</exec_depend>
   <exec_depend>python3-pyqt5</exec_depend>

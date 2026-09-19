@@ -8,7 +8,7 @@
 ## 0. 한 줄 요약
 
 두산 M0609 협동로봇이 **비전 없이** 기타 줄을 튕겨 소리로 주파수를 측정하고,
-페그를 돌려 자동 조율하는 시스템. UI는 PyQt, 통신은 ROS 2 Jazzy.
+페그를 돌려 자동 조율하는 시스템. UI는 관제 웹, 통신은 ROS 2 Jazzy.
 
 ---
 
@@ -34,7 +34,9 @@
   - 거치대 위치·피크 파지 폭/힘은 교시 대상이다 (tunio_robot 의 teach_points.yaml).
   - 놓친 피크는 비전이 없어 되찾을 수 없다. 집기 실패 감지 수단이 필요하다
     (RG2 의 grip detected 는 지금 ROS 토픽으로 안 나온다. 3.6 참조)
-- 마이크: 외장 마이크(USB 또는 콘택트) 우선. 노트북 내장은 게인 조절 폭이 좁아 비권장
+  - 집기·반환을 **언제 할지는 로봇이 스스로 판단한다.** 서버는 지시하지 않는다.
+    인터페이스(msg/srv/action)는 이 변경으로 바뀌지 않는다.
+- 마이크: **USB 외장 마이크로 확정(구매 완료).** 노트북 내장은 게인 조절 폭이 좁아 쓰지 않는다
 - 두산/그리퍼 드라이버(dsr_*, onrobot_rg2)는 시스템에 이미 설치돼 있다.
   **이 저장소에 복사해 넣지 말 것.** package.xml에 의존성으로만 선언한다.
 
@@ -51,11 +53,15 @@
     드는 저항은 그대로 읽힌다. 그래서 파지 확인에는 쓸 수 있다 (3.6 참조).
 - 따라서 **주파수는 마이크로 측정하고, 장력이 필요하면 T=4L²f²μ 로 역산**한다.
 - 힘 센서는 조율 판정이 아니라 아래에만 쓴다:
-  타현 세기 유지(2~5N), 접촉 탐색, 파지 확인, 과토크 안전정지.
+  타현 세기 유지(2~5N), 접촉 탐색, 과토크 안전정지.
+- 파지 확인은 지금 수단이 없다(3.6 참조). **잡았다고 가정하고 진행하며, 결과적으로
+  실패하면 그 줄을 실패로 처리한다.** 잡았는지 확인하는 기능은 추가 기능으로 둔다.
 
 ### 3.2 페그 백래시 — 최종 접근은 항상 조이는 방향
 - 목표보다 음이 높으면, 목표 아래로 충분히 풀었다가 조여 올린다.
 - 조였다 풀었다 반복하면 같은 각도라도 결과가 달라진다.
+- **이 판단은 서버(task_manager)가 한다.** 로봇은 요청받은 방향·각도만 수행하므로
+  조절 1회가 adjust_peg goal 2번(풀기 → 조이기)이 될 수 있다.
 
 ### 3.3 옥타브 오인 차단
 - 6번 E2(82.4Hz)와 1번 E4(329.6Hz)는 두 옥타브 관계라 서로 공명한다.
@@ -64,6 +70,9 @@
 ### 3.4 발현 직후 처리
 - 줄을 튕긴 뒤 즉시 5mm 이상 후퇴한다(진동하는 줄에 피크가 닿아 버징 방지).
 - 분석은 발현 직후 과도음 구간(약 0.3초)을 제외한 안정 구간만 사용한다.
+- **로봇은 발현 시점을 알려주지 않는다.** 마이크가 오디오 onset(무음 → 소리)을
+  스스로 검출하고 그 시점부터 측정 타임아웃을 센다. 로봇 접근·파지 시간이
+  제한 시간에 먹히지 않게 하려는 것이다. PlayString에 Feedback 필드는 없다.
 
 ### 3.5 마이크
 - OS의 마이크 향상 기능(노이즈 제거·자동 음량 AGC·에코 제거)은 반드시 끈다.
@@ -115,6 +124,8 @@
 - 판정은 센트, 화면 표시는 Hz.
   - 센트 오차 = 1200 × log2(측정 / 목표), 절댓값이 허용 센트 이내면 성공
 - 재시도: 페그 조절 최대 5회 / 측정 실패 시 추가 재측정 최대 3회 (임시값, 테스트 후 확정)
+- 허용 센트: **10센트로 시작** (임시값, 실측 후 확정). 5처럼 빡빡하게 시작하면
+  수렴 실패 시 기준 탓인지 회전량 계산 탓인지 구분되지 않는다
 - 측정 응답: 정상 목표 **2.2초**, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
   - 2초에서 2.2초로 올렸다(2026-09-18). 저음현은 녹음 2.0초가 필요해 2초로는 못 맞춘다.
     6번 줄 실측 2.05초 = 장치 10ms + 녹음 2.0초 + 분석 36ms.
@@ -123,6 +134,9 @@
     (안정화 판정이 겹치는 창 3개를 쓰므로 고음도 1.0초로는 부족하다.
      실측 스윕은 src/tunio_audio/tunio_audio/audio_analyzer.py 주석)
   - 통신 지연(ROS Action 왕복 + 3 PC Wi-Fi)은 아직 미포함. 통합 후 측정
+  - **타임아웃 카운트 시작은 마이크가 onset을 검출한 시점**이다
+- onset 제한 시간 10초 (임시값). 이 안에 소리가 안 들어오면 '소리 부족'으로 처리한다.
+  이 상한이 없으면 발현이 실패했을 때 측정이 끝나지 않는다
 - 유효 측정값 없으면 화면 '측정 불가', DB 주파수 NULL (0Hz를 유효값으로 쓰지 않음)
 
 ---
@@ -166,7 +180,7 @@
 ```
 src/
 ├── tunio_interfaces/   msg·srv·action 정의 (가장 먼저 합의·고정)
-├── tunio_server/       task_manager, hmi_node(PyQt), result_store(SQLite)   [정동휘]
+├── tunio_server/       task_manager, web_node(관제 웹), result_store(SQLite)  [정동휘]
 ├── tunio_robot/        robot_controller, motion_primitives (두산 API)       [정묵·성현]
 ├── tunio_audio/        audio_analyzer, pitch, recorder                      [정정인]
 └── tunio_bringup/      통합 런치 (단일 PC 테스트용)
@@ -175,8 +189,10 @@ src/
 ### 노드 관계
 - task_manager ─ measure_pitch Action ─ audio_analyzer
 - task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
-- task_manager ─ /tuning/state Topic ─ hmi_node ─ PyQt
+- task_manager ─ /tuning/state Topic ─ web_node ─ 브라우저(localhost)
 - task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
+- 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
+  작업 진행 여부를 아는 유일한 노드라 '작업 중 변경 거부'를 스스로 판단)
 
 ### 3 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID)
 - 서버 PC: tunio_server
@@ -262,9 +278,15 @@ source install/setup.bash
 colcon build && source install/setup.bash
 
 # 로봇·마이크 없이 조율 로직만 검증
-colcon test --packages-select tunio_server
-colcon test-result --verbose
+cd src/tunio_server && python3 -m pytest test/ -q
 ```
+
+**`colcon test`를 그대로 믿지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
+colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
+아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
+러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
+굳이 colcon으로 돌리려면 `colcon test --python-testing pytest`.
+(고치면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
 
 ---
 
@@ -282,7 +304,41 @@ colcon test-result --verbose
 
 ## 12. 참고 문서
 
-- docs/기획서_풀버전_v1.1.md — 전체 기획 (모든 결정과 근거)
-- docs/기획서_간략본_v1.1.md — 요약본
+- **docs/TUNIO_INTERFACE_SPEC.md — 인터페이스 기준본.** 코드와 다르면 이 문서가 기준
+- docs/TUNIO_ICD_v1.0.md — 인터페이스 필드 상세(단위·허용 범위·송수신자·시퀀스).
+  **기준본이 아니다.** SPEC 과 다르면 SPEC 을 따른다
+- docs/TUNIO_인터페이스_요약.md — 인터페이스 한눈에 보기. 상세는 SPEC·ICD 참조
+- docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
+- docs/기획서_간략본_v1.2.md — 요약본
+- docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
+- docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
-- tools/pitch_test.py — 검증된 주파수 분석 스크립트 (단독 실행 가능)
+- tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
+- tools/peg_cal.py — 페그 각도-센트 캘리브레이션 도구
+
+---
+
+## 13. 확정된 것 / 아직 미확정
+
+**확정 (바꾸려면 다시 합의 필요)**
+- 백래시 마무리 주체 — 서버(task_manager)
+- 측정 타임아웃 주체와 기준 시점 — 마이크가 직접 재고, 오디오 onset 검출 시점부터
+- 설정 Service 제공 노드 — task_manager
+- 브릿지핀 안착 확인 — 범위 제외
+- 완료 결과 저장 — task_manager가 result_store에 save_job 호출.
+  4줄을 완주했으면 PARTIAL·FAILED 도 저장한다(중간에 끊긴 작업만 제외)
+- UI — 관제 웹(rclpy 노드 안 http.server, 서버 PC localhost 전용). PyQt 대체
+- 피크 — 거치대에서 집었다 반환. 시점은 로봇이 판단하고 서버는 지시하지 않는다
+- 대기 자세 복귀 — 전용 Action 없이 strum_all 이 책임진다
+- 파지 확인 — 수단 없음. 잡았다고 가정하고 실패 시 그 줄을 실패 처리
+
+**미확정 (실측 후 확정)**
+- 허용 센트 확정값 (현재 10.0으로 시작)
+- onset 제한 시간 확정값 (현재 10.0)
+- 페그 회전량 계산식 — `config/peg_calibration.yaml` 의 줄별 실측값이 들어와야 한다.
+  `measured: false` 인 동안 task_manager 는 페그를 돌리지 않고 PHASE_ERROR 로 멈춘다
+- **피크 거치대 왕복 시간** — onset_timeout_sec 확정에 필요하다. 피크를 가지러 가는
+  시간이 onset 제한 시간 예산에 들어가, 넘기면 발현 실패(FAIL_LOW_SIGNAL)로 오보고된다
+- 로봇 오류가 연속으로 날 때 작업 전체를 중단할지 (지금은 줄마다 재시도를 소진한다)
+- GetHistory 응답에 실패 사유 필드를 둘지 (지금은 found=false 만 와서 UI가
+  '기록 없음'과 'DB 오류'를 구분하지 못한다)
