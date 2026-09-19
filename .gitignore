@@ -21,3 +21,6 @@ __pycache__/
 
 # Claude Code 개인 설정
 .claude/
+
+# 개인 실측 작업 문서 (저장소 추적 제외)
+docs/PEG_ANGLE_MEASUREMENT.md
