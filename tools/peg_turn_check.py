@@ -41,6 +41,15 @@ DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot
                             "config", "teach_points.yaml")
 
 
+def MP_turn(cfg, percent):
+    """회전용 속도 설정. motion.turn_vel 에 비율을 곱한다."""
+    out = dict(cfg)
+    scale = max(0.05, percent / 100.0)
+    out["vel"] = cfg.get("turn_vel", cfg.get("vel", 5.0)) * scale
+    out["acc"] = cfg.get("turn_acc", cfg.get("acc", 10.0)) * scale
+    return out
+
+
 def fmt(vals, d=2):
     return "[" + ", ".join(f"{v:7.{d}f}" for v in vals) + "]"
 
@@ -60,7 +69,11 @@ def main():
     ap.add_argument("--step", type=float, default=2.5, help="한 번에 도는 각도(도)")
     ap.add_argument("--approach", type=float, default=None)
     ap.add_argument("--speed", type=float, default=100.0,
-                    help="설정 속도의 몇 %% 로. 처음 가보는 경로는 30 쯤으로 낮춰라")
+                    help="**이동** 속도. 설정값의 몇 %% 로. "
+                         "처음 가보는 경로는 30 쯤으로 낮춰라")
+    ap.add_argument("--turn-speed", type=float, default=100.0,
+                    help="**회전** 속도. motion.turn_vel 의 몇 %% 로. "
+                         "이동과 따로 둔다")
     ap.add_argument("--no-grip", action="store_true",
                     help="그리퍼를 안 닫고 허공에서 돈다. 토크 바닥값을 얻는다")
     ap.add_argument("--no-return", action="store_true",
@@ -93,6 +106,9 @@ def main():
     for key, default in (("travel_vel", [50.0, 30.0]), ("travel_acc", [100.0, 60.0])):
         motion[key] = [v * scale for v in points.motion.get(key, default)]
 
+    # 회전은 이동과 따로 간다. 줄에 장력을 거는 구간이라 느려야 한다
+    turn = MP_turn(points.motion, args.turn_speed)
+
     print()
     print("=" * 70)
     print(f"{args.peg}번 페그 회전 확인  ({TP.side_of(args.peg)} 쪽)")
@@ -101,6 +117,8 @@ def main():
           f"({'조임 — 줄이 끊어질 수 있다' if direction == TP.TIGHTEN else '풀기 — 안전한 쪽'})")
     print(f"  회전 관절  J{joint}   turn_sign {peg.turn_sign}")
     print(f"  총 {args.angle:.1f}도 를 {abs(step_signed):.2f}도씩 {n_steps}번 나눠 돈다")
+    print(f"  이동 속도  {motion['vel']:.1f} deg/s   "
+          f"회전 속도  {turn['vel']:.2f} deg/s")
     print(f"  관절 변화  {total:+.2f}도 (부호 포함)")
     print(f"  파지       {'안 한다 — 허공 바닥값' if args.no_grip else args.preset}")
     print(f"  되돌리기   {'안 한다' if args.no_return else '돌린 만큼 되돌린다'}")
@@ -166,7 +184,7 @@ def main():
         for i in range(1, n_steps + 1):
             d = [0.0] * 6
             d[joint - 1] = step_signed
-            MP._movej(d, motion, relative=True)
+            MP._movej(d, turn, relative=True)
             j = list(get_current_posj())
             t = list(get_external_torque())
             moved = j[joint - 1] - base_j[joint - 1]
@@ -182,7 +200,7 @@ def main():
             confirm("  돌린 만큼 되돌린다. 원래 자리로만 가니 줄이 더 당겨지지 않는다.")
             d = [0.0] * 6
             d[joint - 1] = -total
-            MP._movej(d, motion, relative=True)
+            MP._movej(d, turn, relative=True)
             print(f"  되돌렸다. J{joint} {get_current_posj()[joint - 1]:.2f}도")
 
         if not args.no_grip:

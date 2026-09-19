@@ -115,3 +115,30 @@ def test_choose_는_쓸_만한_게_없으면_None():
     # 전부 어깨팔꿈치가 베이스 아래로 가는 해만 준다
     bad = [54.95, 129.53, -80.70, -132.69, 127.88, 33.52]
     assert choose(lambda s: bad, route_j1=90.0) is None
+
+
+def test_회전_속도가_이동_속도와_따로_간다():
+    """돌리는 건 줄에 장력을 거는 동작이라 이동보다 느려야 한다."""
+    from tunio_robot.motion_primitives import turn_motion
+    cfg = {"vel": 5.0, "acc": 10.0, "turn_vel": 2.0, "turn_acc": 4.0,
+           "approach_mm": 100.0}
+    t = turn_motion(cfg)
+    assert t["vel"] == 2.0 and t["acc"] == 4.0
+    assert t["approach_mm"] == 100.0          # 나머지는 그대로 따라온다
+    assert cfg["vel"] == 5.0                  # 원본을 안 건드린다
+
+
+def test_turn_vel_이_없으면_이동_속도를_쓴다():
+    """예전 형식 YAML 로도 노드가 뜨게 한다. 느려지기만 안 할 뿐이다."""
+    from tunio_robot.motion_primitives import turn_motion
+    assert turn_motion({"vel": 5.0, "acc": 10.0})["vel"] == 5.0
+
+
+def test_저장소_파일에_회전_속도가_있다():
+    import os
+    import yaml
+    path = os.path.join(os.path.dirname(__file__), "..", "config",
+                        "teach_points.yaml")
+    with open(path, "r", encoding="utf-8") as f:
+        motion = yaml.safe_load(f)["motion"]
+    assert motion["turn_vel"] < motion["vel"], "회전이 이동보다 빠르면 안 된다"

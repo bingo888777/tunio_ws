@@ -124,6 +124,20 @@ def _movejx(task, motion, sol=None):
                       vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
 
 
+def turn_motion(motion):
+    """
+    회전용 속도로 바꾼 설정 사본.
+
+    페그를 돌리는 건 줄에 장력을 거는 동작이라 이동보다 느려야 한다.
+    토크를 읽어 파지를 확인하는 것도 이 구간이다(CLAUDE.md 3.6).
+    turn_vel/turn_acc 가 없으면 이동 속도를 그대로 쓴다.
+    """
+    out = dict(motion)
+    out["vel"] = motion.get("turn_vel", motion.get("vel", 30))
+    out["acc"] = motion.get("turn_acc", motion.get("acc", 30))
+    return out
+
+
 def goto_route(route, motion):
     """
     경유지로 간다. null 인 관절은 지금 값을 그대로 둔다.
@@ -199,7 +213,8 @@ def adjust_peg(pose, joint, delta_deg, motion):
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
-        _movej(delta, motion, relative=True)        # 그 관절만 상대 회전
+        # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
+        _movej(delta, turn_motion(motion), relative=True)
     finally:
         _release()                                  # 실패해도 페그는 놓는다
         _retreat(pose, motion)                      # 들어온 직선 그대로 나온다
