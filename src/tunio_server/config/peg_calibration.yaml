@@ -1,0 +1,55 @@
+# 페그 캘리브레이션 — 실측으로만 나오는 물리 상수
+#
+# 여기에는 tools/peg_cal.py 실측 결과만 넣는다.
+# 허용 센트·재시도 횟수·타임아웃은 TuningSettings 와 /tuning/set_settings 로
+# 런타임에 바뀌는 설정값이므로 이 파일에 넣지 않는다. 성격이 다르다.
+#
+# 실행:
+#   ros2 run tunio_server task_manager --ros-args --params-file <이 파일>
+# 파일을 직접 지정할 수도 있다:
+#   ros2 run tunio_server task_manager --ros-args -p peg_calibration_file:=<경로>
+# 아무것도 주지 않으면 설치된 share/tunio_server/config/peg_calibration.yaml 을 읽는다.
+#
+# measured: false 인 동안 task_manager 는 페그를 돌리지 않는다.
+# 조절이 필요한 순간에 PHASE_ERROR 로 멈춘다. 임시값으로 로봇을 움직이지 않기 위한 것이다
+# (CLAUDE.md 11절 — 임시값을 확정값처럼 하드코딩 금지).
+# 측정·판정까지는 캘리브레이션 없이도 정상 동작한다.
+#
+# 줄마다 따로 두는 이유: 같은 페그라도 줄 장력이 달라 각도당 센트가 다르다.
+# 6번 E2(82.4Hz)와 1번 E4(329.6Hz)를 한 상수로 묶으면 한쪽은 반드시 틀린다.
+/task_manager:
+  ros__parameters:
+    peg_calibration:
+      measured: false       # tools/peg_cal.py 실측을 마치고 아래 값을 채우면 true
+      measured_at: ''       # 실측 날짜 'YYYY-MM-DD'. 줄을 갈면 다시 재야 한다
+
+      # 줄별 실측값. 넷 다 0 이 아니어야 measured: true 로 올릴 수 있다.
+      #   cents_per_deg          페그 1도당 음정 변화량(센트). 회전량 = |오차| / 이 값
+      #   min_effective_deg      이보다 작게 돌리면 페그가 실제로 안 움직이는 각도.
+      #                          없으면 오차가 작을 때 0에 가까운 각도를 반복 전송하며
+      #                          조절 횟수만 소진한다
+      #   max_angle_deg          1회 goal 의 회전량 상한(안전). 계산값이 넘으면 잘라 보내고
+      #                          다음 조절 회차에서 이어서 맞춘다
+      #   backlash_release_cents 목표보다 음이 높을 때 목표 '아래로' 얼마나 풀고 나서
+      #                          조여 올릴지(센트). CLAUDE.md 3.2 의 '충분히'에 해당한다.
+      #                          백래시 양보다 넉넉해야 한다
+      s6:   # 6번 E2 82.4069Hz
+        cents_per_deg: 0.0
+        min_effective_deg: 0.0
+        max_angle_deg: 0.0
+        backlash_release_cents: 0.0
+      s5:   # 5번 A2 110.0000Hz
+        cents_per_deg: 0.0
+        min_effective_deg: 0.0
+        max_angle_deg: 0.0
+        backlash_release_cents: 0.0
+      s2:   # 2번 B3 246.9417Hz
+        cents_per_deg: 0.0
+        min_effective_deg: 0.0
+        max_angle_deg: 0.0
+        backlash_release_cents: 0.0
+      s1:   # 1번 E4 329.6276Hz
+        cents_per_deg: 0.0
+        min_effective_deg: 0.0
+        max_angle_deg: 0.0
+        backlash_release_cents: 0.0
