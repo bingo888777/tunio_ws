@@ -79,6 +79,24 @@ src/tunio_interfaces/
 
 ## 4. Action
 
+> ⚠️ **빈 Feedback 섹션을 지우지 말 것.**
+>
+> ROS 2 action 은 Goal / Result / Feedback 3부 구조라 `---` 구분자가 **정확히 2개**여야
+> 파싱된다. Feedback 을 쓰지 않는 Action 도 `---` 와 `# --- Feedback ---` 을 남겨야 한다.
+> 필드가 없으니 실수처럼 보이지만 실수가 아니다. 지우면 빌드가 이렇게 죽는다.
+>
+> ```
+> rosidl_adapter.parser.InvalidActionSpecification:
+> Number of '---' separators nonconformant with action definition
+> ```
+>
+> 아래 예시 4개는 전부 `---` 가 2개다. 3절의 "Feedback 은 MeasurePitch 에만 있다"는
+> *필드* 기준 서술이며, 구분자 개수와는 별개다.
+>
+> (2026-09-19 수정: AdjustPeg·StrumAll 예시에 Feedback 섹션이 빠져 있어,
+>  기준본을 그대로 옮기면 빌드가 깨지는 상태였다. 실제 `.action` 파일 4개는
+>  처음부터 구분자가 2개로 맞아 있었다.)
+
 ### action/MeasurePitch.action
 
 `/audio/measure_pitch` · task_manager → audio_analyzer
@@ -148,6 +166,9 @@ float32 angle_deg
 # --- Result ---
 bool success
 string message
+---
+# --- Feedback ---
+# 사용하지 않음
 ```
 
 - `direction` — `+1` 음 높이기(조임), `-1` 음 낮추기(풀림)
@@ -167,6 +188,9 @@ uint8[] string_numbers
 # --- Result ---
 bool success
 string message
+---
+# --- Feedback ---
+# 사용하지 않음
 ```
 
 - 배열이 비면 교시된 전체 줄
