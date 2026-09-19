@@ -28,7 +28,7 @@
 - 언어: 전부 Python (rclpy). C++ 쓰지 않는다.
 - 로봇: 두산 M0609 (6축 협동로봇) + OnRobot RG2 그리퍼
 - 그리퍼 손가락 외측에 기타 피크를 부착 (피크 집기·반환 동작 없음)
-- 마이크: 외장 마이크(USB 또는 콘택트) 우선. 노트북 내장은 게인 조절 폭이 좁아 비권장
+- 마이크: **USB 외장 마이크로 확정(구매 완료).** 노트북 내장은 게인 조절 폭이 좁아 쓰지 않는다
 - 두산/그리퍼 드라이버(dsr_*, onrobot_rg2)는 시스템에 이미 설치돼 있다.
   **이 저장소에 복사해 넣지 말 것.** package.xml에 의존성으로만 선언한다.
 
@@ -48,6 +48,8 @@
 ### 3.2 페그 백래시 — 최종 접근은 항상 조이는 방향
 - 목표보다 음이 높으면, 목표 아래로 충분히 풀었다가 조여 올린다.
 - 조였다 풀었다 반복하면 같은 각도라도 결과가 달라진다.
+- **이 판단은 서버(task_manager)가 한다.** 로봇은 요청받은 방향·각도만 수행하므로
+  조절 1회가 adjust_peg goal 2번(풀기 → 조이기)이 될 수 있다.
 
 ### 3.3 옥타브 오인 차단
 - 6번 E2(82.4Hz)와 1번 E4(329.6Hz)는 두 옥타브 관계라 서로 공명한다.
@@ -56,6 +58,9 @@
 ### 3.4 발현 직후 처리
 - 줄을 튕긴 뒤 즉시 5mm 이상 후퇴한다(진동하는 줄에 피크가 닿아 버징 방지).
 - 분석은 발현 직후 과도음 구간(약 0.3초)을 제외한 안정 구간만 사용한다.
+- **로봇은 발현 시점을 알려주지 않는다.** 마이크가 오디오 onset(무음 → 소리)을
+  스스로 검출하고 그 시점부터 측정 타임아웃을 센다. 로봇 접근·파지 시간이
+  제한 시간에 먹히지 않게 하려는 것이다. PlayString에 Feedback 필드는 없다.
 
 ### 3.5 마이크
 - OS의 마이크 향상 기능(노이즈 제거·자동 음량 AGC·에코 제거)은 반드시 끈다.
@@ -74,6 +79,8 @@
 - 판정은 센트, 화면 표시는 Hz.
   - 센트 오차 = 1200 × log2(측정 / 목표), 절댓값이 허용 센트 이내면 성공
 - 재시도: 페그 조절 최대 5회 / 측정 실패 시 추가 재측정 최대 3회 (임시값, 테스트 후 확정)
+- 허용 센트: **10센트로 시작** (임시값, 실측 후 확정). 5처럼 빡빡하게 시작하면
+  수렴 실패 시 기준 탓인지 회전량 계산 탓인지 구분되지 않는다
 - 측정 응답: 정상 목표 **2.2초**, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
   - 2초에서 2.2초로 올렸다(2026-09-18). 저음현은 녹음 2.0초가 필요해 2초로는 못 맞춘다.
     6번 줄 실측 2.05초 = 장치 10ms + 녹음 2.0초 + 분석 36ms.
@@ -82,6 +89,9 @@
     (안정화 판정이 겹치는 창 3개를 쓰므로 고음도 1.0초로는 부족하다.
      실측 스윕은 src/tunio_audio/tunio_audio/audio_analyzer.py 주석)
   - 통신 지연(ROS Action 왕복 + 3 PC Wi-Fi)은 아직 미포함. 통합 후 측정
+  - **타임아웃 카운트 시작은 마이크가 onset을 검출한 시점**이다
+- onset 제한 시간 10초 (임시값). 이 안에 소리가 안 들어오면 '소리 부족'으로 처리한다.
+  이 상한이 없으면 발현이 실패했을 때 측정이 끝나지 않는다
 - 유효 측정값 없으면 화면 '측정 불가', DB 주파수 NULL (0Hz를 유효값으로 쓰지 않음)
 
 ---
@@ -123,6 +133,8 @@ src/
 - task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
 - task_manager ─ /tuning/state Topic ─ hmi_node ─ PyQt
 - task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
+- 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
+  작업 진행 여부를 아는 유일한 노드라 '작업 중 변경 거부'를 스스로 판단)
 
 ### 3 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID)
 - 서버 PC: tunio_server
@@ -208,9 +220,15 @@ source install/setup.bash
 colcon build && source install/setup.bash
 
 # 로봇·마이크 없이 조율 로직만 검증
-colcon test --packages-select tunio_server
-colcon test-result --verbose
+cd src/tunio_server && python3 -m pytest test/ -q
 ```
+
+**`colcon test`를 그대로 믿지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
+colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
+아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
+러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
+굳이 colcon으로 돌리려면 `colcon test --python-testing pytest`.
+(고치면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
 
 ---
 
@@ -228,7 +246,26 @@ colcon test-result --verbose
 
 ## 12. 참고 문서
 
-- docs/기획서_풀버전_v1.1.md — 전체 기획 (모든 결정과 근거)
-- docs/기획서_간략본_v1.1.md — 요약본
+- **docs/TUNIO_INTERFACE_SPEC.md — 인터페이스 기준본.** 코드와 다르면 이 문서가 기준
+- docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
+- docs/기획서_간략본_v1.2.md — 요약본
+- docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
-- tools/pitch_test.py — 검증된 주파수 분석 스크립트 (단독 실행 가능)
+- tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
+- tools/peg_cal.py — 페그 각도-센트 캘리브레이션 도구
+
+---
+
+## 13. 확정된 것 / 아직 미확정
+
+**확정 (바꾸려면 다시 합의 필요)**
+- 백래시 마무리 주체 — 서버(task_manager)
+- 측정 타임아웃 주체와 기준 시점 — 마이크가 직접 재고, 오디오 onset 검출 시점부터
+- 설정 Service 제공 노드 — task_manager
+- 브릿지핀 안착 확인 — 범위 제외
+- 완료 결과 저장 — task_manager가 result_store에 save_job 호출
+
+**미확정 (실측 후 확정)**
+- 허용 센트 확정값 (현재 10.0으로 시작)
+- onset 제한 시간 확정값 (현재 10.0)
+- 페그 회전량 계산식 — tuning_logic.peg_angle()의 k=0.15는 실측 전 임시값

@@ -3,7 +3,8 @@
 # TUNIO — 협동로봇 기타 자동 조율 시스템
 
 로봇팔(두산 M0609)이 기타 줄을 튕겨 주파수를 측정하고 페그를 조절해 자동 조율한다.
-비전 미사용. 음향(마이크) + 힘/토크 센서 기반.
+비전 미사용. 조율 판정은 마이크(주파수)로만 하고, 힘/토크 센서는 타현 세기 유지·
+접촉 탐색·파지 확인·과토크 안전정지에만 쓴다 (조율 판정에는 쓰지 않는다).
 
 ## 구성 (ROS 2 Jazzy / Ubuntu 24.04)
 
@@ -22,17 +23,31 @@
 ```
 task_manager ─ measure_pitch Action ─ audio_analyzer
       │
-      ├─ play_string / adjust_peg / transfer_guitar Action ─ robot_controller
+      ├─ play_string / adjust_peg / strum_all Action ─ robot_controller
       │
       ├─ /tuning/state (Topic) ─ hmi_node ─ PyQt
-      └─ get_history / settings (Service) ─ result_store ─ SQLite
+      └─ save_job / get_history (Service) ─ result_store ─ SQLite
+
+설정 조회·변경 Service는 task_manager 자신이 제공한다.
 ```
 
 ## 인터페이스 (tunio_interfaces)
 
-- **Action**: MeasurePitch, PlayString, AdjustPeg, TransferGuitar
-- **Service**: StartTuning, ControlCommand(pause/resume/cancel), GetHistory, GetSettings, SetSettings
-- **Topic/msg**: TuningState (`/tuning/state`), StringResult
+13개 (action 4 / msg 4 / srv 5). 세부 정의의 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`다.
+
+- **Action**: MeasurePitch, PlayString, AdjustPeg, StrumAll
+- **Service**: CommandTuning(start/pause/resume/cancel 공유), GetSettings, SetSettings, GetHistory, SaveJob
+- **Topic/msg**: TuningState (`/tuning/state`), StringResult, TuningSettings, JobSummary
+
+확인:
+
+```bash
+ros2 interface list | grep tunio_interfaces
+ros2 interface show tunio_interfaces/action/MeasurePitch
+```
+
+열거 상수는 뒤에 추가만 한다. 기존 번호를 바꾸면 노드 간 불일치가 감지되지 않고
+DB에 쌓인 기록까지 재해석된다.
 
 ## 빌드
 
@@ -71,9 +86,11 @@ ros2 launch tunio_bringup all_in_one.launch.py
 
 ```bash
 # 로봇·마이크 없이 조율 판단 로직만 검증
-colcon test --packages-select tunio_server
-colcon test-result --verbose
+cd src/tunio_server && python3 -m pytest test/ -q
 ```
+
+`colcon test`는 이 저장소에서 테스트를 0개 실행한다(pytest 대신 unittest를 돌린다).
+"NO TESTS RAN"이 통과처럼 보이니 위 명령으로 직접 돌릴 것.
 
 ## 작업 순서 (권장)
 
@@ -84,5 +101,10 @@ colcon test-result --verbose
 
 ## 개발 상태
 
-기획 기준본 v1.2 기반 뼈대. 각 노드의 실제 동작은 `TODO` 주석 참고.
-Phase 3(이송)은 후순위 — Phase 1·2 안정 후 착수.
+기획 기준본 v1.2 기반.
+
+- **tunio_interfaces** — 13개 정의 완료 (빌드·검증 통과). 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`
+- **tunio_audio** — measure_pitch 노드 구현 완료. onset 검출·안정화 판정·유효 측정 기준 확정
+- **tunio_server / tunio_robot** — 아직 뼈대. 담당별 할 일은 `TODO.md`와 각 파일 `TODO` 주석 참고
+
+기타 이송과 브릿지핀 안착 확인은 범위에서 제외했다.
