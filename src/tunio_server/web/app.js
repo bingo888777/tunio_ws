@@ -180,28 +180,104 @@ function centsText(v) {
 
 // 기타 헤드스톡을 그린다. 줄 하나가 <g class="gstring">, 상태는 class 로만 바꾼다.
 function buildGuitar() {
-  const W = 260, TOP = 22, GAP = 30, PEG_X = 42, NUT_X = 92, END_X = 236;
-  const H = TOP + GAP * (FRETBOARD.length - 1) + 26;
+  // 기타 전체를 옆으로 눕혀 그린다. 헤드스톡만 그리면 기타를 모르는 사람은 무슨
+  // 도형인지 알아보지 못한다. 사람이 기타를 알아보는 건 바디 모양이다.
+  //
+  //   [헤드] ─ 넥(줄 6개) ─ [바디]
+  //     왼쪽                  오른쪽
+  const W = 420, H = 210;
+  const MID = 104;                           // 줄이 모이는 세로 중심
+  const HEAD_X = 8, HEAD_W = 54;             // 헤드스톡
+  const NUT_X = HEAD_X + HEAD_W;             // 너트
+  const BODY_CX = 330, BODY_CY = MID;        // 바디 중심
+  const NECK_X2 = 262;                       // 넥이 바디에 붙는 곳
+  const SPREAD = 33;                         // 넥에서 줄이 퍼지는 반폭
+  const SPAN = 62;                           // 헤드에서 페그가 퍼지는 반폭
 
+  const byN = {};
+  FRETBOARD.forEach((st) => { byN[st.n] = st; });
+
+  // 줄 6개. 위에서부터 6→1. 페그는 헤드 좌우로 3개씩 나뉜다.
   const parts = FRETBOARD.map((st, i) => {
-    const y = TOP + GAP * i;
+    const t = i / (FRETBOARD.length - 1);            // 0..1
+    const y = MID - SPREAD + t * SPREAD * 2;         // 넥 위 줄 y
+    const side = i < 3 ? -1 : 1;                     // 6·5·4 위, 3·2·1 아래
+    const row = i < 3 ? i : 5 - i;
+    const py = MID + side * (18 + row * 20);         // 페그 y
+    const px = HEAD_X + 14 + row * 13;               // 페그 x
+
     return `<g class="gstring" data-n="${st.n}">
-      <line class="gs-line" x1="${NUT_X}" y1="${y}" x2="${END_X}" y2="${y}"
+      <line class="gs-line" x1="${NUT_X}" y1="${y}" x2="${BODY_CX - 4}" y2="${y}"
             stroke-width="${st.thick}" stroke-linecap="round"></line>
-      <line class="gs-line" x1="${PEG_X + 9}" y1="${y}" x2="${NUT_X}" y2="${y}"
+      <line class="gs-line" x1="${px}" y1="${py}" x2="${NUT_X}" y2="${y}"
             stroke-width="1.4"></line>
-      <circle class="gs-ring" cx="${PEG_X}" cy="${y}" r="9" fill="none" stroke-width="3"></circle>
-      <circle class="gs-peg" cx="${PEG_X}" cy="${y}" r="9" stroke-width="2"></circle>
-      <text class="gs-label" x="${PEG_X}" y="${y + 4.5}" text-anchor="middle">${st.n}</text>
-      <text class="gs-note" x="${END_X}" y="${y - 7}" text-anchor="end">${st.name}</text>
+      <circle class="gs-peg" cx="${px}" cy="${py}" r="8" stroke-width="2"></circle>
+      <text class="gs-label" x="${px}" y="${py + 4}" text-anchor="middle">${st.n}</text>
+      <text class="gs-note" x="${NECK_X2 - 4}" y="${y - 5}" text-anchor="end">${st.name}</text>
     </g>`;
   }).join('');
 
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기타 줄 상태">
-    <rect x="${NUT_X - 6}" y="${TOP - 16}" width="6"
-          height="${GAP * (FRETBOARD.length - 1) + 32}" rx="2" fill="var(--nut)"></rect>
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기타와 줄 상태">
+    <!-- 바디 — 통기타 윤곽. 위아래 곡선이 잘록하게 들어간다 -->
+    <path class="gs-body" d="
+      M ${NECK_X2} ${MID - 40}
+      C ${NECK_X2 + 18} ${MID - 44}, ${BODY_CX - 42} ${MID - 76}, ${BODY_CX - 14} ${MID - 74}
+      C ${BODY_CX + 26} ${MID - 72}, ${BODY_CX + 60} ${MID - 44}, ${BODY_CX + 62} ${MID}
+      C ${BODY_CX + 60} ${MID + 44}, ${BODY_CX + 26} ${MID + 72}, ${BODY_CX - 14} ${MID + 74}
+      C ${BODY_CX - 42} ${MID + 76}, ${NECK_X2 + 18} ${MID + 44}, ${NECK_X2} ${MID + 40}
+      Z"></path>
+    <!-- 사운드홀 -->
+    <circle class="gs-hole" cx="${BODY_CX - 16}" cy="${BODY_CY}" r="25"></circle>
+    <circle class="gs-rosette" cx="${BODY_CX - 16}" cy="${BODY_CY}" r="31"></circle>
+    <!-- 브릿지 -->
+    <rect class="gs-bridge" x="${BODY_CX + 24}" y="${MID - 22}" width="13" height="44" rx="3"></rect>
+    <!-- 넥 -->
+    <path class="gs-neck" d="
+      M ${NUT_X} ${MID - SPREAD - 7}
+      L ${NECK_X2 + 4} ${MID - 42}
+      L ${NECK_X2 + 4} ${MID + 42}
+      L ${NUT_X} ${MID + SPREAD + 7} Z"></path>
+    <!-- 헤드스톡 -->
+    <path class="gs-head" d="
+      M ${NUT_X} ${MID - SPREAD - 9}
+      L ${HEAD_X + 10} ${MID - 62}
+      Q ${HEAD_X - 2} ${MID - 64}, ${HEAD_X} ${MID - 52}
+      L ${HEAD_X} ${MID + 52}
+      Q ${HEAD_X - 2} ${MID + 64}, ${HEAD_X + 10} ${MID + 62}
+      L ${NUT_X} ${MID + SPREAD + 9} Z"></path>
+    <!-- 너트 -->
+    <rect class="gs-nut" x="${NUT_X - 3}" y="${MID - SPREAD - 8}"
+          width="6" height="${(SPREAD + 8) * 2}" rx="2"></rect>
     ${parts}
   </svg>`;
+}
+
+// 대상 4줄(6·5·2·1)의 진행을 점으로 보여 준다. 기타 그림만으로는
+// '몇 번째를 하고 있나' 가 안 읽힌다.
+function renderProgress(state) {
+  const wrap = $('progress-dots');
+  const byNumber = new Map();
+  if (state) state.results.forEach((r) => byNumber.set(r.string_number, r));
+  const running = isRunning(state);
+
+  if (wrap.children.length !== STRINGS.length) {
+    wrap.innerHTML = STRINGS.map(() => '<i class="pdot"></i>').join('');
+  }
+
+  let done = 0;
+  STRINGS.forEach(({ n }, i) => {
+    const dot = wrap.children[i];
+    const r = byNumber.get(n);
+    let cls = 'pdot';
+    if (state && state.current_string === n && running) cls += ' current';
+    else if (r && r.result === 1) cls += ' ok';
+    else if (r && r.result === 2) cls += ' bad';
+    dot.className = cls;
+    dot.title = `${n}번 ${stringName(n).split(' ')[1] || ''}`;
+    if (r && r.result !== 0) done += 1;
+  });
+
+  $('progress-count').textContent = `${done} / ${STRINGS.length}`;
 }
 
 function renderGuitar(state) {
@@ -320,6 +396,7 @@ function renderLive(state) {
   overallEl.textContent = state ? state.overall_label : '—';
   overallEl.className = state ? overallClass(state.overall_result) : 'badge badge-idle';
 
+  renderProgress(state);
   renderGuitar(state);
   renderTuner(state);
   renderStringCards(state);
