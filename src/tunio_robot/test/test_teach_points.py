@@ -34,12 +34,34 @@ def test_교시_전에는_자세_조회를_거부한다():
     """전부 0 인 placeholder 로 움직이면 기타와 부딪힌다."""
     points = tp.TeachPoints(_data())
     with pytest.raises(tp.TeachPointsError, match="교시"):
-        points.peg(6)
+        points.peg(2)          # 2번은 아직 미교시다
 
 
 def test_교시를_마치면_조회된다():
     points = tp.TeachPoints(_taught())
-    assert points.peg(6).joints == [0, 0, 0, 0, 0, 0]
+    assert points.peg(2).taught is True
+
+
+def test_페그는_작업좌표로_읽힌다():
+    """좌표계 계산으로 다른 페그를 내려면 관절각이 아니라 작업좌표여야 한다."""
+    points = tp.TeachPoints(_data())
+    peg = points.peg(6)        # 6번은 실제 교시값이 들어 있다
+    assert peg.kind == "task"
+    assert peg.task == [341.0, -81.5, 113.0, 91.0, 90.0, 179.0]
+
+
+def test_대기_자세는_관절각이다():
+    points = tp.TeachPoints(_data())
+    standby = points.frame("standby")
+    assert standby.kind == "joint"
+    assert standby.joints == [0.0, 0.0, 75.0, 0.0, 100.0, 0.0]
+
+
+def test_j와_x를_둘_다_적으면_걸린다():
+    d = _data()
+    d["pegs"][2]["j"] = [0, 0, 0, 0, 0, 0]
+    with pytest.raises(tp.TeachPointsError, match="하나만"):
+        tp.TeachPoints(d)
 
 
 # ---------------------------------------------------------- 방향 변환
@@ -109,10 +131,10 @@ def test_줄이_빠지면_로드에서_걸린다():
         tp.TeachPoints(d)
 
 
-def test_관절이_6개가_아니면_걸린다():
+def test_값이_6개가_아니면_걸린다():
     d = _data()
-    d["pegs"][6]["j"] = [0, 0, 0]
-    with pytest.raises(tp.TeachPointsError, match="관절 6개"):
+    d["pegs"][6]["x"] = [0, 0, 0]
+    with pytest.raises(tp.TeachPointsError, match="6개"):
         tp.TeachPoints(d)
 
 

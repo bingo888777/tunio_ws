@@ -1,30 +1,43 @@
 # 직접 교시 좌표와 로봇 설정.
 #
-# 값은 전부 placeholder 다. 교시를 마친 항목만 taught: true 로 바꾼다.
-# taught: false 인 자세는 teach_points.py 가 조회를 거부한다.
-# 전부 0 인 자세로 움직이면 기타·받침대와 부딪히기 때문이다.
+# taught: true 인 항목만 실제 교시를 마친 값이다. false 는 placeholder 이고
+# teach_points.py 가 조회를 거부한다. 전부 0 인 자세로 움직이면 기타·받침대와
+# 부딪히기 때문이다. 교시를 마친 항목부터 하나씩 true 로 바꾼다.
+#
+# 자세는 j(관절각) 또는 x(작업좌표) 중 하나로 적는다.
+#   j — 관절 1~6 각도(도)
+#   x — BASE 기준 [X, Y, Z, A, B, C]. 위치 mm, 자세 intrinsic ZYZ 도
+# 작업 좌표는 **교시할 때 켜져 있던 TCP 기준**이다. robot.tcp 를 맞춰야 한다.
 
 robot:
-  id: dsr01           # DR_init.__dsr__id. 노드 네임스페이스로도 쓴다
-  model: m0609        # DR_init.__dsr__model
-  tool: "Tool Weight"   # 티칭 펜던트에 등록된 이름 (예제 기준값, 확인 필요)
-  tcp: "GripperDA_v1"   # 피크를 붙였으면 TCP를 다시 등록해야 한다 (확인 필요)
+  id: dsr01
+  model: m0609
+  # 티칭 펜던트에 등록된 이름. 오프셋 [0, 0, 208, 0, 0, 0] — 툴 Z로 208mm.
+  # 아래 페그 좌표가 전부 이 TCP 기준이다 (2026-09-18 교시, 2026-09-19 확인).
+  # 피크를 든 상태는 손끝이 달라지므로 TCP 를 따로 등록해야 한다 (미등록).
+  tcp: "GripperDA_v1"
+  tool: "Tool Weight"
 
 motion:
-  vel: 30             # 이동 속도 (예제 기준값)
-  acc: 30             # 이동 가속도
-  peg_joint: 6        # 페그를 돌리는 관절 번호 1~6. 실물 확인 후 확정
-  max_angle_deg: 120.0  # goal 1회 회전 상한(도). 안전값, 실측 후 확정
+  # peg_motion.yaml 초안값. 페그 작업은 느리게 간다. 현장 검증 필요
+  vel: 5.0              # 관절 속도 deg/s
+  acc: 10.0             # 관절 가속도 deg/s^2
+  peg_joint: 6          # 페그를 돌리는 관절. 손목으로 가정, 실물 확인 후 확정
+  max_angle_deg: 90.0   # goal 1회 회전 상한. 초안이 "90 미만"이라 그 경계값.
+                        # 확정 필요 — 백래시보다는 확실히 커야 한다
+  # Phase 0 초기 등록에서 시도할 손잡이 회전각 후보 (peg_motion.yaml 초안값).
+  # 로봇은 페그가 지금 어느 각도로 서 있는지 모른다
+  candidate_rolls_deg: [0.0, 90.0, 45.0, 135.0]
 
 frames:
   home:
     j: [0, 0, 90, 0, 90, 0]
     taught: false
-  standby:
-    j: [0, -20, 90, 0, 90, 0]
-    taught: false
+  standby:              # 작업 시작·종료 자세 (peg_motion.yaml 의 work_start_pose)
+    j: [0.0, 0.0, 75.0, 0.0, 100.0, 0.0]
+    taught: true
 
-# 페그 파지 자세.
+# 페그 파지 자세. 2026-09-18 교시, TCP = GripperDA_v1 기준.
 #   turn_sign — direction=+1(조임)일 때 peg_joint 가 도는 부호.
 #     줄마다 헤드에서의 방향이 달라 같은 "조임"도 관절 부호가 반대일 수 있다.
 #     실물에서 확인 전까지는 전부 1 로 두고, 확인한 줄부터 고친다.
@@ -36,29 +49,29 @@ frames:
 #   grip_force_n — 쥐는 힘(N). RG2 범위 0~40.
 pegs:
   6:
-    j: [0, 0, 0, 0, 0, 0]
+    x: [341.0, -81.5, 113.0, 91.0, 90.0, 179.0]
     turn_sign: 1
-    grip_width_mm: 0.0    # 실측 후 확정
-    grip_force_n: 0.0     # 실측 후 확정
-    taught: false
+    grip_width_mm: null   # 실측 후 확정
+    grip_force_n: null    # 실측 후 확정
+    taught: true
   5:
-    j: [0, 0, 0, 0, 0, 0]
+    x: [303.0, -84.0, 107.5, 94.0, 90.0, 179.5]
     turn_sign: 1
-    grip_width_mm: 0.0    # 실측 후 확정
-    grip_force_n: 0.0     # 실측 후 확정
-    taught: false
-  2:
-    j: [0, 0, 0, 0, 0, 0]
+    grip_width_mm: null
+    grip_force_n: null
+    taught: true
+  2:                      # 아직 미교시. tools/peg_frame.py 추정값과 대조 예정
+    x: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     turn_sign: 1
-    grip_width_mm: 0.0    # 실측 후 확정
-    grip_force_n: 0.0     # 실측 후 확정
+    grip_width_mm: null
+    grip_force_n: null
     taught: false
-  1:
-    j: [0, 0, 0, 0, 0, 0]
+  1:                      # 헤드스톡 반대편. B 부호가 왼쪽과 뒤집힌다
+    x: [346.0, 62.5, 115.0, 88.5, -90.0, 0.0]
     turn_sign: 1
-    grip_width_mm: 0.0    # 실측 후 확정
-    grip_force_n: 0.0     # 실측 후 확정
-    taught: false
+    grip_width_mm: null
+    grip_force_n: null
+    taught: true
 
 # 피크 거치대 (2026-09-19 — 피크를 집었다 반환하는 방식으로 바뀌었다).
 # 발현 전에 집고, 페그를 잡기 전에 반환한다. 조절 1회마다 왕복 한 번이다.
@@ -66,8 +79,8 @@ pegs:
 pick:
   holder:
     j: [0, 0, 0, 0, 0, 0]
-    grip_width_mm: 0.0   # 피크를 무는 폭. 페그와 다르다
-    grip_force_n: 0.0
+    grip_width_mm: null   # 피크를 무는 폭. 페그와 다르다
+    grip_force_n: null
     taught: false
 
 # 발현 접근 자세 (성현 담당)

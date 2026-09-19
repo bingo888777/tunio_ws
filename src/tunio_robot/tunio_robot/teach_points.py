@@ -35,16 +35,35 @@ def _require(cond, msg):
 
 
 class Pose:
-    """관절 각도 6개짜리 자세 하나. taught=False 면 아직 placeholder 다."""
+    """
+    교시 자세 하나. 관절각(j) 또는 작업 좌표(x) 중 하나로 적는다.
 
-    def __init__(self, name, joints, taught):
+    j — 관절 1~6 각도(도). 대기 자세처럼 팔 모양 자체가 중요한 곳
+    x — BASE 기준 [X, Y, Z, A, B, C]. 위치 mm, 자세 intrinsic ZYZ 도.
+        페그처럼 "기타의 이 지점"이 중요한 곳. 좌표계 계산으로 다른 페그를
+        내려면 작업 좌표여야 한다
+
+    작업 좌표는 **교시할 때 켜져 있던 TCP 기준**이다. 다른 TCP 로 실행하면
+    같은 숫자가 다른 위치를 가리킨다. robot.tcp 를 반드시 맞춰야 한다.
+    """
+
+    def __init__(self, name, taught, joints=None, task=None):
         self.name = name
-        self.joints = list(joints)
+        self.joints = list(joints) if joints is not None else None
+        self.task = list(task) if task is not None else None
         self.taught = bool(taught)
+
+    @property
+    def kind(self):
+        return "joint" if self.joints is not None else "task"
+
+    @property
+    def values(self):
+        return self.joints if self.joints is not None else self.task
 
     def __repr__(self):
         mark = "" if self.taught else " (미교시)"
-        return f"<Pose {self.name} {self.joints}{mark}>"
+        return f"<Pose {self.name} {self.kind} {self.values}{mark}>"
 
 
 class TeachPoints:
@@ -115,12 +134,16 @@ class TeachPoints:
     @staticmethod
     def _pose(name, item):
         _require(isinstance(item, dict), f"{name} 이 매핑이 아니다")
-        joints = item.get("j")
-        _require(isinstance(joints, list) and len(joints) == 6,
-                 f"{name}.j 는 관절 6개 목록이어야 한다 (지금 {joints!r})")
-        for v in joints:
-            _require(isinstance(v, (int, float)), f"{name}.j 에 숫자가 아닌 값이 있다")
-        return Pose(name, joints, item.get("taught", False))
+        joints, task = item.get("j"), item.get("x")
+        _require((joints is None) != (task is None),
+                 f"{name} 은 j(관절각) 또는 x(작업좌표) 중 하나만 있어야 한다")
+        values = joints if joints is not None else task
+        label = "j" if joints is not None else "x"
+        _require(isinstance(values, list) and len(values) == 6,
+                 f"{name}.{label} 는 값 6개 목록이어야 한다 (지금 {values!r})")
+        for v in values:
+            _require(isinstance(v, (int, float)), f"{name}.{label} 에 숫자가 아닌 값이 있다")
+        return Pose(name, item.get("taught", False), joints=joints, task=task)
 
     def _grip_pose(self, name, item):
         """자세 + 파지 설정(폭·힘)을 묶어 읽는다."""
