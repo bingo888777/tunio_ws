@@ -28,17 +28,65 @@ def is_in_tune(measured_hz: float, target_hz: float, tol_cents: float) -> bool:
     return abs(error_cents(measured_hz, target_hz)) <= tol_cents
 
 
-def peg_angle(err_cents: float) -> tuple:
+def min_step_cents(cal) -> float:
     """
-    오차 -> (direction, angle_deg).
+    이 줄에서 낼 수 있는 가장 작은 음정 변화량(센트).
+
+    허용 센트가 이 값보다 작으면 원리상 수렴할 수 없다. task_manager 가 시작 시 경고한다.
+    """
+    return cal.min_effective_deg * cal.cents_per_deg
+
+
+def peg_angle(err_cents: float, cal) -> tuple:
+    """
+    오차 -> (direction, angle_deg). cal 은 peg_calibration.StringCalibration.
+
     direction 은 AdjustPeg.Goal.direction 규약을 따른다: +1 조임(음 높이기) / -1 풀림.
-    angle_deg 는 항상 양수 크기. 오차가 클수록 많이, 작을수록 조금 회전.
-    계수는 테스트 후 확정(임시).
+    angle_deg 는 항상 양수 크기.
+
+    회전량은 실측 상수 cents_per_deg 로만 계산한다. 코드에 계수를 두지 않는다.
+    실측 전에는 호출자가 CalibrationMissing 을 먼저 만나므로 여기까지 오지 않는다.
     """
     direction = 1 if err_cents < 0 else -1   # 음이 낮으면 높여야 함
-    k = 0.15                                 # deg per cent (임시값, 실측 보정)
-    angle = min(abs(err_cents) * k, 20.0)    # 안전 상한
-    return direction, angle
+    angle = abs(err_cents) / cal.cents_per_deg
+
+    # 최소 유효 각도보다 작으면 페그가 실제로 움직이지 않는다.
+    # ⚠ 미확정(브리핑 A3-3): 지금은 최소 각도로 올려서 보낸다. 대안은 '조절 포기'다.
+    #    실측 전이라 이 경로는 아직 실행되지 않는다. 확정되면 여기만 고치면 된다.
+    if angle < cal.min_effective_deg:
+        angle = cal.min_effective_deg
+
+    return direction, min(angle, cal.max_angle_deg)
+
+
+def adjust_plan(err_cents: float, cal) -> list:
+    """
+    오차 -> AdjustPeg goal 목록. 백래시 마무리를 여기서 결정한다 (CLAUDE.md 3.2).
+
+    확정 사항이라 문서에서 그대로 옮긴 규칙:
+      - 최종 접근은 항상 조이는 방향이다.
+      - 음이 낮으면(조여야 하면) 이미 조이는 방향이므로 goal 1개로 끝난다.
+      - 음이 높으면 목표보다 backlash_release_cents 만큼 아래로 풀었다가 조여 올린다.
+        goal 2개가 되며, 이 묶음 전체가 '조절 1회'다 (CLAUDE.md 3.2 "조절 1회가
+        adjust_peg goal 2번이 될 수 있다").
+      - 두 goal 사이에는 재측정하지 않는다. 묶음이 끝난 뒤 한 번 잰다.
+
+    풀기 각도가 max_angle_deg 에 잘리면 조이기 goal 을 붙이지 않고 그 회차를 끝낸다.
+    목표 아래에 머물게 되지만 다음 회차가 조이는 방향으로 다시 잡으므로
+    '최종 접근은 조이는 방향' 규칙은 깨지지 않는다.
+    """
+    if err_cents < 0:
+        return [peg_angle(err_cents, cal)]
+
+    release_cents = err_cents + cal.backlash_release_cents
+    release_dir, release_deg = peg_angle(release_cents, cal)
+    plan = [(release_dir, release_deg)]
+
+    clamped = release_deg >= cal.max_angle_deg
+    if not clamped:
+        # 푼 만큼 중 목표 아래로 내려간 몫만 조여 올린다
+        plan.append(peg_angle(-cal.backlash_release_cents, cal))
+    return plan
 
 
 def overall_result(results: list) -> int:
