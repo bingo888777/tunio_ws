@@ -6,6 +6,7 @@ TODO(정묵·성현):
   - set_tcp(피크 장착 기준), 순응/힘 제어 진입·해제
   - pluck_string: 힘 제어로 일정 세기 타현 + 발현 직후 5mm 후퇴
   - adjust_peg: 조이는 방향 마무리(백래시 대응)
+  - return_home: 대기 자세 복귀 (strum_all 끝에 호출됨)
 """
 
 
@@ -26,4 +27,14 @@ def adjust_peg(string_number: int, direction: int, angle_deg: float):
 
 def strum_all(string_numbers: list):
     """전체 줄을 훑어 화음. 측정 없는 완료 연출. 비우면 전체."""
+    raise NotImplementedError
+
+
+def return_home():
+    """
+    대기 자세 복귀. strum_all 이 화음 연출을 마친 뒤 호출한다.
+
+    전용 Action 이 없으므로 이 함수가 기획 Phase 2 의 '대기 자세 복귀'를 담당한다.
+    교시해 둔 home 좌표로 이동하면 된다.
+    """
     raise NotImplementedError
