@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
 
 DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot",
                             "config", "teach_points.yaml")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "robot_data")
 
 
 def MP_turn(cfg, percent):
@@ -84,6 +85,7 @@ def main():
     ap.add_argument("--model", default="m0609")
     args = ap.parse_args()
 
+    from tunio_robot import runlog
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
     peg = points.peg(args.peg)
@@ -159,6 +161,15 @@ def main():
 
     rows = []
     heard = ""
+    log = {
+        "tool": "peg_turn_check", "peg": args.peg, "side": TP.side_of(args.peg),
+        "direction": args.direction, "gripped": not args.no_grip,
+        "preset": None if args.no_grip else args.preset,
+        "angle_deg": args.angle, "step_deg": args.step,
+        "joint": joint, "turn_sign": peg.turn_sign, "sol": sol,
+        "turn_vel": turn["vel"], "travel_vel": motion["vel"],
+        "approach_mm": back_mm, "steps": [],
+    }
     try:
         confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
         MP._grip("open")
@@ -175,6 +186,7 @@ def main():
 
         base_j = list(get_current_posj())
         base_t = list(get_external_torque())
+        log["before"] = {"joints": base_j, "torque": base_t}
         print(f"\n  돌리기 전  J{joint} {base_j[joint - 1]:.2f}도   "
               f"토크 {base_t[joint - 1]:+.2f}")
         print("\n  줄 소리를 들어라. 음이 내려가면 turn_sign 이 맞는 것이다.")
@@ -190,11 +202,15 @@ def main():
             moved = j[joint - 1] - base_j[joint - 1]
             tq = t[joint - 1]
             rows.append((i * step_signed, moved, tq, tq - base_t[joint - 1]))
+            log["steps"].append({"commanded_deg": i * step_signed,
+                                 "moved_deg": moved, "torque": tq,
+                                 "torque_all": t, "joints": j})
             print(f"  {i * step_signed:8.2f}  {moved:8.2f}  {tq:+8.2f}  "
                   f"{tq - base_t[joint - 1]:+8.2f}")
 
         print("\n  다 돌았다.")
         heard = input("  소리가 어떻게 됐나? (내려감 / 올라감 / 모르겠음) ").strip()
+        log["heard"] = heard
 
         if not args.no_return:
             confirm("  돌린 만큼 되돌린다. 원래 자리로만 가니 줄이 더 당겨지지 않는다.")
@@ -273,10 +289,43 @@ def main():
             print("     teach_points.yaml 의 네 페그 turn_sign 을 전부 +1 로 뒤집어라.")
         elif heard.startswith("내려"):
             print("  turn_sign 이 맞다. 조이는 쪽도 시험해도 된다.")
+    log["summary"] = {"mean": mean, "spread": spread,
+                      "step_from_rest": mean - base_t[joint - 1],
+                      "slope": slope}
+    path = runlog.save(f"turn_peg{args.peg}_{args.direction}"
+                       f"{'_air' if args.no_grip else ''}", log, LOG_DIR)
+    if path:
+        print(f"\n  기록 저장: {os.path.relpath(path)}")
+
+    # 같은 페그·같은 방향의 반대 조건 기록을 찾아 견준다
+    other = runlog.latest(LOG_DIR, lambda b: (
+        b.get("tool") == "peg_turn_check" and b.get("peg") == args.peg
+        and b.get("gripped") is args.no_grip and b.get("summary")))[1]
+    if other:
+        mine = "허공" if args.no_grip else "파지"
+        theirs = "파지" if args.no_grip else "허공"
+        a = abs(log["summary"]["step_from_rest"])
+        b = abs(other["summary"]["step_from_rest"])
+        print(f"\n{'=' * 70}")
+        print(f"비교 — {mine} vs {theirs} ({other.get('saved_at')})")
+        print("=" * 70)
+        print(f"  {mine} 단차 {a:.3f}   {theirs} 단차 {b:.3f}")
+        gap = abs(a - b)
+        noise = max(log["summary"]["spread"], other["summary"]["spread"])
+        if gap > 2 * noise:
+            print(f"  차이 {gap:.3f} 가 잡음 {noise:.3f} 의 2배를 넘는다.")
+            print(f"  **토크로 파지를 가릴 수 있다.** 임계값은 그 사이 "
+                  f"{(a + b) / 2:.3f} 근처다")
+        else:
+            print(f"  차이 {gap:.3f} 가 잡음 {noise:.3f} 에 묻힌다.")
+            print("  **토크로는 파지를 못 가린다.** 저항이 페그가 아니라 그리퍼에서")
+            print("  나온다는 뜻이다. CLAUDE.md 3.6 의 파지 확인 방법을 고쳐야 한다")
+    elif not args.no_grip:
+        print("\n  허공 값이 아직 없다. 같은 각도로 한 번 더 재면 자동으로 견줘 준다 —")
+        print(f"    python3 tools/peg_turn_check.py --peg {args.peg} "
+              f"--angle {args.angle:g} --no-grip")
     print()
-    print("다음 —")
-    print("  · 허공 바닥값과 비교하려면 같은 각도로 --no-grip 을 한 번 더")
-    print("  · 정밀 백래시는 마이크를 붙이고 tools/peg_cal.py --backlash --step 15")
+    print("정밀 백래시는 마이크를 붙이고 tools/peg_cal.py --backlash --step 15")
     return 0
 
 

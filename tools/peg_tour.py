@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
 
 DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot",
                             "config", "teach_points.yaml")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "robot_data")
 
 
 def fmt(vals, d=1):
@@ -57,6 +58,7 @@ def main():
     ap.add_argument("--model", default="m0609")
     args = ap.parse_args()
 
+    from tunio_robot import runlog
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
     back_mm = args.approach if args.approach is not None \
@@ -127,6 +129,9 @@ def main():
 
     notes = []
     chosen = {}
+    log = {"tool": "peg_tour", "pegs": list(args.pegs),
+           "gripped": not args.no_grip, "approach_mm": back_mm,
+           "speed_pct": args.speed, "visits": []}
     try:
         confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
         MP._grip("open")
@@ -156,6 +161,12 @@ def main():
                 print(f"  '{args.preset}' 로 물었다. 눈으로 보라 — "
                       f"제대로 들어갔나, 헐거운가, 빗나갔나")
             said = input("  어떤가? (문제없으면 엔터) ").strip()
+            log["visits"].append({"peg": n, "side": TP.side_of(n), "sol": sol,
+                                  "sol_source": why, "crossed": cross,
+                                  "approach": list(bk), "peg_task": list(peg.task),
+                                  "joints_at_peg": posj,
+                                  "solution_space": get_current_solution_space(),
+                                  "note": said})
             if said:
                 notes.append(f"{n}번: {said}")
 
@@ -193,10 +204,15 @@ def main():
     else:
         print("  적어둔 문제 없음")
     if chosen:
+        log["chosen_sol"] = chosen
         print("\n고른 팔 모양 — teach_points.yaml 의 pegs.<번호>.sol 에 적어라.")
         print("  null 로 두면 매번 달라진다.")
         for n in sorted(chosen):
             print(f"    pegs.{n}.sol: {chosen[n]}")
+    path = runlog.save("tour_" + "-".join(str(n) for n in args.pegs), log, LOG_DIR)
+    if path:
+        print(f"\n기록 저장: {os.path.relpath(path)}")
+        print("  (이제 화면을 놓쳐도 sol 값이 파일에 남는다)")
     return 0
 
 
