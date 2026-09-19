@@ -101,7 +101,10 @@ cd src/tunio_server && python3 -m pytest test/ -q
 
 ## 개발 상태
 
-기획 기준본 v1.2 기반. **인터페이스 13개는 정의 완료**(빌드·검증 통과)이며,
-각 노드의 실제 동작은 아직 뼈대다. 담당별 할 일은 각 파일 `TODO` 주석 참고.
+기획 기준본 v1.2 기반.
+
+- **tunio_interfaces** — 13개 정의 완료 (빌드·검증 통과). 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`
+- **tunio_audio** — measure_pitch 노드 구현 완료. onset 검출·안정화 판정·유효 측정 기준 확정
+- **tunio_server / tunio_robot** — 아직 뼈대. 담당별 할 일은 `TODO.md`와 각 파일 `TODO` 주석 참고
 
 기타 이송과 브릿지핀 안착 확인은 범위에서 제외했다.

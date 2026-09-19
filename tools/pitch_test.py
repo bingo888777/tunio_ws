@@ -25,8 +25,9 @@ import numpy as np
 try:
     import sounddevice as sd
 except ImportError:
-    print("sounddevice가 없습니다. pip install sounddevice")
-    sys.exit(1)
+    # 분석 함수만 가져다 쓰는 경우(pitch_bench.py 등)에는 오디오 장치가 필요 없다.
+    # 녹음이 실제로 필요한 시점(main)에서 다시 확인한다.
+    sd = None
 
 
 # ---------------------------------------------------------------
@@ -259,6 +260,10 @@ def main():
     ap.add_argument("--save", type=str, default=None,
                     help="녹음을 WAV로 저장 (예: --save test → test_1.wav, test_2.wav ...)")
     args = ap.parse_args()
+
+    if sd is None:
+        print("sounddevice가 없습니다. pip install sounddevice")
+        sys.exit(1)
 
     if args.list:
         print(sd.query_devices())

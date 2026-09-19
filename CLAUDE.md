@@ -59,8 +59,8 @@
 - 줄을 튕긴 뒤 즉시 5mm 이상 후퇴한다(진동하는 줄에 피크가 닿아 버징 방지).
 - 분석은 발현 직후 과도음 구간(약 0.3초)을 제외한 안정 구간만 사용한다.
 - **로봇은 발현 시점을 알려주지 않는다.** 마이크가 오디오 onset(무음 → 소리)을
-  스스로 검출하고, 그 시점부터 측정 타임아웃을 센다. 로봇 접근·파지 시간이
-  제한 시간에 먹히지 않게 하려는 것이다.
+  스스로 검출하고 그 시점부터 측정 타임아웃을 센다. 로봇 접근·파지 시간이
+  제한 시간에 먹히지 않게 하려는 것이다. PlayString에 Feedback 필드는 없다.
 
 ### 3.5 마이크
 - OS의 마이크 향상 기능(노이즈 제거·자동 음량 AGC·에코 제거)은 반드시 끈다.
@@ -79,10 +79,19 @@
 - 판정은 센트, 화면 표시는 Hz.
   - 센트 오차 = 1200 × log2(측정 / 목표), 절댓값이 허용 센트 이내면 성공
 - 재시도: 페그 조절 최대 5회 / 측정 실패 시 추가 재측정 최대 3회 (임시값, 테스트 후 확정)
-- 허용 센트: **10센트로 시작** (임시값, 실측 후 확정)
-- 측정 응답: 정상 목표 2초, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
-- 타임아웃 카운트 시작: 마이크가 오디오 onset을 검출한 시점
-- onset 제한 시간 10초 (임시값). 이 안에 소리가 안 들어오면 '소리 부족' 처리
+- 허용 센트: **10센트로 시작** (임시값, 실측 후 확정). 5처럼 빡빡하게 시작하면
+  수렴 실패 시 기준 탓인지 회전량 계산 탓인지 구분되지 않는다
+- 측정 응답: 정상 목표 **2.2초**, 타임아웃 10초 (10초는 녹음 길이가 아니라 응답 제한)
+  - 2초에서 2.2초로 올렸다(2026-09-18). 저음현은 녹음 2.0초가 필요해 2초로는 못 맞춘다.
+    6번 줄 실측 2.05초 = 장치 10ms + 녹음 2.0초 + 분석 36ms.
+    근거는 docs/주파수분석_테스트가이드.md 4.4
+  - 녹음 길이는 줄마다 다르게 잡는다. 고음 1.5초, 저음 2.0초
+    (안정화 판정이 겹치는 창 3개를 쓰므로 고음도 1.0초로는 부족하다.
+     실측 스윕은 src/tunio_audio/tunio_audio/audio_analyzer.py 주석)
+  - 통신 지연(ROS Action 왕복 + 3 PC Wi-Fi)은 아직 미포함. 통합 후 측정
+  - **타임아웃 카운트 시작은 마이크가 onset을 검출한 시점**이다
+- onset 제한 시간 10초 (임시값). 이 안에 소리가 안 들어오면 '소리 부족'으로 처리한다.
+  이 상한이 없으면 발현이 실패했을 때 측정이 끝나지 않는다
 - 유효 측정값 없으면 화면 '측정 불가', DB 주파수 NULL (0Hz를 유효값으로 쓰지 않음)
 
 ---
@@ -99,10 +108,12 @@
 → 전체 화음 한 번 튕겨 완료 알림 (측정 안 함, 연출)
 → 대기 자세 복귀 → 결과 저장
 
+**브릿지핀 안착 확인은 범위에서 제외했다**(2026-09-18, 기획서 v1.2 / PR #2).
+
 **최종 검증 패스가 필요한 이유**: 6줄 합계 약 715N이 넥을 당겨, 한 줄을 조이면
 다른 줄이 틀어진다. 그래서 마지막에 다시 측정해 실제 상태를 확인한다.
 
-**기타 이송과 브릿지핀 안착 확인은 이번 범위에서 제외.** 배치·회수는 사람이 한다.
+**기타 이송은 이번 범위에서 제외.** 배치·회수는 사람이 한다.
 
 ---
 
@@ -121,7 +132,7 @@ src/
 - task_manager ─ measure_pitch Action ─ audio_analyzer
 - task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
 - task_manager ─ /tuning/state Topic ─ hmi_node ─ PyQt
-- task_manager ─ save_job / get_history Service ─ result_store ─ SQLite
+- task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
 - 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
   작업 진행 여부를 아는 유일한 노드라 '작업 중 변경 거부'를 스스로 판단)
 
@@ -134,39 +145,33 @@ src/
 
 ## 7. ROS 2 인터페이스 (tunio_interfaces)
 
-**세부 정의의 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`다.**
-이 절과 다르면 그쪽을 따르고, 실제 파일과 다르면 명세를 고친 뒤 코드를 맞춘다.
-현재 13개(action 4 / msg 4 / srv 5)가 정의돼 있고 명세와 완전 일치한다.
+**기준 문서는 `docs/TUNIO_INTERFACE_SPEC.md`다. 코드와 다르면 문서가 기준.**
+아래는 요약이며, 필드 단위는 명세나 `ros2 interface show`로 확인할 것.
 
 **Action (4)**
-- /robot/play_string — string_number → 발현. Feedback 없음
-- /robot/adjust_peg — string_number, direction(int8 +1 조임 / -1 풀림), angle_deg
-  로봇은 시킨 방향·각도만 수행한다. 조이는 방향 마무리 판단은 task_manager가 한다
-- /robot/strum_all — string_numbers[] → 전체 줄 훑어 화음 (측정 없는 연출)
-- /audio/measure_pitch — job_id(string), string_number, measurement_id,
-  target_hz, timeout_sec, onset_timeout_sec → ready Feedback, 측정 Result
+- /robot/play_string — 줄 번호 → 발현
+- /robot/adjust_peg — 줄 번호, direction(±1), angle_deg(양수).
+  백래시 마무리(풀었다 조이기)는 **task_manager가 결정**하고 로봇은 시킨 대로만 한다
+- /robot/strum_all — 전체 줄 훑어 화음 (측정 없는 연출)
+- /audio/measure_pitch — job_id, string_number, measurement_id, target_hz,
+  timeout_sec, onset_timeout_sec → 준비 Feedback, 측정 Result
 
 **Service (5)**
-- CommandTuning 타입 하나를 /tuning/start · pause · resume · cancel 네 개가 공유한다.
-  요청 필드가 없고, 어느 이름으로 불렸는지가 곧 명령이다
-- /tuning/get_settings, /tuning/set_settings — task_manager가 제공
-- /tuning/get_history — result_store가 제공
-- /tuning/save_job — 정상 종료 시 task_manager → result_store 일괄 저장
+- /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel — 넷이 CommandTuning 공유.
+  어느 이름으로 불렸는지가 곧 명령이다
+- /tuning/get_settings, /tuning/set_settings, /tuning/get_history, /tuning/save_job
 
-**Topic/msg (4)**
-- /tuning/state (TuningState) — 작업 단계·현재 줄·목표/측정 주파수·Hz 오차·조절 횟수·
-  줄별 결과(StringResult[])·적용 설정(TuningSettings)
-  QoS는 reliable · depth 1 · transient local. 발행·구독 양쪽 값이 같아야 매칭된다
-- 보조 msg: StringResult, TuningSettings, JobSummary
+**Message (4)** — TuningState, StringResult, TuningSettings, JobSummary
+- /tuning/state — reliable, depth 1, **transient local** (늦게 켠 UI도 마지막 상태를 받는다)
 
-**지켜야 할 규약**
-- measure_pitch Result에는 요청 식별자 3개(job_id·string_number·measurement_id)를
-  그대로 실어, 늦게 도착한 이전 결과가 현재 결과로 쓰이지 않도록 대조한다
-- 실패는 uint8 열거 상수로 표현한다. 주파수 유효성은 has_* bool 플래그로 나타내며
-  NaN이나 0Hz를 유효값 대신 쓰지 않는다
-- **열거 상수는 뒤에 추가만 한다. 기존 번호를 재사용하거나 당기지 말 것.**
-  ROS 2 타입 해시에 상수는 포함되지 않아, 번호를 바꿔도 노드 간 불일치가
-  감지되지 않고 값이 조용히 오역된다. DB에 쌓인 기록도 함께 재해석된다
+> measure_pitch Result에는 요청 식별자(job_id·string_number·measurement_id)를 그대로
+> 실어, 늦게 도착한 이전 결과가 현재 결과로 쓰이지 않도록 대조한다.
+
+**열거 상수 규칙** — 뒤에 추가만 한다. 기존 번호를 당기거나 재사용하지 않는다.
+> ⚠️ `MeasurePitch`의 `FAIL_*`에 상수를 추가할 때는 **반드시 `StringResult`에도 같은
+> 번호로** 넣어야 한다. 명세 6절이 0~4를 "그대로 옮겨 담을 수 있다"고 보장하는데
+> `StringResult`는 5·6·7을 이미 쓴다. 한쪽에만 5를 추가하면 서버가 복사했을 때
+> 전혀 다른 뜻으로 둔갑하고, 에러 없이 조용히 틀린다.
 
 ---
 
@@ -183,8 +188,18 @@ src/
 - 합성 신호 검증에서 전 줄 1센트 이내 확인됨
 - 온라인 웹 튜너도 같은 계열(자기상관/YIN)이다. 특별한 기술 아님. 이식할 필요 없음.
 
-**개선 방향(구현 시)**: 한 번 판정이 아니라 짧게 여러 번 연속 측정해서
-최근 값들이 1센트 내로 모이면 그 값을 반환하는 "안정화 판정" 방식으로 만든다.
+**안정화 판정 (구현 완료, 2026-09-18)**: 원안은 "짧게 여러 번 독립 측정해 모이면 채택"
+이었으나 저음현에서 성립하지 않는다. 6번 줄은 1.0초로 자르면 그것만으로 50센트가 흔들려
+짧은 측정끼리는 절대 안 모인다. 그래서 **"긴 창을 겹쳐서 여러 번"** 재고 서로 일치하는지를
+본다. 반환값은 전체 구간으로 내고(정밀도 최대) 겹친 창들은 신뢰 확인에만 쓴다.
+
+**유효 측정 판정**: RMS(`min_db`)만으로는 방 소음을 못 거른다. 실측에서 방 소음 RMS가
+실제 연주와 완전히 겹쳤다. 그래서 두 관문을 더 건다 —
+FFT 피크 돌출 ≥16dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+
+**onset 검출**: 타임아웃 기준점은 마이크가 스스로 잡는 onset이다(명세 4절).
+onset은 느슨하게 후보를 내고 진짜 발현인지는 위 관문이 판정한다.
+근거는 `src/tunio_audio/tunio_audio/recorder.py` 주석.
 
 ---
 
@@ -208,12 +223,12 @@ colcon build && source install/setup.bash
 cd src/tunio_server && python3 -m pytest test/ -q
 ```
 
-**`colcon test`를 쓰지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
+**`colcon test`를 그대로 믿지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
 colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
 아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
-러너가 폴백되는 것. "NO TESTS RAN"이 뜨지만 통과처럼 보이기 쉬우니 주의한다.
+러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
 굳이 colcon으로 돌리려면 `colcon test --python-testing pytest`.
-(수정하면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
+(고치면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
 
 ---
 
@@ -234,8 +249,10 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 - **docs/TUNIO_INTERFACE_SPEC.md — 인터페이스 기준본.** 코드와 다르면 이 문서가 기준
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
+- docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
-- tools/pitch_test.py — 검증된 주파수 분석 스크립트 (단독 실행 가능)
+- tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
+- tools/peg_cal.py — 페그 각도-센트 캘리브레이션 도구
 
 ---
 
@@ -251,4 +268,4 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 **미확정 (실측 후 확정)**
 - 허용 센트 확정값 (현재 10.0으로 시작)
 - onset 제한 시간 확정값 (현재 10.0)
-- onset 검출 임계값 — 마이크 담당이 실측하며 정한다
+- 페그 회전량 계산식 — tuning_logic.peg_angle()의 k=0.15는 실측 전 임시값
