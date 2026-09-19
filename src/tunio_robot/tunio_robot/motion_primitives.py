@@ -13,16 +13,21 @@
   노드가 dsr01 네임스페이스에 있어야 /dsr01/dsr_controller2/... 로 풀린다.
   (우리 Action 이름은 '/robot/...' 로 절대 경로라 네임스페이스 영향을 받지 않는다)
 
+그리퍼는 OnRobot RG2 다 (2026-09-19 확정). 폭·힘을 수치로 준다. gripper.py 참조.
+
 TODO(정묵·성현):
-  - 그리퍼 파지·해제 — 제어 방식 확정 후 (_grip / _release 참조)
-  - pluck_string: 힘 제어로 일정 세기 타현 + 발현 직후 5mm 후퇴
+  - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
   - strum_all: 전체 줄 훑기
-  - set_tcp 는 피크를 붙인 뒤 티칭 펜던트에 다시 등록해야 한다
+  - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
+    (gripper.py 주석 참조). 확인 수단을 정해야 한다
+  - set_tcp — 피크를 든 상태와 페그를 잡은 상태의 TCP 가 다르다.
+    티칭 펜던트에 각각 등록해야 한다
 """
 
 # 두산 API 핸들. connect() 가 채운다. dry_run 이면 None 그대로다
 _api = None
 _node = None
+_gripper = None
 
 
 class MotionError(Exception):
@@ -36,7 +41,7 @@ def connect(robot_cfg, logger=None):
     robot_cfg — teach_points.yaml 의 robot 절 (id, model, tool, tcp)
     executor 에 넣지 않은 전용 노드를 만들어 DR_init 에 물린다.
     """
-    global _api, _node
+    global _api, _node, _gripper
     if _api is not None:
         return _api
 
@@ -56,6 +61,11 @@ def connect(robot_cfg, logger=None):
         raise MotionError(f"두산 API(DSR_ROBOT2) import 실패: {e}")
 
     _api = api
+
+    # 그리퍼. 서비스가 안 떠 있으면 여기서 걸리는 편이 동작 중에 걸리는 것보다 낫다
+    from tunio_robot.gripper import RG2
+    _gripper = RG2(_node)
+
     if robot_cfg.get("tool"):
         api.set_tool(robot_cfg["tool"])
     if robot_cfg.get("tcp"):
@@ -80,23 +90,29 @@ def _movej(joints, motion, relative=False):
                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
 
 
-def _grip(pose):
+def _grip(width_mm, force_n):
     """
-    페그를 잡는다.
+    페그·피크를 잡는다.
 
-    그리퍼 제어 방식이 아직 확정되지 않았다. 두 갈래다.
-      - OnRobot RG2 (modbus): onrobot_rg_msgs/OnRobotRGOutput 으로 폭·힘을 준다.
-        폭 0~110mm(rgwd 0~1100), 힘 0~40N(rgfr 0~400). 파지 확인은 입력의 gsta 비트 1
-      - 디지털 출력: 기존 예제(rokey/grip_test.py) 방식. set_digital_output(1/2) 개폐만.
-        파지력 설정이 없다
-    확정 전에 임의로 고르면 파지력 관련 TODO 가 통째로 어긋나므로 막아둔다.
+    width_mm — 목표 폭. 페그 축을 정확히 안 잡아도 되게 여유를 준다.
+      꽉 물면 손목 회전축과 페그 축이 조금만 어긋나도 페그에 옆힘이 걸려
+      더 못 돌린다. 헐겁게 물면 그 어긋남을 흡수해 한 번에 많이 돌릴 수 있다.
+      대신 그 여유가 그대로 헛돎(백래시)이 된다. 폭을 바꾸면 백래시도 바뀌므로
+      **폭을 확정한 뒤에 백래시를 재야 한다** (tools/peg_cal.py --backlash).
+    force_n — 쥐는 힘. RG2 범위 0~40N
     """
-    raise MotionError("그리퍼 제어 방식 미확정 — RG2(modbus) 인지 디지털 출력인지 정해야 한다")
+    if _gripper is None:
+        raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
+    if width_mm is None or force_n is None:
+        raise MotionError("파지 폭·힘이 교시점 YAML 에 없다 (grip_width_mm / grip_force_n)")
+    _gripper.grip(float(width_mm), float(force_n))
 
 
-def _release(pose):
-    """페그를 놓는다. _grip 과 같은 이유로 미확정."""
-    raise MotionError("그리퍼 제어 방식 미확정 — _grip 참조")
+def _release():
+    """그리퍼를 연다."""
+    if _gripper is None:
+        raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
+    _gripper.release()
 
 
 def pluck_string(pose, motion):
@@ -118,13 +134,13 @@ def adjust_peg(pose, joint, delta_deg, motion):
     """
     _require_api()
     _movej(pose.joints, motion)                     # 페그 앞으로
-    _grip(pose)                                     # 파지 (방식 미확정)
+    _grip(pose.grip_width_mm, pose.grip_force_n)    # 여유를 준 폭으로 파지
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
         _movej(delta, motion, relative=True)        # 그 관절만 상대 회전
     finally:
-        _release(pose)                              # 실패해도 페그는 놓는다
+        _release()                                  # 실패해도 페그는 놓는다
 
 
 def strum_all(string_numbers, points):
