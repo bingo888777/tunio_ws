@@ -19,6 +19,7 @@
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
   - strum_all: 전체 줄 훑기
+  - return_home: 대기 자세 복귀 (strum_all 끝에 호출됨. 이동만이라 구현 완료)
   - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
   - set_tcp — 피크를 든 상태와 페그를 잡은 상태의 TCP 가 다르다.
@@ -207,3 +208,19 @@ def adjust_peg(pose, joint, delta_deg, motion):
 def strum_all(string_numbers, points):
     """전체 줄을 훑어 화음. 측정 없는 완료 연출."""
     raise NotImplementedError("성현 담당 — 훑기 동작 교시 후 구현")
+
+
+def return_home(pose, motion):
+    """
+    대기 자세 복귀. strum_all 이 화음 연출을 마친 뒤 호출한다.
+
+    TuningState.PHASE_RETURN 을 호출할 전용 Action 이 인터페이스 13개에 없어서
+    strum_all 이 복귀까지 책임진다 (2026-09-19 결정). 인터페이스를 다시 열지
+    않으려는 선택이고, 기획 Phase 2 에서 화음 연출 직후가 곧 복귀라 순서상으로도
+    이어진다.
+
+    한계: 정상 완료 경로에만 있다. 취소·오류로 끝난 경우의 복귀는 수단이 없고
+    지금은 사람이 회수한다.
+    """
+    _require_api()
+    _movej(pose.joints, motion)
