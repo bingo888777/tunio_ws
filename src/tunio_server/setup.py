@@ -30,6 +30,7 @@ setup(
             'web_node = tunio_server.web_node:main',
             'mock_state = tunio_server.mock_state:main',
             'result_store = tunio_server.result_store:main',
+            'fake_hardware = tunio_server.fake_hardware:main',
         ],
     },
 )
