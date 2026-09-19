@@ -1,18 +1,73 @@
-# 직접 교시 좌표 (축 정렬 후 기록). 좌표계·필드는 구현 시 확정.
-# 값은 예시 placeholder — 실제 교시 후 채운다.
+# 직접 교시 좌표와 로봇 설정.
+#
+# 값은 전부 placeholder 다. 교시를 마친 항목만 taught: true 로 바꾼다.
+# taught: false 인 자세는 teach_points.py 가 조회를 거부한다.
+# 전부 0 인 자세로 움직이면 기타·받침대와 부딪히기 때문이다.
+
+robot:
+  id: dsr01           # DR_init.__dsr__id. 노드 네임스페이스로도 쓴다
+  model: m0609        # DR_init.__dsr__model
+  tool: "Tool Weight"   # 티칭 펜던트에 등록된 이름 (예제 기준값, 확인 필요)
+  tcp: "GripperDA_v1"   # 피크를 붙였으면 TCP를 다시 등록해야 한다 (확인 필요)
+
+motion:
+  vel: 30             # 이동 속도 (예제 기준값)
+  acc: 30             # 이동 가속도
+  peg_joint: 6        # 페그를 돌리는 관절 번호 1~6. 실물 확인 후 확정
+  max_angle_deg: 120.0  # goal 1회 회전 상한(도). 안전값, 실측 후 확정
+
 frames:
-  home:    {j: [0, 0, 0, 0, 0, 0]}
-  standby: {j: [0, -20, 90, 0, 90, 0]}
-strings:      # 발현 접근 자세
-  6: {pos: [0, 0, 0, 0, 0, 0]}
-  5: {pos: [0, 0, 0, 0, 0, 0]}
-  2: {pos: [0, 0, 0, 0, 0, 0]}
-  1: {pos: [0, 0, 0, 0, 0, 0]}
-pegs:         # 페그 파지 자세
-  6: {pos: [0, 0, 0, 0, 0, 0]}
-  5: {pos: [0, 0, 0, 0, 0, 0]}
-  2: {pos: [0, 0, 0, 0, 0, 0]}
-  1: {pos: [0, 0, 0, 0, 0, 0]}
-strum:        # 전체 화음 훑기 시작/끝 자세
-  start: {pos: [0, 0, 0, 0, 0, 0]}
-  end:   {pos: [0, 0, 0, 0, 0, 0]}
+  home:
+    j: [0, 0, 90, 0, 90, 0]
+    taught: false
+  standby:
+    j: [0, -20, 90, 0, 90, 0]
+    taught: false
+
+# 페그 파지 자세.
+#   turn_sign — direction=+1(조임)일 때 peg_joint 가 도는 부호.
+#     줄마다 헤드에서의 방향이 달라 같은 "조임"도 관절 부호가 반대일 수 있다.
+#     실물에서 확인 전까지는 전부 1 로 두고, 확인한 줄부터 고친다.
+#   grip_width_mm / grip_force_n — 그리퍼 제어 방식 확정 후 채운다.
+#     RG2(modbus)면 폭 0~110mm, 힘 0~40N 범위다.
+pegs:
+  6:
+    j: [0, 0, 0, 0, 0, 0]
+    turn_sign: 1
+    taught: false
+  5:
+    j: [0, 0, 0, 0, 0, 0]
+    turn_sign: 1
+    taught: false
+  2:
+    j: [0, 0, 0, 0, 0, 0]
+    turn_sign: 1
+    taught: false
+  1:
+    j: [0, 0, 0, 0, 0, 0]
+    turn_sign: 1
+    taught: false
+
+# 발현 접근 자세 (성현 담당)
+pluck:
+  6:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false
+  5:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false
+  2:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false
+  1:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false
+
+# 전체 화음 훑기 시작/끝 자세 (성현 담당)
+strum:
+  start:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false
+  end:
+    j: [0, 0, 0, 0, 0, 0]
+    taught: false

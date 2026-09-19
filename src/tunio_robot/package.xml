@@ -9,8 +9,10 @@
   <exec_depend>rclpy</exec_depend>
   <exec_depend>tunio_interfaces</exec_depend>
   <exec_depend>dsr_msgs2</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <test_depend>ament_flake8</test_depend>
+  <test_depend>python3-pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>
