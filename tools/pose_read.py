@@ -7,10 +7,17 @@
 경유지를 계산으로 잡기는 어렵다. 조그로 직접 가보고 "이 정도면 안 걸리겠다"
 싶은 자리에서 이 도구로 값을 읽는 편이 확실하다.
 
+조그와 같이 쓸 수 있나
+  읽기만 하는 거라 대체로 된다. 다만 수동 모드에서는 두산 서비스 호출이
+  막힐 수 있다. 그때는 --topic 으로 joint_states 를 구독해서 읽는다.
+  토픽은 모드와 무관하게 계속 나온다. 대신 손끝 좌표와 sol 은 안 나오고
+  관절값만 나온다. 경유지를 잡는 데는 관절값이면 충분하다.
+
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
   python3 tools/pose_read.py              # 엔터 칠 때마다 한 번씩 읽는다
   python3 tools/pose_read.py --watch      # 0.5초마다 계속 찍는다 (조그하며 보기)
+  python3 tools/pose_read.py --watch --topic   # 수동 모드에서 서비스가 막힐 때
 """
 import argparse
 import sys
@@ -24,6 +31,9 @@ def fmt(vals, unit=""):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--watch", action="store_true", help="계속 찍는다")
+    ap.add_argument("--topic", action="store_true",
+                    help="두산 서비스 대신 joint_states 토픽을 구독한다. "
+                         "수동 모드에서 서비스가 막힐 때 쓴다")
     ap.add_argument("--period", type=float, default=0.5)
     ap.add_argument("--id", default="dsr01")
     ap.add_argument("--model", default="m0609")
@@ -38,11 +48,36 @@ def main():
     node = rclpy.create_node("tunio_pose_read", namespace=args.id)
     DR_init.__dsr__node = node
 
+    if args.topic:
+        from sensor_msgs.msg import JointState
+        import math as _m
+        latest = {}
+
+        def on_state(msg):
+            latest["j"] = [_m.degrees(v) for v in msg.position[:6]]
+
+        node.create_subscription(JointState, "joint_states", on_state, 10)
+
+        def once():
+            for _ in range(200):                   # 첫 메시지를 기다린다
+                rclpy.spin_once(node, timeout_sec=0.05)
+                if "j" in latest:
+                    break
+            if "j" not in latest:
+                print("  joint_states 가 안 온다. 드라이버가 떠 있는지 보라")
+                return None
+            print(f"  관절 {fmt(latest['j'])} deg")
+            print("  (토픽 모드라 손끝 좌표와 sol 은 안 나온다)")
+            return latest["j"]
+
+        return loop(args, node, once)
+
     try:
         from DSR_ROBOT2 import (get_current_posj, get_current_posx,
                                 get_current_solution_space)
     except ImportError as e:
         print(f"두산 API import 실패: {e}")
+        print("수동 모드라면 --topic 을 붙여 보라")
         return 1
 
     def once():
@@ -55,6 +90,12 @@ def main():
         print(f"  팔 자세(sol) {sol}")
         return posj
 
+    return loop(args, node, once)
+
+
+def loop(args, node, once):
+    """엔터마다 또는 주기마다 읽어서 찍는다."""
+    import rclpy
     print("\n로봇을 움직이지 않는다. 읽기만 한다.")
     try:
         if args.watch:
