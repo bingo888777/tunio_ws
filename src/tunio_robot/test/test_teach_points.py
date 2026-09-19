@@ -31,15 +31,43 @@ def test_저장소_교시점_파일이_구조검증을_통과한다():
 
 
 def test_교시_전에는_자세_조회를_거부한다():
-    """전부 0 인 placeholder 로 움직이면 기타와 부딪힌다."""
-    points = tp.TeachPoints(_data())
+    """
+    좌표가 들어 있어도 taught 가 false 면 거부한다.
+
+    교시가 한 벌로 안 맞는다고 판명나면 값을 지우지 않고 taught 만 내린다.
+    그때 동작이 막혀야 한다.
+    """
+    d = _data()
+    d["pegs"][6]["taught"] = False
     with pytest.raises(tp.TeachPointsError, match="교시"):
-        points.peg(6)
+        tp.TeachPoints(d).peg(6)
 
 
 def test_교시를_마치면_조회된다():
     points = tp.TeachPoints(_taught())
-    assert points.peg(6).joints == [0, 0, 0, 0, 0, 0]
+    assert points.peg(2).taught is True
+
+
+def test_페그는_작업좌표로_읽힌다():
+    """좌표계 계산으로 다른 페그를 내려면 관절각이 아니라 작업좌표여야 한다."""
+    peg = tp.TeachPoints(_data()).peg(6)
+    assert peg.kind == "task"
+    assert len(peg.task) == 6
+    assert peg.joints is None
+
+
+def test_대기_자세는_관절각이다():
+    points = tp.TeachPoints(_data())
+    standby = points.frame("standby")
+    assert standby.kind == "joint"
+    assert standby.joints == [0.0, 0.0, 75.0, 0.0, 100.0, 0.0]
+
+
+def test_j와_x를_둘_다_적으면_걸린다():
+    d = _data()
+    d["pegs"][2]["j"] = [0, 0, 0, 0, 0, 0]
+    with pytest.raises(tp.TeachPointsError, match="하나만"):
+        tp.TeachPoints(d)
 
 
 # ---------------------------------------------------------- 방향 변환
@@ -53,12 +81,23 @@ def test_조임과_풀림은_관절_부호가_반대다():
 def test_turn_sign_이_음수면_관절_부호가_뒤집힌다():
     """줄마다 헤드에서의 방향이 달라 같은 조임도 관절 부호가 반대일 수 있다."""
     d = _taught()
+    d["pegs"][6]["turn_sign"] = 1
     d["pegs"][1]["turn_sign"] = -1
     points = tp.TeachPoints(d)
     _, six = points.joint_delta(6, tp.TIGHTEN, 30.0)
     _, one = points.joint_delta(1, tp.TIGHTEN, 30.0)
     assert six == 30.0
     assert one == -30.0
+
+
+def test_저장소_파일은_네_줄_모두_반시계가_조임이다():
+    """2026-09-19 사용자 확인. 반시계 = 조임 = 관절 음(-) 회전이라 전부 -1 이다."""
+    points = tp.TeachPoints(_taught())
+    for string in tp.STRINGS:
+        _, delta = points.joint_delta(string, tp.TIGHTEN, 30.0)
+        assert delta == -30.0, f"{string}번이 {delta} 다"
+        _, back = points.joint_delta(string, tp.LOOSEN, 30.0)
+        assert back == 30.0
 
 
 def test_회전_관절_번호를_YAML에서_가져온다():
@@ -109,10 +148,10 @@ def test_줄이_빠지면_로드에서_걸린다():
         tp.TeachPoints(d)
 
 
-def test_관절이_6개가_아니면_걸린다():
+def test_값이_6개가_아니면_걸린다():
     d = _data()
-    d["pegs"][6]["j"] = [0, 0, 0]
-    with pytest.raises(tp.TeachPointsError, match="관절 6개"):
+    d["pegs"][6]["x"] = [0, 0, 0]
+    with pytest.raises(tp.TeachPointsError, match="6개"):
         tp.TeachPoints(d)
 
 
@@ -156,3 +195,52 @@ def test_pick_절이_없는_파일도_로드는_된다():
     points = tp.TeachPoints(d)
     with pytest.raises(tp.TeachPointsError, match="pick.holder"):
         points.pick_holder()
+
+
+# ---------------------------------------------------------- 경유지
+def test_저장소_경유지가_J6만_현재값을_유지한다():
+    """J6 은 페그를 돌리는 관절이라 어디에 있든 상관없다."""
+    route = tp.TeachPoints(_data()).route()
+    assert route.resolve([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]) == \
+        [90.0, 0.0, 0.0, 0.0, 0.0, 6.0]
+
+
+def test_null_인_관절은_현재값을_유지한다():
+    """부딪히지 않는 데 필요한 관절만 적으면 된다는 게 경유지의 요점이다."""
+    d = _data()
+    d["routes"]["transit"] = {"j": [30.0, None, 60.0, None, None, None], "taught": True}
+    got = tp.TeachPoints(d).route().resolve([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
+    assert got == [30.0, 2.0, 60.0, 4.0, 5.0, 6.0]
+
+
+def test_전부_적으면_자세가_완전히_고정된다():
+    d = _data()
+    d["routes"]["transit"] = {"j": [1, 2, 3, 4, 5, 6], "taught": True}
+    assert tp.TeachPoints(d).route().resolve([9.0] * 6) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+def test_미교시_경유지는_None_이라_경유하지_않는다():
+    """값을 안 채운 상태로 경유하면 엉뚱한 자세로 간다."""
+    d = _data()
+    d["routes"]["transit"]["taught"] = False
+    assert tp.TeachPoints(d).route() is None
+
+
+def test_줄_번호로_좌우를_가른다():
+    assert tp.side_of(6) == tp.side_of(5) == "left"
+    assert tp.side_of(2) == tp.side_of(1) == "right"
+
+
+def test_경유지_관절값이_6개가_아니면_걸린다():
+    d = _data()
+    d["routes"]["transit"] = {"j": [1, 2, 3], "taught": True}
+    with pytest.raises(tp.TeachPointsError, match="6개"):
+        tp.TeachPoints(d)
+
+
+def test_경유지에_숫자도_null도_아닌_값이_있으면_걸린다():
+    d = _data()
+    d["routes"]["transit"] = {"j": ["x", None, None, None, None, None],
+                              "taught": True}
+    with pytest.raises(tp.TeachPointsError, match="null"):
+        tp.TeachPoints(d)
