@@ -214,7 +214,11 @@ class AudioAnalyzer(Node):
         need = int((rec_sec + 0.05) * sr)
         min_need = int((skip + MIN_USABLE_SEC) * sr)
         finite = bool(replay)
-        tried, t_onset, last = set(), None, None
+        # t_onset: 첫 onset (명세 4절의 타임아웃 기준점)
+        # wall: 후보별 실제 시각. 응답 시간은 '성공한 후보' 기준으로 재야 한다.
+        #   로봇 구동음에서는 헛 onset 이 분당 19회 나고 2.2초 창의 48%에 들어온다.
+        #   첫 onset 으로 재면 진짜 발현은 제때 잡았는데도 목표 초과로 찍힌다.
+        tried, t_onset, last, wall = set(), None, None, {}
 
         while True:
             if goal_handle.is_cancel_requested:
@@ -243,8 +247,10 @@ class AudioAnalyzer(Node):
             for t in find_onsets(buf, sr):
                 if t in tried:
                     continue
+                if t not in wall:
+                    wall[t] = time.monotonic() - (len(buf) / sr - t)
                 if t_onset is None:
-                    t_onset = time.monotonic() - (len(buf) / sr - t)
+                    t_onset = wall[t]
                 start = int(t * sr)
                 avail = len(buf) - start
                 if avail < need and not (finite and avail >= min_need):
@@ -254,8 +260,10 @@ class AudioAnalyzer(Node):
                 a = self._analyze(seg, sr, req.target_hz)
                 last = a
                 if a.ok:
-                    el = time.monotonic() - t_onset
-                    msg = f"[{tag}] onset {t:.2f}초 → {a.summary()} — {el:.2f}초"
+                    el = time.monotonic() - wall[t]
+                    msg = (f"[{tag}] onset {t:.2f}초 → {a.summary()} — {el:.2f}초"
+                           + (f" (앞선 후보 {len(tried) - 1}개 기각)"
+                              if len(tried) > 1 else ""))
                     if el > RESPONSE_GOAL_SEC:
                         self.get_logger().warn(f"{msg} (목표 {RESPONSE_GOAL_SEC}초 초과)")
                     else:
