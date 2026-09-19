@@ -273,10 +273,22 @@ function renderStringCards(state) {
     if (r && r.result === 2) cls += ' bad';
     card.className = cls;
 
-    const note = r ? r.result_label : '대기';
+    // 지금 이 줄을 조율 중인가. 그렇다면 아직 확정되지 않은 값 대신
+    // 흘러들어오는 측정값을 보여준다. tuned_hz 는 줄이 끝나야 채워지므로,
+    // 그것만 쓰면 진행 중에는 카드가 '측정 불가'로 굳어 보인다.
+    const live = state && state.current_string === n && isRunning(state);
+    const note = live ? '진행 중' : (r ? r.result_label : '대기');
+
     const rows = [];
     rows.push(['목표', `${hz(r ? r.target_hz : null)} Hz`, false]);
-    if (r) {
+    if (live) {
+      rows.push(['측정', state.measurement_valid ? `${hz(state.measured_hz)} Hz` : '측정 불가',
+                 !state.measurement_valid]);
+      const c = state.measurement_valid
+        ? centsOf(state.measured_hz, state.target_hz) : null;
+      rows.push(['오차', c === null ? '—' : `${centsText(c)} 센트`, c === null]);
+      rows.push(['조절 횟수', String(state.adjust_count), false]);
+    } else if (r) {
       rows.push(['조율 측정', r.tuned_hz === null ? '측정 불가' : `${hz(r.tuned_hz)} Hz`,
                  r.tuned_hz === null]);
       rows.push(['검증 측정', r.verified_hz === null ? '—' : `${hz(r.verified_hz)} Hz`,
