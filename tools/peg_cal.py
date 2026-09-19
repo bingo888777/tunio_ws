@@ -315,34 +315,134 @@ def run_backlash(rec, args, name, target):
     return None
 
 
+# 실측한 줄별 민감도 (목표 ±30센트 구간, docs/페그_실측표.md).
+# 최소 유효 각도의 사다리를 이 값으로 짠다. --cpd 로 덮어쓸 수 있다.
+MEASURED_CPD = {6: 2.219, 5: 0.865, 2: 1.065, 1: 0.502}
+
+# 사다리의 각 단이 만들어야 할 음정 변화(센트). 각도가 아니라 센트로 잡는다.
+MIN_ANGLE_RUNGS_CENTS = (2.0, 3.0, 5.0, 8.0, 12.0)
+
+# 판정 두 가지를 다 만족해야 '그 각도는 먹힌다'고 본다.
+#   누적비  — N번 이어 돌린 총 변화가 기대의 이 비율 이상인가
+#   고른비  — 각 회가 기대의 절반~1.5배 안에 드는 비율
+# 누적만 보면 안 된다. 줄이 너트에 걸렸다 튕기면 0/0/큰값이 나오는데
+# 누적은 기대치를 채운다. 그 각도로 한 번 명령하면 결과가 0 이거나 3배라
+# 조율 루프가 진동한다. 실제로 쓸 수 있으려면 매번 고르게 움직여야 한다.
+MIN_ANGLE_RATIO = 0.7
+MIN_ANGLE_STEADY = 0.6
+
+
 def run_min_angle(rec, args, name, target):
-    """유격에 묻히지 않고 실제로 음이 변하기 시작하는 최소 각도 (가이드 7절)."""
+    """
+    유격에 묻히지 않고 실제로 음이 변하기 시작하는 최소 각도 (가이드 7절).
+
+    예전에는 10/15/20/30/45도 고정 사다리에 "3센트 이상 변하면 통과"였다.
+    두 가지가 틀렸다.
+
+    1) 사다리가 각도 고정이라 줄마다 묻는 질문이 달라진다. 6번 줄은 1도에
+       2.2센트라 10도면 22센트다. 무조건 첫 단에서 통과하고 끝나므로
+       "4.5도 이하냐"는 정작 알아야 할 것에 답을 못 한다.
+       (4.5도는 min_effective_deg x cents_per_deg <= 허용 10센트 조건에서 나온다)
+    2) 3센트 단일 판정은 측정 잡음과 구분이 안 된다. measure_stable 이
+       중앙값을 내도 1~3센트는 흔들린다.
+
+    그래서 사다리를 센트 기준으로 짜고(줄마다 각도가 달라진다), 판정도
+    "기대한 만큼 움직였는가"로 바꿨다. 같은 각도를 여러 번 이어 돌려
+    누적 변화를 보므로 신호는 쌓이고 잡음은 안 쌓인다.
+    """
+    cpd = args.cpd if args.cpd else MEASURED_CPD.get(args.string)
+    if not cpd:
+        print("  이 줄의 cents_per_deg 를 모릅니다. --cpd 로 주세요")
+        return None
+
     print(f"\n{'=' * 64}")
     print(f"최소 유효 각도 — {args.string}번 줄 {name}")
     print(f"{'=' * 64}")
+    print(f"  기준 민감도 {cpd:.3f} 센트/도. 이 값으로 사다리를 짭니다")
+    print(f"  수렴 조건상 이 줄은 {10.0 / cpd:.1f}도 이하여야 허용 10센트에 들어갑니다")
     print("  목표 근처에서, 조이는 방향으로만 돌립니다")
-    found = None
-    for deg in (10.0, 15.0, 20.0, 30.0, 45.0):
+    print(f"  각 단을 {args.repeat}번 이어 돌려 누적 변화를 봅니다\n")
+
+    found, rows = None, []
+    for want_cents in MIN_ANGLE_RUNGS_CENTS:
+        deg = round(want_cents / cpd, 1)
+        print(f"\n  --- {deg}도 단계 (한 번에 약 {want_cents:.0f}센트 기대) ---")
+        if deg < 3.0:
+            print("      ※ 손으로는 이 각도를 정확히 못 돌립니다. 실제로 돌린 만큼을")
+            print("        입력하면 그 각도 기준으로 판정합니다")
         if args.sim is None:
-            input(f"\n  다음 단계 {deg:.0f}도. 준비되면 엔터 ")
+            input("      준비되면 엔터 ")
         base = measure_stable(rec, target, args.duration,
                               sim=target if args.sim is not None else None)
         if base is None:
             continue
-        if args.sim is None:
-            print(f"  이제 {deg:.0f}도 조이세요")
-            ask_angle(deg)
-            time.sleep(SETTLE_SEC)
-        sim_hz = base * 2 ** (max(0.0, deg - 12.0) * args.sim / 1200) \
-            if args.sim is not None else None
-        f = measure_stable(rec, base, args.duration, sim=sim_hz)
-        if f is None:
+
+        prev, total_deg, ok_count, steps = base, 0.0, 0, []
+        for i in range(args.repeat):
+            if args.sim is None:
+                print(f"      [{i + 1}/{args.repeat}] {deg}도 조이세요")
+                actual = ask_angle(deg)
+                time.sleep(SETTLE_SEC)
+            else:
+                actual = deg
+            total_deg += actual
+            # 모의: 스틱-슬립. 8도가 쌓여야 한 번에 풀린다.
+            # 작은 각도는 누적으로는 따라오지만 회마다 들쭉날쭉해진다.
+            if args.sim is not None:
+                slipped = (total_deg // 8.0) * 8.0
+                sim_hz = base * 2 ** (slipped * args.sim / 1200)
+            else:
+                sim_hz = None
+            f = measure_stable(rec, prev, args.duration, sim=sim_hz)
+            if f is None:
+                continue
+            step_c = cents(f, prev)
+            want = actual * cpd
+            steps.append(step_c / want if want else 0.0)
+            print(f"        {actual:.1f}도 → {step_c:+.2f}센트 "
+                  f"(기대 {want:.2f}, {100 * steps[-1]:.0f}%)"
+                  f"  누적 {total_deg:.1f}도 / {cents(f, base):+.2f}센트")
+            prev = f
+            ok_count += 1
+
+        if ok_count < 2 or total_deg <= 0:
+            print("      측정이 모자라 이 단계는 건너뜁니다")
             continue
-        c = cents(f, base)
-        print(f"    {deg:.0f}도 → {c:+.1f}센트")
-        if abs(c) >= 3.0 and found is None:
+        got = cents(prev, base)
+        eff = got / total_deg
+        ratio = eff / cpd
+        steady = sum(1 for r in steps if 0.5 <= r <= 1.5) / len(steps)
+        ok = ratio >= MIN_ANGLE_RATIO and steady >= MIN_ANGLE_STEADY
+        rows.append((deg, total_deg, eff, ratio, steady))
+        print(f"      누적 {total_deg:.1f}도에 {got:+.2f}센트 = {eff:.3f} 센트/도")
+        print(f"      누적비 {ratio * 100:.0f}%  고른비 {steady * 100:.0f}%"
+              f"  →  {'먹힘' if ok else '못 씀'}")
+        if ratio >= MIN_ANGLE_RATIO and steady < MIN_ANGLE_STEADY:
+            print("      (누적으로는 움직이는데 회마다 들쭉날쭉합니다. 줄이 너트에")
+            print("       걸렸다 튕기는 것으로 보입니다. 이 각도로 한 번 명령하면")
+            print("       결과를 예측할 수 없습니다)")
+        if ok and found is None:
             found = deg
-            print(f"  → 최소 유효 각도 약 {deg:.0f}도")
+            print(f"      ★ 최소 유효 각도 = 약 {deg}도")
+            break
+
+    print(f"\n{'=' * 64}")
+    if found is None:
+        print("  사다리 안에서 '먹히는' 각도를 못 찾았습니다.")
+        print(f"  유격이 {MIN_ANGLE_RUNGS_CENTS[-1] / cpd:.1f}도보다 큽니다. "
+              f"--cpd 나 사다리를 키워 다시 재세요")
+    else:
+        limit = 10.0 / cpd
+        print(f"  최소 유효 각도 {found}도  = {found * cpd:.1f}센트")
+        if found > limit:
+            print(f"  ⚠ 수렴 한계 {limit:.1f}도를 넘습니다. 이 줄은 허용 10센트로")
+            print("    수렴할 수 없습니다. 허용 센트를 늘리거나 기구를 손봐야 합니다")
+        else:
+            print(f"  수렴 한계 {limit:.1f}도 안에 들어옵니다 (허용 10센트 기준)")
+        print(f"\n  peg_calibration.yaml 에 넣을 값:  min_effective_deg: {found}")
+    for deg, td, eff, ratio, steady in rows:
+        print(f"    {deg:5.1f}도 x {td / deg:.0f}회 → {eff:.3f} 센트/도 "
+              f"(누적비 {ratio * 100:3.0f}%  고른비 {steady * 100:3.0f}%)")
     return found
 
 
@@ -361,6 +461,10 @@ def main():
     ap.add_argument("--duration", type=float, default=2.0, help="녹음 길이(초)")
     ap.add_argument("--backlash", action="store_true", help="백래시 양 측정")
     ap.add_argument("--min-angle", action="store_true", help="최소 유효 각도 측정")
+    ap.add_argument("--cpd", type=float, default=None,
+                    help="센트/도 (--min-angle 사다리 기준. 기본은 실측표 값)")
+    ap.add_argument("--repeat", type=int, default=3,
+                    help="--min-angle 에서 같은 각도를 이어 돌리는 횟수")
     ap.add_argument("--simulate", dest="sim", type=float, default=None,
                     metavar="CENTS_PER_DEG",
                     help="기타 없이 흐름만 확인 (예: 0.2). 이 값이 다시 나오면 정상")
