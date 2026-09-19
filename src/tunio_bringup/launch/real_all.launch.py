@@ -10,7 +10,8 @@
 1. 페그 캘리브레이션 실측이 끝났는가
    config/peg_calibration.yaml 의 measured 가 true 여야 한다. false 면 조절이
    필요해지는 순간 PHASE_ERROR 로 멈춘다. 실측 전에 지어낸 각도로 페그를 돌리지
-   않으려고 일부러 막아 둔 것이다. 값을 넣는 방법은 docs/페그_실측_가이드.md 참조.
+   않으려고 일부러 막아 둔 것이다. 각 값의 뜻과 형식은 그 yaml 파일 주석에 있고,
+   재는 방법은 docs/주파수분석_테스트가이드.md(마이크·분석 담당) 를 따른다.
 
 2. 교시가 끝났는가
    tunio_robot 의 config/teach_points.yaml 에서 쓰려는 자세들의 taught 가 true 여야
