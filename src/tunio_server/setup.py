@@ -14,6 +14,8 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
+        # 관제 웹 정적 파일. web_node 가 share/tunio_server/web 에서 읽는다
+        (os.path.join('share', package_name, 'web'), glob('web/*')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -25,6 +27,8 @@ setup(
         'console_scripts': [
             'task_manager = tunio_server.task_manager:main',
             'hmi_node = tunio_server.hmi_node:main',
+            'web_node = tunio_server.web_node:main',
+            'mock_state = tunio_server.mock_state:main',
             'result_store = tunio_server.result_store:main',
         ],
     },

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TUNIO 관제</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">TUNIO</span>
+    <span class="sub">협동로봇 기타 자동 조율 관제</span>
+  </div>
+  <div class="topmeta">
+    <span id="job-id" class="jobid">작업 없음</span>
+    <span id="link" class="badge badge-wait">연결 중</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="live" role="tab">실시간 작업</button>
+  <button class="tab" data-tab="history" role="tab">작업 이력</button>
+  <button class="tab" data-tab="settings" role="tab">설정</button>
+</nav>
+
+<main>
+
+<!-- ─────────────────────────── 실시간 작업 ─────────────────────────── -->
+<section id="tab-live" class="panel active">
+
+  <div class="controls">
+    <button id="btn-start"  class="btn btn-primary">시작</button>
+    <button id="btn-pause"  class="btn">일시정지</button>
+    <button id="btn-resume" class="btn">재개</button>
+    <button id="btn-cancel" class="btn btn-danger">취소</button>
+    <div class="spacer"></div>
+    <div class="statusline">
+      <span class="label">진행 단계</span>
+      <span id="phase" class="badge badge-idle">대기</span>
+      <span class="label">전체 판정</span>
+      <span id="overall" class="badge badge-idle">판정 전</span>
+    </div>
+  </div>
+
+  <div id="toast" class="toast"></div>
+
+  <div class="now">
+    <div class="now-head">
+      <span class="label">현재 줄</span>
+      <span id="now-string" class="now-string">—</span>
+    </div>
+    <div class="readouts">
+      <div class="readout">
+        <span class="label">목표</span>
+        <strong id="now-target" class="hz">—</strong><span class="unit">Hz</span>
+      </div>
+      <div class="readout readout-main">
+        <span class="label">측정</span>
+        <strong id="now-measured" class="hz hz-big">—</strong><span class="unit">Hz</span>
+      </div>
+      <div class="readout">
+        <span class="label">오차</span>
+        <strong id="now-error" class="hz">—</strong><span class="unit">Hz</span>
+      </div>
+      <div class="readout">
+        <span class="label">조절 횟수</span>
+        <strong id="now-adjust" class="hz">—</strong>
+      </div>
+    </div>
+    <p class="hint">판정은 센트로 하고 화면 표시는 Hz 다. 오차가 양수면 목표보다 높은 음이다.</p>
+  </div>
+
+  <h2 class="section-title">줄별 결과</h2>
+  <div id="strings" class="strings"></div>
+
+</section>
+
+<!-- ─────────────────────────── 작업 이력 ─────────────────────────── -->
+<section id="tab-history" class="panel">
+  <div class="controls">
+    <button id="btn-history-reload" class="btn">새로 읽기</button>
+    <span class="hint" id="history-hint">최신순으로 최근 20건까지 보여준다.</span>
+  </div>
+  <div class="history-wrap">
+    <div id="history-list" class="history-list"></div>
+    <div id="history-detail" class="history-detail">
+      <p class="empty">왼쪽에서 작업을 고르면 줄별 기록과 그때 적용된 설정을 보여준다.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────── 설정 ─────────────────────────── -->
+<section id="tab-settings" class="panel">
+  <div class="controls">
+    <button id="btn-settings-save" class="btn btn-primary">저장</button>
+    <button id="btn-settings-default" class="btn">기본값으로</button>
+    <button id="btn-settings-reload" class="btn">다시 읽기</button>
+    <span id="settings-lock" class="badge badge-idle">변경 가능</span>
+  </div>
+
+  <div class="form">
+    <div class="field">
+      <label for="tolerance_cents">허용 센트</label>
+      <input id="tolerance_cents" type="number" step="0.1" min="0.1">
+      <p class="hint">센트 오차의 절댓값이 이 값 이내면 성공으로 본다. 0보다 커야 한다.</p>
+    </div>
+    <div class="field">
+      <label for="max_adjust_count">최대 조절 횟수</label>
+      <input id="max_adjust_count" type="number" step="1" min="0" max="255">
+      <p class="hint">줄당 페그 조절 상한. 0이면 조절하지 않고 측정만 한다.</p>
+    </div>
+    <div class="field">
+      <label for="max_measure_retry">측정 재시도 횟수</label>
+      <input id="max_measure_retry" type="number" step="1" min="0" max="255">
+      <p class="hint">측정이 실패했을 때 페그를 돌리지 않고 다시 튕기는 상한.</p>
+    </div>
+    <div class="field">
+      <label for="measure_timeout_sec">측정 제한 시간 (초)</label>
+      <input id="measure_timeout_sec" type="number" step="0.1" min="0.1">
+      <p class="hint">녹음 길이가 아니라 응답 제한이다. onset 검출 시점부터 센다.</p>
+    </div>
+    <div class="field">
+      <label for="onset_timeout_sec">onset 제한 시간 (초)</label>
+      <input id="onset_timeout_sec" type="number" step="0.1" min="0.1">
+      <p class="hint">이 안에 소리가 들어오지 않으면 '소리 부족'으로 처리한다.</p>
+    </div>
+  </div>
+
+  <p class="hint">
+    목표 주파수는 화면에서 바꾸지 않는다(A4=440Hz, 12평균율 고정).
+    작업이 진행 중이면 설정은 잠긴다. 저장은 task_manager 가 받아들여야 반영된다.
+  </p>
+</section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>
