@@ -143,7 +143,14 @@ def ask_angle(default):
 # ---------------------------------------------------------------
 # 모드
 # ---------------------------------------------------------------
-def run_sweep(rec, args, name, target):
+def save(out, path):
+    if not path:
+        return
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+
+
+def run_sweep(rec, args, name, target, out=None):
     """목표보다 낮게 시작해 조이며 단계별로 잰다. 회차 반복 (가이드 3절)."""
     rounds = []
     for rnd in range(1, args.rounds + 1):
@@ -193,6 +200,12 @@ def run_sweep(rec, args, name, target):
         if len(pts) >= 3:
             rounds.append(pts)
             report_round(pts)
+            # 회차마다 저장한다. 중간에 끊어도 여기까지는 남는다
+            if out is not None:
+                out["점"] = [[[round(d, 1), round(h, 4)] for d, h in r] for r in rounds]
+                save(out, args.save)
+                if args.save:
+                    print(f"  (여기까지 {args.save} 에 저장됨)")
         else:
             print("  측정점이 부족해 이 회차는 버립니다")
     return rounds
@@ -214,17 +227,39 @@ def report_round(pts):
     print("  ⚠ 20% 초과 — 이 회차는 버리는 게 좋습니다" if dev > 20 else "  (양호)")
 
 
-def fit_all(rounds):
-    """회차 전체를 모아 회귀. 기울기가 최종 센트/도."""
-    slopes = []
+def all_segments(rounds):
+    """모든 회차의 구간을 (중간 주파수, 센트/도)로 펼친다."""
+    out = []
     for pts in rounds:
-        f0 = pts[0][1]
-        x = np.array([p[0] for p in pts])
-        y = np.array([cents(p[1], f0) for p in pts])
-        # 원점을 지나는 직선으로 맞춘다 (0도에서 0센트)
-        slope = float(np.sum(x * y) / np.sum(x * x))
-        slopes.append(slope)
-    return np.array(slopes)
+        for (d1, f1), (d2, f2) in zip(pts, pts[1:]):
+            if d2 <= d1:
+                continue
+            out.append(((f1 + f2) / 2.0, cents(f2, f1) / (d2 - d1)))
+    return out
+
+
+def value_at_target(segs, target):
+    """
+    목표 주파수에서의 센트/도.
+
+    센트/도는 상수가 아니다. 장력이 높을수록 작아진다.
+    f ∝ sqrt(T) 이고 같은 각도가 주는 장력 증가는 거의 일정하므로,
+    이론상 센트/도 ∝ 1/f^2 이다. 실측에서도 log-log 기울기가 -1.7 근처로 나온다.
+    따라서 전 구간 평균을 쓰면 안 되고 목표 지점의 값을 뽑아야 한다.
+    실제 조율은 목표 ±30센트 안에서만 일어나므로 그 지점에서는 상수로 써도 된다.
+
+    반환: (값, 방법). 구간이 부족하거나 주파수 범위가 좁으면 단순 평균으로 후퇴한다.
+    """
+    f = np.array([x[0] for x in segs], dtype=float)
+    v = np.array([x[1] for x in segs], dtype=float)
+    span = 1200.0 * np.log2(f.max() / f.min()) if len(f) > 1 else 0.0
+    if len(segs) >= 4 and span > 80 and v.min() > 0:
+        slope, icept = np.polyfit(np.log(f), np.log(v), 1)
+        return float(np.exp(icept + slope * np.log(target))), f"회귀(기울기 {slope:.2f})"
+    near = np.abs(1200.0 * np.log2(f / target)) < 80
+    if near.sum() >= 2:
+        return float(v[near].mean()), f"목표 ±80센트 구간 평균 (n={int(near.sum())})"
+    return float(v.mean()), "전 구간 평균 (주파수 범위가 좁음)"
 
 
 def run_backlash(rec, args, name, target):
@@ -351,38 +386,47 @@ def main():
     elif args.min_angle:
         out["최소유효각도_도"] = run_min_angle(rec, args, name, target)
     else:
-        rounds = run_sweep(rec, args, name, target)
+        rounds = run_sweep(rec, args, name, target, out)
         if not rounds:
             print("\n쓸 수 있는 회차가 없습니다.")
             sys.exit(1)
-        slopes = fit_all(rounds)
-        mean = float(slopes.mean())
-        dev = float((slopes.max() - slopes.min()) / abs(mean) * 100) if mean else 0.0
-        out["회차별_센트per도"] = [round(v, 4) for v in slopes]
-        out["센트per도"] = round(mean, 4)
-        out["편차_퍼센트"] = round(dev, 1)
-        out["점"] = [[[round(d, 1), round(h, 4)] for d, h in pts] for pts in rounds]
+
+        segs = all_segments(rounds)
+        v = np.array([x[1] for x in segs])
+        at_target, how = value_at_target(segs, target)
+        scatter = (v.max() - v.min()) / v.mean() * 100
+
+        out["구간"] = [[round(f, 3), round(c, 4)] for f, c in segs]
+        out["센트per도_목표지점"] = round(at_target, 4)
+        out["산출방법"] = how
+        out["구간_최소"] = round(float(v.min()), 4)
+        out["구간_최대"] = round(float(v.max()), 4)
+        out["구간_흩어짐_퍼센트"] = round(float(scatter), 1)
+        out["k_deg_per_cent"] = round(1.0 / at_target, 4)
 
         print(f"\n{'=' * 64}")
         print(f"최종 — {args.string}번 줄 {name}")
         print(f"{'=' * 64}")
-        for i, v in enumerate(slopes, 1):
-            print(f"  {i}회차  {v:+.4f} 센트/도")
-        print(f"  평균   {mean:+.4f} 센트/도   회차 편차 {dev:.0f}%")
-        if dev > 20:
-            print("  ⚠ 편차 20% 초과 — 방향을 섞어 돌렸거나 대기 시간을 안 지켰을 수 있습니다")
+        print(f"  구간 {len(segs)}개  범위 {v.min():.3f} ~ {v.max():.3f} 센트/도"
+              f"  (흩어짐 {scatter:.0f}%)")
         print()
-        print("  서버가 쓸 값 (tuning_logic.peg_angle 의 k):")
-        print(f"    k = {1.0 / mean:.3f} deg/cent   (= 1 / {mean:.4f})")
-        print(f"    예) 15센트 틀어지면 {15.0 / mean:.0f}도 돌린다")
+        print("  센트/도는 상수가 아닙니다. 장력이 높을수록 작아집니다.")
+        print(f"  목표 {target:.2f} Hz 지점의 값을 씁니다 — {how}")
+        print()
+        print(f"  ★ {at_target:.3f} 센트/도   →   k = {1.0 / at_target:.3f} deg/cent")
+        print(f"     예) 15센트 틀어지면 {15.0 * (1.0 / at_target):.0f}도 돌린다")
+        if scatter > 40:
+            print()
+            print("  ⚠ 구간 흩어짐이 큽니다. 장력 의존성 외에 다른 원인이 섞였을 수 있습니다:")
+            print("     방향을 섞어 돌림 / 대기 시간 부족 / 굵은 줄이 너트에 걸렸다 풀림")
+            print("     통합 첫 시도용으로는 쓸 수 있지만 로봇으로 재측정할 것")
         print()
         print("  정동휘에게 넘길 형식:")
-        print(f"    {args.string}번 {name}   {mean:.3f} 센트/도  "
-              f"({len(slopes)}회 평균, 편차 ±{dev:.0f}%)")
+        print(f"    {args.string}번 {name}   {at_target:.3f} 센트/도 (목표 지점)  "
+              f"k = {1.0 / at_target:.3f}")
 
+    save(out, args.save)
     if args.save:
-        with open(args.save, "w", encoding="utf-8") as f:
-            json.dump(out, f, ensure_ascii=False, indent=2)
         print(f"\n저장: {args.save}")
 
 
