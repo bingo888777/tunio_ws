@@ -1,5 +1,6 @@
 """
 조율 판단 로직 (rclpy 비의존 순수 함수 모음).
+
 task_manager가 이 함수들을 호출한다. 단위 테스트가 쉽도록 분리.
 
 열거값은 정의를 중복하지 않고 tunio_interfaces 메시지에서 직접 가져온다.
@@ -11,16 +12,16 @@ from tunio_interfaces.msg import StringResult, TuningState
 
 # 목표 주파수 (A4=440, 12평균율). 기획서 2.2
 TARGETS = {
-    6: ("E2", 82.4069),
-    5: ("A2", 110.0000),
-    2: ("B3", 246.9417),
-    1: ("E4", 329.6276),
+    6: ('E2', 82.4069),
+    5: ('A2', 110.0000),
+    2: ('B3', 246.9417),
+    1: ('E4', 329.6276),
 }
 STRING_ORDER = [6, 5, 2, 1]
 
 
 def error_cents(measured_hz: float, target_hz: float) -> float:
-    """센트 오차 = 1200 * log2(측정/목표)"""
+    """센트 오차 = 1200 * log2(측정/목표)."""
     return 1200.0 * math.log2(measured_hz / target_hz)
 
 
