@@ -197,7 +197,9 @@ def run_sweep(rec, args, name, target, out=None):
                 print(f"  ⚠ 목표보다 {over:.0f}센트 높습니다. 줄 보호를 위해 중단합니다")
                 break
 
-        if len(pts) >= 3:
+        # 구간 1개(측정점 2개)도 유효한 데이터다. --steps 1 로 큰 각도를
+        # 한 번만 돌리는 방식은 중간 지점을 눈대중할 필요가 없어 오히려 정확하다.
+        if len(pts) >= 2:
             rounds.append(pts)
             report_round(pts)
             # 회차마다 저장한다. 중간에 끊어도 여기까지는 남는다
@@ -207,7 +209,7 @@ def run_sweep(rec, args, name, target, out=None):
                 if args.save:
                     print(f"  (여기까지 {args.save} 에 저장됨)")
         else:
-            print("  측정점이 부족해 이 회차는 버립니다")
+            print("  측정점이 2개 미만이라 이 회차는 버립니다")
     return rounds
 
 
@@ -222,6 +224,10 @@ def report_round(pts):
         print(f"    {a_deg:5.0f}→{b_deg:5.0f}도  {c:+7.2f}센트  {c / d:+.4f} 센트/도")
     arr = np.array(per)
     m = arr.mean()
+    if len(arr) < 2:
+        print(f"    {m:+.4f} 센트/도 (구간이 1개라 회차 안에서는 편차를 못 본다. "
+              f"회차끼리 비교해 판단한다)")
+        return
     dev = (arr.max() - arr.min()) / abs(m) * 100 if m else float("inf")
     print(f"    평균 {m:+.4f} 센트/도, 구간 편차 {dev:.0f}%", end="")
     print("  ⚠ 20% 초과 — 이 회차는 버리는 게 좋습니다" if dev > 20 else "  (양호)")
