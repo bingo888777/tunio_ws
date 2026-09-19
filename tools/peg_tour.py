@@ -119,18 +119,10 @@ def main():
         peg = points.peg(n)
         if peg.sol is not None:
             return peg.sol, f"yaml 에 적힌 값 {peg.sol}"
-        cands = []
-        for s in range(8):
-            try:
-                j = list(ikin(posx(list(task)), s))
-            except Exception:                           # noqa: B902
-                continue
-            if j and len(j) >= 6 and not all(abs(v) < 1e-9 for v in j):
-                cands.append((s, j))
-        best = arm_pose.pick(cands, route_j1)
-        if best is None:
+        got = arm_pose.choose(lambda t: ikin(posx(list(task)), t), route_j1)
+        if got is None:
             raise RuntimeError(f"{n}번은 쓸 만한 팔 모양이 없다. sol_check.py 로 보라")
-        sol, _, casing, _ = best
+        sol, _, casing = got
         return sol, f"자동 선택 {sol} (손목 케이싱 X {casing[0]:.0f}mm)"
 
     notes = []

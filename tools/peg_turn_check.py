@@ -120,9 +120,23 @@ def main():
     node = rclpy.create_node("tunio_turn_check", namespace=args.id)
     DR_init.__dsr__node = node
 
+    from tunio_robot import arm_pose
     from tunio_robot import motion_primitives as MP
     MP.connect(points.robot, points.gripper)
-    from DSR_ROBOT2 import get_current_posj, get_external_torque
+    from DR_common2 import posx
+    from DSR_ROBOT2 import get_current_posj, get_external_torque, ikin
+
+    # 팔 모양을 안 고르면 경유지(특이점)의 모호한 현재 자세를 따라가 매번 달라진다
+    sol = peg.sol
+    if sol is None:
+        got = arm_pose.choose(lambda t: ikin(posx(back), t), route.joints[0])
+        if got is None:
+            raise SystemExit("쓸 만한 팔 모양이 없다. tools/sol_check.py 로 보라")
+        sol, _, casing = got
+        print(f"  팔 모양   자동 선택 {sol} (손목 케이싱 X {casing[0]:.0f}mm)")
+        print(f"            pegs.{args.peg}.sol 에 적어 두면 매번 같은 길로 간다")
+    else:
+        print(f"  팔 모양   yaml 에 적힌 값 {sol}")
 
     rows = []
     heard = ""
@@ -132,7 +146,7 @@ def main():
         confirm("경유지로 올라간다. 팔이 크게 움직인다.")
         MP.goto_route(route, motion)
         confirm("접근점으로 간다.")
-        MP._movejx(back, motion, sol=peg.sol)
+        MP._movejx(back, motion, sol=sol)
         confirm("페그 앞까지 직선으로 들어간다.")
         MP._movel(list(peg.task), motion)
 

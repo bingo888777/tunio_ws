@@ -76,3 +76,42 @@ def test_팔모양_고르기가_1번에서_sol2를_고른다():
     assert problems(cands[6][1], 90.0)
     # 실제로 쓰던 sol 3 자체는 '못 쓸 이유'는 없다. 손목이 더 뻗을 뿐이다
     assert not problems(cands[3][1], 90.0)
+
+
+def test_gather_가_못_푸는_해를_걸러낸다():
+    """역기구학은 닿지 않는 자세에 전부 0 이나 예외를 낸다. 그걸 해로 세면 안 된다."""
+    from tunio_robot.arm_pose import gather
+
+    def fake(sol):
+        if sol in (0, 1):
+            raise RuntimeError("못 푼다")
+        if sol == 2:
+            return [0.0] * 6
+        return [float(sol), 54.5, 80.5, -45.1, 125.1, 149.9]
+
+    got = gather(fake)
+    assert [s for s, _ in got] == [3, 4, 5, 6, 7]
+
+
+def test_choose_가_실측_8개에서_sol2를_고른다():
+    """arm_pose.choose 는 gather + pick 이다. 도구 셋이 같은 값을 쓰게 하려고 뺐다."""
+    from tunio_robot.arm_pose import choose
+    table = {
+        0: [54.95, 129.53, -80.70, -132.69, 127.88, 33.52],
+        1: [54.83, 129.57, -80.87, 47.28, -127.72, -146.58],
+        2: [55.01, 54.53, 80.52, -45.10, 125.08, 149.88],
+        3: [54.93, 54.49, 80.75, 134.83, -124.90, -30.04],
+        4: [-123.99, -129.63, 80.76, 46.16, 128.45, 32.90],
+        5: [-124.11, -129.67, 80.93, -133.88, -128.29, -147.20],
+        6: [-123.93, -54.44, -80.89, 136.14, 125.47, 150.84],
+        7: [-124.01, -54.40, -81.12, -43.93, -125.29, -29.08],
+    }
+    got = choose(lambda s: table[s], route_j1=90.0)
+    assert got is not None and got[0] == 2
+
+
+def test_choose_는_쓸_만한_게_없으면_None():
+    from tunio_robot.arm_pose import choose
+    # 전부 어깨팔꿈치가 베이스 아래로 가는 해만 준다
+    bad = [54.95, 129.53, -80.70, -132.69, 127.88, 33.52]
+    assert choose(lambda s: bad, route_j1=90.0) is None

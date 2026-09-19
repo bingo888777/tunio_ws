@@ -111,8 +111,24 @@ def main():
     node = rclpy.create_node("tunio_transit_check", namespace=args.id)
     DR_init.__dsr__node = node
 
+    from tunio_robot import arm_pose
     from tunio_robot import motion_primitives as MP
     MP.connect(points.robot, points.gripper)
+    from DR_common2 import posx
+    from DSR_ROBOT2 import ikin
+
+    def auto_sol(label, task, have):
+        if have is not None:
+            return have
+        got = arm_pose.choose(lambda t: ikin(posx(task), t), route.joints[0])
+        if got is None:
+            raise SystemExit(f"{label} 은 쓸 만한 팔 모양이 없다. sol_check.py 로 보라")
+        print(f"  {label} 팔 모양 자동 선택 {got[0]} "
+              f"(손목 케이싱 X {got[2][0]:.0f}mm)")
+        return got[0]
+
+    src_sol = auto_sol(f"{args.src}번", src_back, src_sol)
+    dst_sol = auto_sol(f"{args.dst}번", dst_back, dst_sol)
     from DSR_ROBOT2 import (get_current_posj, get_current_posx,
                             get_current_solution_space)
     from tunio_robot.kinematics import fk
