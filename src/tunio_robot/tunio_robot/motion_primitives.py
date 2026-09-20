@@ -25,6 +25,7 @@ TODO(정묵·성현):
   - set_tcp — 피크를 든 상태와 페그를 잡은 상태의 TCP 가 다르다.
     티칭 펜던트에 각각 등록해야 한다
 """
+import time
 
 from tunio_robot import teach_points as TP
 
@@ -226,6 +227,72 @@ def pluck_string(pose, motion, standby=None):
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
     if standby is not None:
         _movej(standby.joints, motion)                  # 기타 위 대기
+
+
+def _pick_points(holder, motion):
+    """거치대 접촉점과 그 위 대기점(Base +Z pick_up_mm). holder 는 작업 좌표(x)여야 한다."""
+    x = getattr(holder, "task", None)
+    if not x or len(x) != 6:
+        raise MotionError(f"{holder.name}: 거치대 자세는 x(Base posx 6개)로 적어야 한다. "
+                          "위에서 내려가려면 작업 좌표가 필요하다")
+    up_mm = float(motion.get("pick_up_mm", 50.0))
+    contact = list(x)
+    above = list(x)
+    above[2] += up_mm
+    return contact, above
+
+
+def pick_up(holder, motion, standby=None):
+    """
+    거치대에서 피크를 집는다 (성현 2026-09-20).
+
+    순서: 그리퍼 열기 → 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 닫기(프리셋)
+          → 거치대 위 → (standby 가 있으면) 기타 위 대기 자세
+
+    holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
+              없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
+              폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
+    파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
+
+    RG2.select() 의 settle_sec(기본 0.3초)만으로는 부족해 집자마자 들어 올리는 동작이
+    물리적으로 안 끝난 그리퍼를 밀고 올라갔다 (2026-09-20 실기). 그래서 집은 뒤
+    motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
+    """
+    _require_api()
+    contact, above = _pick_points(holder, motion)
+    preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
+    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
+    settle_sec = float(motion.get("pick_settle_sec", 1.0))
+
+    _release()                                          # 열고 간다
+    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    _movel_base(contact, v_fine, a_fine)                # 내려가서
+    _grip(preset)                                       # 집는다
+    time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
+    _movel_base(above, v_app, a_app)                    # 들어 올린다
+    if standby is not None:
+        _movej(standby.joints, motion)                  # 기타 위 대기
+
+
+def pick_return(holder, motion, home=None):
+    """
+    피크를 거치대에 돌려놓는다.
+
+    순서: 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 열기 → 거치대 위
+          → (home 이 있으면) 홈 자세
+    """
+    _require_api()
+    contact, above = _pick_points(holder, motion)
+    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
+
+    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    _movel_base(contact, v_fine, a_fine)                # 내려가서
+    _release()                                          # 놓는다
+    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다
+    if home is not None:
+        _movej(home.joints, motion)                     # 홈
 
 
 def _retract_depth_mm(delta):

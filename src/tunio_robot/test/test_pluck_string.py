@@ -121,3 +121,59 @@ def test_requires_connect(monkeypatch):
     monkeypatch.setattr(MP, "_api", None)
     with pytest.raises(MP.MotionError, match="connect"):
         MP.pluck_string(_pose_x(CONTACT), {})
+
+
+# ---------------------------------------------------------- 피크 집기·반환
+class FakeGripper:
+    def __init__(self):
+        self.calls = []
+
+    def select(self, name):
+        self.calls.append(name)
+
+
+@pytest.fixture
+def fake_gripper(monkeypatch):
+    g = FakeGripper()
+    monkeypatch.setattr(MP, "_gripper", g)
+    return g
+
+
+HOLDER = [684.64, -199.20, 175.72, 133.40, -174.14, -134.71]
+
+
+def test_pick_up_sequence(fake_api, fake_gripper):
+    holder = Pose("pick.holder", True, task=HOLDER)
+    holder.grip_preset = "peg"
+    standby = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_up(holder, {"pick_up_mm": 50.0}, standby=standby)
+
+    assert fake_gripper.calls == ["open", "peg"]            # 열고 → 잡는다
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movel", "movel", "movel", "movej"]    # 위 → 거치대 → 위 → 대기
+    above, contact, up, _ = fake_api.calls
+    assert above[1][2] == pytest.approx(HOLDER[2] + 50.0)
+    assert contact[1] == HOLDER
+    assert up[1] == above[1]
+
+
+def test_pick_return_sequence(fake_api, fake_gripper):
+    holder = Pose("pick.holder", True, task=HOLDER)
+    home = Pose("frames.home", True, joints=[0, 0, 90, 0, 90, 0])
+    MP.pick_return(holder, {}, home=home)
+
+    assert fake_gripper.calls == ["open"]                   # 놓기만 한다
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movel", "movel", "movel", "movej"]    # 위 → 거치대 → 위 → 홈
+    assert fake_api.calls[-1][1] == [0, 0, 90, 0, 90, 0]
+
+
+def test_pick_preset_defaults_to_close(fake_api, fake_gripper):
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
+    assert fake_gripper.calls == ["open", "close"]
+
+
+def test_pick_rejects_joint_only_holder(fake_api, fake_gripper):
+    with pytest.raises(MP.MotionError, match="x"):
+        MP.pick_up(Pose("pick.holder", True, joints=[0] * 6), {})
+    assert fake_api.calls == [] and fake_gripper.calls == []
