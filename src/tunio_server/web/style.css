@@ -456,8 +456,25 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   padding: 16px 14px 10px;
 }
 
-.guitar { width: 100%; }
-.guitar svg { width: 100%; height: auto; display: block; }
+/* 기타 그림은 배경으로 깔고 줄은 그 위에 SVG 로 얹는다. 일러스트에는 줄이
+   그려져 있지 않고(프렛만 있다) path 에 id 도 없어서, 그림 안의 줄을 골라
+   색을 바꾸는 방식은 쓸 수 없었다.
+
+   <img> 대신 배경을 쓴 이유: 그 파일이 안 읽혀도 줄은 그대로 뜬다.
+   비율은 guitar2.svg 의 viewBox(584.35 x 1513.5)에 맞춘다. */
+.guitar {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 584.35 / 1513.5;
+  background: url('guitar2.svg') center / contain no-repeat;
+  line-height: 0;
+}
+
+.guitar-overlay {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
 
 .guitar-cap {
   margin: 8px 0 0;
@@ -466,22 +483,32 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   color: var(--text-faint);
 }
 
-/* 기타 몸체 — 배경 구조물. 상태와 무관하게 늘 같은 색이다.
-   사람이 기타를 알아보는 건 바디 모양이라, 헤드스톡만 그리면 무슨 도형인지 모른다. */
-.gs-body    { fill: var(--peg-fill); stroke: var(--peg-stroke); stroke-width: 1.5; }
-.gs-hole    { fill: var(--bg); }
-.gs-rosette { fill: none; stroke: var(--peg-stroke); stroke-width: 1.5; opacity: .7; }
-.gs-bridge  { fill: var(--nut); }
-.gs-head    { fill: var(--peg-fill); stroke: var(--peg-stroke); stroke-width: 1.5; }
-.gs-neck    { fill: var(--bg-elev-2); stroke: var(--line); stroke-width: 1; }
-.gs-nut     { fill: var(--nut); }
 
 /* 줄 1개 = 페그 + 현 + 튜닝 키 + 라벨. 상태별로 색이 바뀐다. */
-.gs-line { stroke: var(--string); transition: stroke .25s, stroke-width .25s; }
+/* 넓은 투명 선. 가는 줄에도 마우스가 잘 닿게 한다 */
+.gs-hit { stroke: transparent; stroke-width: 14; fill: none; }
+
+/* 일러스트 위에 얹히므로 그림자를 줘서 어느 바탕에서도 떠 보이게 한다 */
+.gs-line {
+  fill: none;                 /* polyline 은 기본 fill 이 검정이라 꺼야 한다 */
+  stroke: var(--string);
+  transition: stroke .3s, stroke-width .3s;
+  filter: drop-shadow(0 0 1.5px rgba(0, 0, 0, .45));
+}
 .gs-peg  { fill: var(--peg-fill); stroke: var(--peg-stroke); transition: fill .25s, stroke .25s; }
 .gs-label, .gs-note { fill: var(--text-faint); transition: fill .25s; }
-.gs-label { font-size: 13px; font-weight: 700; }
-.gs-note  { font-size: 10.5px; }
+/* 페그 원 안의 줄 번호. 원 반지름 11 에 맞춘 크기다. */
+.gs-label { font-size: 12px; font-weight: 800; }
+
+/* 음이름. 줄 간격이 13 밖에 안 돼서 한 줄로 늘어놓으면 겹친다.
+   홀짝으로 두 단을 나눠 놓고, 어느 줄 것인지 짧은 선으로 이어 준다. */
+.gs-note  { font-size: 15px; font-weight: 600; }
+
+.gs-tick {
+  stroke: var(--text-faint);
+  stroke-width: 1;
+  opacity: .5;
+}
 
 /* 조율 대상이 아닌 줄 (4·3번) */
 .gstring.off .gs-line { stroke: var(--string-off); stroke-dasharray: 3 4; }
@@ -795,4 +822,49 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   font-size: 13px;
   color: var(--text);
   white-space: nowrap;
+}
+
+/* ═══════════════ 좌표 읽기 모드 (?coord=1) ═══════════════
+   일러스트를 바꿨을 때 줄 위치를 다시 잡으려고 둔 것이다. 평소에는 꺼져 있다. */
+
+.guitar.coord-on { cursor: crosshair; }
+
+.guitar.coord-on .gs-line,
+.guitar.coord-on .gs-peg,
+.guitar.coord-on .gs-label { opacity: .25; }
+
+.coordbox {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 50;
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 2px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px var(--shadow);
+  font-size: 13px;
+  line-height: 1.7;
+  max-width: 260px;
+}
+
+.coordbox code {
+  font-family: var(--mono);
+  background: var(--tint-run);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.coordbox .now { font-family: var(--mono); color: var(--text-dim); font-size: 12px; }
+.coordbox .hint { color: var(--text-faint); font-size: 11.5px; }
+.coordbox hr { border: none; border-top: 1px solid var(--line); margin: 8px 0; }
+
+.coordbox .ask { margin: 6px 0; font-weight: 600; color: var(--accent); }
+.coordbox .done { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); }
+.coordbox .out { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; }
+.coordbox .undo {
+  margin-top: 6px; padding: 4px 8px; font-size: 12px; cursor: pointer;
+  background: var(--bg-elev-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
 }

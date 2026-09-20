@@ -30,6 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import queue
+import re
 import threading
 from urllib.parse import parse_qs, urlparse
 import webbrowser
@@ -97,6 +98,9 @@ DEFAULT_SETTINGS = {
     'onset_timeout_sec': 10.0,
 }
 SETTING_FIELDS = tuple(DEFAULT_SETTINGS)
+
+# 내보낼 정적 파일. 하위 디렉터리와 '..' 를 허용하지 않는다.
+STATIC_RE = re.compile(r'^/[\w.-]+\.(?:css|js|svg|png|webp)$')
 
 
 def _stamp_to_float(stamp):
@@ -305,7 +309,10 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, name):
         types = {'.html': 'text/html; charset=utf-8',
                  '.css': 'text/css; charset=utf-8',
-                 '.js': 'application/javascript; charset=utf-8'}
+                 '.js': 'application/javascript; charset=utf-8',
+                 '.svg': 'image/svg+xml; charset=utf-8',
+                 '.png': 'image/png',
+                 '.webp': 'image/webp'}
         path = (self.web_dir / name).resolve()
         if self.web_dir not in path.parents or not path.is_file():
             self._error(404, '%s 없음' % name)
@@ -326,7 +333,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ('/', '/index.html'):
                 self._static('index.html')
-            elif path in ('/style.css', '/app.js'):
+            elif STATIC_RE.match(path):
+                # 파일 이름만 받는다. 하위 경로·상위 이동(..)은 정규식에서 걸린다.
+                # 실제 경로가 web_dir 안인지는 _static 이 한 번 더 확인한다.
                 self._static(path.lstrip('/'))
             elif path == '/api/state':
                 self._json({'state': self.node.latest_state()})

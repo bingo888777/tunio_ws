@@ -23,5 +23,3 @@ __pycache__/
 .claude/
 
 
-# 검토 중인 일러스트 (쓸지 미정)
-src/tunio_server/web/openclipart-*.svg

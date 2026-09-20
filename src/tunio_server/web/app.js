@@ -180,76 +180,59 @@ function centsText(v) {
 
 // 기타 헤드스톡을 그린다. 줄 하나가 <g class="gstring">, 상태는 class 로만 바꾼다.
 function buildGuitar() {
-  // 기타 전체를 옆으로 눕혀 그린다. 헤드스톡만 그리면 기타를 모르는 사람은 무슨
-  // 도형인지 알아보지 못한다. 사람이 기타를 알아보는 건 바디 모양이다.
+  // 기타 그림은 CSS 배경(guitar2.svg)으로 깔고, 줄 6개만 SVG 로 얹는다.
   //
-  //   [헤드] ─ 넥(줄 6개) ─ [바디]
-  //     왼쪽                  오른쪽
-  const W = 420, H = 210;
-  const MID = 104;                           // 줄이 모이는 세로 중심
-  const HEAD_X = 8, HEAD_W = 54;             // 헤드스톡
-  const NUT_X = HEAD_X + HEAD_W;             // 너트
-  const BODY_CX = 330, BODY_CY = MID;        // 바디 중심
-  const NECK_X2 = 262;                       // 넥이 바디에 붙는 곳
-  const SPREAD = 33;                         // 넥에서 줄이 퍼지는 반폭
-  const SPAN = 62;                           // 헤드에서 페그가 퍼지는 반폭
+  // 줄 하나는 꺾인 선이다 — 페그에서 너트로 비스듬히 들어와, 너트부터
+  // 브릿지까지 일자로 내려간다. 실제 기타가 그렇게 감긴다.
+  //
+  //   페그(x, y)
+  //      \
+  //       \  헤드 구간 (비스듬히)
+  //        \
+  //   너트 ●────────  여기서부터 수직
+  //        │
+  //        │  지판 구간
+  //        │
+  //  브릿지 ●
+  //
+  // 좌표는 2026-09-20 화면에서 직접 찍어 맞춘 값이다 (?coord=1 모드).
+  // 페그는 헤드 좌우로 갈려 균등 간격이 아니라 6개를 따로 둔다.
+  const VB_W = 584.35, VB_H = 1513.5;
+  const X0 = 259.35, X_STEP = 13.13;     // 너트~브릿지 구간의 x
+  const NUT_Y = 259.9, BRIDGE_Y = 1283.3;
 
-  const byN = {};
-  FRETBOARD.forEach((st) => { byN[st.n] = st; });
+  // 줄 순서(6→1)대로. 6·5·4 는 헤드 왼쪽, 3·2·1 은 오른쪽에 감긴다.
+  const PEGS = {
+    6: [260.4, 186.7], 5: [259.4, 141.5], 4: [256.1, 93.1],
+    3: [325.0, 93.1], 2: [322.8, 140.4], 1: [320.7, 186.7],
+  };
 
-  // 줄 6개. 위에서부터 6→1. 페그는 헤드 좌우로 3개씩 나뉜다.
+  // 줄 번호는 줄이 감기는 축 위가 아니라 그 바깥에 놓는다. 축 위에 두면
+  // 줄·원·숫자가 한 자리에 겹쳐 읽기 어렵다. 헤드 중심에서 멀어지는 쪽으로 민다.
+  const HEAD_CX = (PEGS[6][0] + PEGS[1][0]) / 2;   // 헤드 좌우 중심
+  const LABEL_OUT = 26;                             // 바깥으로 미는 거리
+
   const parts = FRETBOARD.map((st, i) => {
-    const t = i / (FRETBOARD.length - 1);            // 0..1
-    const y = MID - SPREAD + t * SPREAD * 2;         // 넥 위 줄 y
-    const side = i < 3 ? -1 : 1;                     // 6·5·4 위, 3·2·1 아래
-    const row = i < 3 ? i : 5 - i;
-    const py = MID + side * (18 + row * 20);         // 페그 y
-    const px = HEAD_X + 14 + row * 13;               // 페그 x
+    const x = X0 + X_STEP * i;           // 지판 위 x
+    const [px, py] = PEGS[st.n];         // 줄이 감기는 축
+    const lx = px + (px < HEAD_CX ? -LABEL_OUT : LABEL_OUT);   // 번호는 바깥으로
+    const w = st.thick * 1.1;
 
     return `<g class="gstring" data-n="${st.n}">
-      <line class="gs-line" x1="${NUT_X}" y1="${y}" x2="${BODY_CX - 4}" y2="${y}"
-            stroke-width="${st.thick}" stroke-linecap="round"></line>
-      <line class="gs-line" x1="${px}" y1="${py}" x2="${NUT_X}" y2="${y}"
-            stroke-width="1.4"></line>
-      <circle class="gs-peg" cx="${px}" cy="${py}" r="8" stroke-width="2"></circle>
-      <text class="gs-label" x="${px}" y="${py + 4}" text-anchor="middle">${st.n}</text>
-      <text class="gs-note" x="${NECK_X2 - 4}" y="${y - 5}" text-anchor="end">${st.name}</text>
+      <polyline class="gs-hit" points="${px},${py} ${x},${NUT_Y} ${x},${BRIDGE_Y}"></polyline>
+      <polyline class="gs-line" points="${px},${py} ${x},${NUT_Y} ${x},${BRIDGE_Y}"
+                stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <circle class="gs-peg" cx="${lx}" cy="${py}" r="11" stroke-width="2"></circle>
+      <text class="gs-label" x="${lx}" y="${py + 4.5}" text-anchor="middle">${st.n}</text>
+      <text class="gs-note" x="${x}" y="${BRIDGE_Y + (i % 2 ? 48 : 26)}"
+            text-anchor="middle">${st.name}</text>
+      <line class="gs-tick" x1="${x}" y1="${BRIDGE_Y + 4}" x2="${x}"
+            y2="${BRIDGE_Y + (i % 2 ? 36 : 14)}"></line>
     </g>`;
   }).join('');
 
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="기타와 줄 상태">
-    <!-- 바디 — 통기타 윤곽. 위아래 곡선이 잘록하게 들어간다 -->
-    <path class="gs-body" d="
-      M ${NECK_X2} ${MID - 40}
-      C ${NECK_X2 + 18} ${MID - 44}, ${BODY_CX - 42} ${MID - 76}, ${BODY_CX - 14} ${MID - 74}
-      C ${BODY_CX + 26} ${MID - 72}, ${BODY_CX + 60} ${MID - 44}, ${BODY_CX + 62} ${MID}
-      C ${BODY_CX + 60} ${MID + 44}, ${BODY_CX + 26} ${MID + 72}, ${BODY_CX - 14} ${MID + 74}
-      C ${BODY_CX - 42} ${MID + 76}, ${NECK_X2 + 18} ${MID + 44}, ${NECK_X2} ${MID + 40}
-      Z"></path>
-    <!-- 사운드홀 -->
-    <circle class="gs-hole" cx="${BODY_CX - 16}" cy="${BODY_CY}" r="25"></circle>
-    <circle class="gs-rosette" cx="${BODY_CX - 16}" cy="${BODY_CY}" r="31"></circle>
-    <!-- 브릿지 -->
-    <rect class="gs-bridge" x="${BODY_CX + 24}" y="${MID - 22}" width="13" height="44" rx="3"></rect>
-    <!-- 넥 -->
-    <path class="gs-neck" d="
-      M ${NUT_X} ${MID - SPREAD - 7}
-      L ${NECK_X2 + 4} ${MID - 42}
-      L ${NECK_X2 + 4} ${MID + 42}
-      L ${NUT_X} ${MID + SPREAD + 7} Z"></path>
-    <!-- 헤드스톡 -->
-    <path class="gs-head" d="
-      M ${NUT_X} ${MID - SPREAD - 9}
-      L ${HEAD_X + 10} ${MID - 62}
-      Q ${HEAD_X - 2} ${MID - 64}, ${HEAD_X} ${MID - 52}
-      L ${HEAD_X} ${MID + 52}
-      Q ${HEAD_X - 2} ${MID + 64}, ${HEAD_X + 10} ${MID + 62}
-      L ${NUT_X} ${MID + SPREAD + 9} Z"></path>
-    <!-- 너트 -->
-    <rect class="gs-nut" x="${NUT_X - 3}" y="${MID - SPREAD - 8}"
-          width="6" height="${(SPREAD + 8) * 2}" rx="2"></rect>
-    ${parts}
-  </svg>`;
+  return `<svg class="guitar-overlay" viewBox="0 0 ${VB_W} ${VB_H}"
+         role="img" aria-label="기타 줄 상태">${parts}</svg>`;
 }
 
 // 대상 4줄(6·5·2·1)의 진행을 점으로 보여 준다. 기타 그림만으로는
@@ -265,7 +248,7 @@ function renderProgress(state) {
   }
 
   let done = 0;
-  STRINGS.forEach(({ n }, i) => {
+  STRINGS.forEach(({ n, name }, i) => {
     const dot = wrap.children[i];
     const r = byNumber.get(n);
     let cls = 'pdot';
@@ -273,7 +256,7 @@ function renderProgress(state) {
     else if (r && r.result === 1) cls += ' ok';
     else if (r && r.result === 2) cls += ' bad';
     dot.className = cls;
-    dot.title = `${n}번 ${stringName(n).split(' ')[1] || ''}`;
+    dot.title = `${n}번 ${name}`;
     if (r && r.result !== 0) done += 1;
   });
 
@@ -727,7 +710,94 @@ function initTheme() {
   });
 }
 
+// ?coord=1 로 열면 기타 그림 위에서 좌표를 찍어 읽을 수 있다.
+// 일러스트를 바꿨을 때 줄 위치를 다시 잡으려고 둔 것이다. 평소에는 꺼져 있다.
+//
+// 찍는 순서: 페그 6개(6→1) → 너트 → 브릿지.
+// 페그는 헤드 좌우로 갈려 있어 균등 간격이 아니므로 6개를 다 찍는다.
+// 너트와 브릿지는 6줄 공통이라 y 만 쓴다(x 는 클릭해도 무시).
+const COORD_STEPS = [
+  { key: 'peg6', label: '6번 페그 (제일 굵은 줄이 감긴 곳)' },
+  { key: 'peg5', label: '5번 페그' },
+  { key: 'peg4', label: '4번 페그' },
+  { key: 'peg3', label: '3번 페그' },
+  { key: 'peg2', label: '2번 페그' },
+  { key: 'peg1', label: '1번 페그 (제일 가는 줄)' },
+  { key: 'nut', label: '너트 — 줄이 지판으로 들어가기 시작하는 가로선' },
+  { key: 'bridge', label: '브릿지 — 줄이 끝나는 곳' },
+];
+
+function initCoordMode() {
+  if (new URLSearchParams(location.search).get('coord') !== '1') return;
+
+  const wrap = $('guitar');
+  wrap.classList.add('coord-on');
+
+  const box = document.createElement('div');
+  box.className = 'coordbox';
+  document.body.appendChild(box);
+
+  const got = [];
+
+  // 화면 픽셀 -> SVG viewBox 좌표
+  const toSvg = (ev) => {
+    const svg = wrap.querySelector('.guitar-overlay');
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX;
+    pt.y = ev.clientY;
+    return pt.matrixTransform(svg.getScreenCTM().inverse());
+  };
+
+  const draw = () => {
+    const step = COORD_STEPS[got.length];
+    if (step) {
+      const done = got.map((g, i) =>
+        `<div class="done">${COORD_STEPS[i].key} = ${g.x.toFixed(1)}, ${g.y.toFixed(1)}</div>`
+      ).join('');
+      box.innerHTML =
+        `<b>좌표 읽기 ${got.length + 1} / ${COORD_STEPS.length}</b>` +
+        `<div class="ask">${step.label}<br>를 클릭하세요</div>` +
+        done +
+        `<hr><span class="now"></span>` +
+        (got.length ? '<br><button class="undo">← 하나 취소</button>' : '');
+    } else {
+      const g = Object.fromEntries(got.map((v, i) => [COORD_STEPS[i].key, v]));
+      const pegs = [6, 5, 4, 3, 2, 1]
+        .map((n) => `  ${n}번: [${g['peg' + n].x.toFixed(1)}, ${g['peg' + n].y.toFixed(1)}]`)
+        .join('<br>');
+      box.innerHTML =
+        `<b>다 읽었습니다</b><hr>` +
+        `<div class="out">페그<br>${pegs}<br><br>` +
+        `너트 Y = ${g.nut.y.toFixed(1)}<br>` +
+        `브릿지 Y = ${g.bridge.y.toFixed(1)}</div>` +
+        `<hr><span class="hint">위 숫자를 그대로 알려주세요.<br>` +
+        `다시 하려면 새로고침</span>`;
+      wrap.classList.remove('coord-on');
+    }
+    const now = box.querySelector('.now');
+    if (now) now.textContent = box.dataset.now || '';
+    const undo = box.querySelector('.undo');
+    if (undo) undo.addEventListener('click', (e) => { e.stopPropagation(); got.pop(); draw(); });
+  };
+
+  wrap.addEventListener('mousemove', (ev) => {
+    const p = toSvg(ev);
+    box.dataset.now = `X ${p.x.toFixed(1)}   Y ${p.y.toFixed(1)}`;
+    const now = box.querySelector('.now');
+    if (now) now.textContent = box.dataset.now;
+  });
+
+  wrap.addEventListener('click', (ev) => {
+    if (got.length >= COORD_STEPS.length) return;
+    got.push(toSvg(ev));
+    draw();
+  });
+
+  draw();
+}
+
 function init() {
+  initCoordMode();
   initTheme();
   initTabs();
   $('btn-start').addEventListener('click', () => sendCommand('start'));
