@@ -172,7 +172,9 @@ def test_peg_joint_범위를_벗어나면_걸린다():
 # ---------------------------------------------------------- 피크 거치대
 def test_피크_거치대도_교시_전에는_거부한다():
     """놓친 피크는 비전이 없어 되찾을 수 없다. 좌표 없이 움직이면 안 된다."""
-    points = tp.TeachPoints(_data())
+    d = _data()
+    d["pick"]["holder"]["taught"] = False      # 저장소 파일은 교시가 끝났을 수 있다. 명시적으로 내린다
+    points = tp.TeachPoints(d)
     with pytest.raises(tp.TeachPointsError, match="교시"):
         points.pick_holder()
 

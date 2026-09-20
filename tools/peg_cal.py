@@ -18,6 +18,15 @@
     python3 tools/peg_cal.py --string 1 --step 45      # 고음현은 작게
     python3 tools/peg_cal.py --string 6 --backlash     # 백래시 양
     python3 tools/peg_cal.py --string 6 --min-angle    # 최소 유효 각도
+    python3 tools/peg_cal.py --string 6 --min-angle --robot   # 로봇이 돌린다
+
+로봇 모드(--robot):
+    사람에게 각도를 묻지 않고 /robot/adjust_peg 로 로봇이 돌린다. 사람은 줄만 뜯는다.
+    손으로 못 돌리는 1도 이하를 재려면 이 모드가 필요하다.
+    robot_controller 가 떠 있어야 한다:
+        ros2 run tunio_robot robot_controller
+    로봇 없이 흐름만 보려면 --ros-args -p dry_run:=true 로 띄우고,
+    소리까지 없이 보려면 --robot --simulate 2.2 처럼 같이 준다.
     python3 tools/peg_cal.py --string 6 --simulate 0.2 # 기타 없이 흐름만 확인
 
 측정 원칙 (가이드 2절, 지키지 않으면 값이 튄다):
@@ -143,6 +152,106 @@ def ask_angle(default):
 
 
 # ---------------------------------------------------------------
+# 페그를 돌리는 주체 — 사람 손 / 로봇 / 모의
+# ---------------------------------------------------------------
+_robot = None       # (node, action client) 쌍. --robot 일 때만 만든다
+
+
+def robot_connect(timeout=10.0):
+    """/robot/adjust_peg 에 붙는다. robot_controller 가 떠 있어야 한다."""
+    global _robot
+    import rclpy
+    from rclpy.action import ActionClient
+    from tunio_interfaces.action import AdjustPeg
+
+    rclpy.init()
+    node = rclpy.create_node("peg_cal_client")
+    cli = ActionClient(node, AdjustPeg, "/robot/adjust_peg")
+    print("  /robot/adjust_peg 를 찾는 중...")
+    if not cli.wait_for_server(timeout_sec=timeout):
+        node.destroy_node()
+        rclpy.shutdown()
+        raise RuntimeError(
+            "/robot/adjust_peg 를 못 찾았습니다. robot_controller 를 띄우세요:\n"
+            "    ros2 run tunio_robot robot_controller\n"
+            "  로봇 없이 흐름만 보려면 --ros-args -p dry_run:=true 를 붙이세요")
+    print("  연결됨")
+    _robot = (node, cli)
+
+
+def robot_shutdown():
+    global _robot
+    if _robot is None:
+        return
+    import rclpy
+    node, _ = _robot
+    node.destroy_node()
+    rclpy.shutdown()
+    _robot = None
+
+
+def robot_turn(string_number, deg, direction, timeout=60.0):
+    """
+    로봇에게 페그를 돌리게 한다. 성공하면 돌린 각도, 실패하면 None.
+
+    adjust_peg 는 매번 '접근 -> 파지 -> 회전 -> 놓기 -> 후퇴' 를 다 한다.
+    사람이 페그를 잡은 채 여러 번 돌리는 것과 다르다. 그런데 실제 조율 루프도
+    조절 1회마다 같은 왕복을 하므로, 이렇게 재는 값이 실제로 쓰일 값이다.
+    매번 다시 무는 데서 오는 흩어짐도 그대로 포함된다.
+    """
+    import rclpy
+    from tunio_interfaces.action import AdjustPeg
+
+    node, cli = _robot
+    goal = AdjustPeg.Goal()
+    goal.string_number = int(string_number)
+    goal.direction = int(direction)
+    goal.angle_deg = float(abs(deg))
+    arrow = "조임" if direction > 0 else "풀림"
+    print(f"      로봇에 요청: {string_number}번 페그 {arrow} {abs(deg):.1f}도 ... ",
+          end="", flush=True)
+
+    send = cli.send_goal_async(goal)
+    rclpy.spin_until_future_complete(node, send, timeout_sec=timeout)
+    if not send.done():
+        print("응답 없음")
+        return None
+    handle = send.result()
+    if handle is None or not handle.accepted:
+        print("거부됨 (로봇이 다른 동작 중일 수 있습니다)")
+        return None
+
+    fut = handle.get_result_async()
+    rclpy.spin_until_future_complete(node, fut, timeout_sec=timeout)
+    if not fut.done():
+        print(f"{timeout:.0f}초 안에 안 끝남")
+        return None
+    res = fut.result().result
+    if not res.success:
+        print(f"실패 — {res.message}")
+        return None
+    print("완료")
+    return float(abs(deg))
+
+
+def turn(args, deg, direction=1):
+    """
+    페그를 deg 만큼 돌리고, 실제로 돌아간 각도를 돌려준다.
+
+    --robot 이면 로봇에 시키고, 모의면 그대로, 아니면 사람에게 물어본다.
+    실패하면 None.
+
+    --robot 과 --simulate 를 같이 주면 회전은 실제로 로봇이 하고 소리만 모의한다.
+    기타 없이 로봇 동작만 확인할 때 쓴다.
+    """
+    if args.robot:
+        return robot_turn(args.string, deg, direction, args.robot_timeout)
+    if args.sim is not None:
+        return deg
+    return ask_angle(deg)
+
+
+# ---------------------------------------------------------------
 # 모드
 # ---------------------------------------------------------------
 def save(out, path):
@@ -178,7 +287,10 @@ def run_sweep(rec, args, name, target, out=None):
         for step in range(1, args.steps + 1):
             print(f"\n  [{step}/{args.steps}] 누적 {total:.0f}도 → "
                   f"{total + args.step:.0f}도")
-            deg = ask_angle(args.step) if args.sim is None else args.step
+            deg = turn(args, args.step, direction=1)
+            if deg is None:
+                print("  회전에 실패해 이 회차를 중단합니다")
+                break
             total += deg
             if args.sim is not None:
                 sim_hz = f0 * 2 ** (total * args.sim / 1200)
@@ -285,7 +397,10 @@ def run_backlash(rec, args, name, target):
     print(f"  기준 {base:.3f} Hz. 이제 **푸는 방향**으로 {args.step:.0f}도씩 돌립니다")
     total, seen = 0.0, []
     for i in range(1, 13):
-        deg = ask_angle(args.step) if args.sim is None else args.step
+        deg = turn(args, args.step, direction=-1)      # 백래시는 푸는 방향이다
+        if deg is None:
+            print("    회전에 실패해 중단합니다")
+            break
         total += deg
         sim_hz = None
         if args.sim is not None:
@@ -369,7 +484,7 @@ def run_min_angle(rec, args, name, target):
     for want_cents in MIN_ANGLE_RUNGS_CENTS:
         deg = round(want_cents / cpd, 1)
         print(f"\n  --- {deg}도 단계 (한 번에 약 {want_cents:.0f}센트 기대) ---")
-        if deg < 3.0:
+        if deg < 3.0 and not args.robot:
             print("      ※ 손으로는 이 각도를 정확히 못 돌립니다. 실제로 돌린 만큼을")
             print("        입력하면 그 각도 기준으로 판정합니다")
         if args.sim is None:
@@ -381,12 +496,13 @@ def run_min_angle(rec, args, name, target):
 
         prev, total_deg, ok_count, steps = base, 0.0, 0, []
         for i in range(args.repeat):
+            print(f"      [{i + 1}/{args.repeat}] {deg}도 조입니다")
+            actual = turn(args, deg, direction=1)
+            if actual is None:
+                print("      회전에 실패해 이 단계를 중단합니다")
+                break
             if args.sim is None:
-                print(f"      [{i + 1}/{args.repeat}] {deg}도 조이세요")
-                actual = ask_angle(deg)
                 time.sleep(SETTLE_SEC)
-            else:
-                actual = deg
             total_deg += actual
             # 모의: 스틱-슬립. 8도가 쌓여야 한 번에 풀린다.
             # 작은 각도는 누적으로는 따라오지만 회마다 들쭉날쭉해진다.
@@ -467,6 +583,11 @@ def main():
                     help="센트/도 (--min-angle 사다리 기준. 기본은 실측표 값)")
     ap.add_argument("--repeat", type=int, default=3,
                     help="--min-angle 에서 같은 각도를 이어 돌리는 횟수")
+    ap.add_argument("--robot", action="store_true",
+                    help="사람에게 묻지 않고 /robot/adjust_peg 로 로봇이 돌린다 "
+                         "(robot_controller 가 떠 있어야 한다)")
+    ap.add_argument("--robot-timeout", type=float, default=60.0,
+                    help="--robot 에서 한 번의 회전을 기다리는 시간(초)")
     ap.add_argument("--simulate", dest="sim", type=float, default=None,
                     metavar="CENTS_PER_DEG",
                     help="기타 없이 흐름만 확인 (예: 0.2). 이 값이 다시 나오면 정상")
@@ -487,7 +608,19 @@ def main():
         print(f"[모의 모드] 실제 값 {args.sim} 센트/도 로 흐름만 확인합니다")
 
     print(f"대상: {args.string}번 줄 {name} = {target:.4f} Hz")
-    print("주의: 항상 조이는 방향으로만 돌리세요. 방향을 바꾸면 백래시로 값이 튑니다.")
+    if args.robot:
+        try:
+            robot_connect()
+        except Exception as exc:                          # noqa: BLE001
+            print(f"\n{exc}")
+            sys.exit(1)
+        print("페그는 로봇이 돌립니다. 사람은 줄만 뜯으면 됩니다.")
+        print("회전이 끝난 뒤에 측정하므로 로봇 구동음은 섞이지 않습니다.")
+        if args.sim is not None:
+            print("(--simulate 와 같이 줬습니다. 회전은 실제, 소리만 모의합니다)")
+    else:
+        print("주의: 항상 조이는 방향으로만 돌리세요. "
+              "방향을 바꾸면 백래시로 값이 튑니다.")
 
     out = {"측정일": datetime.now().isoformat(timespec="seconds"),
            "줄": args.string, "음": name, "목표_hz": target,
@@ -543,4 +676,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        robot_shutdown()
