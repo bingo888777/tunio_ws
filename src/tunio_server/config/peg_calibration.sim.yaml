@@ -1,0 +1,27 @@
+# ⚠⚠⚠ 실측값이 아니다. 지어낸 숫자다. 실제 로봇에 쓰지 마라. ⚠⚠⚠
+#
+# fake_hardware 의 mode=sim 과 짝을 이루는 화면 확인 전용 파일이다.
+# 조율 과정(조절 횟수가 늘고 오차가 줄어드는 것)이 화면에 제대로 그려지는지
+# 보려면 task_manager 가 페그 각도를 계산해야 하고, 그러려면 measured 가
+# true 여야 한다. 그 조건만 맞춘 파일이다.
+#
+# 여기 값으로 수렴한다고 해서 실제로 수렴한다는 뜻이 아니다.
+# 실측은 tools/peg_cal.py 로 하고 결과는 peg_calibration.yaml 에 넣는다.
+#
+# 쓰는 법:
+#   ros2 run tunio_server fake_hardware --ros-args -p mode:=sim
+#   ros2 run tunio_server task_manager --ros-args \
+#       -p peg_calibration_file:=$(ros2 pkg prefix tunio_server)/share/tunio_server/config/peg_calibration.sim.yaml
+#
+# 실제 로봇을 붙일 때는 이 파일을 지정하지 않는다. 기본값인 peg_calibration.yaml 이
+# measured: false 라서, 실측 전에는 페그가 돌지 않고 PHASE_ERROR 로 멈춘다.
+
+/task_manager:
+  ros__parameters:
+    peg_calibration:
+      measured: true
+      measured_at: 'SIMULATION'      # 실측 날짜가 아니다. 지어낸 값이라는 표시다
+      s6: {cents_per_deg: 0.15, min_effective_deg: 1.5, backlash_release_cents: 25.0, max_angle_deg: 400.0}
+      s5: {cents_per_deg: 0.18, min_effective_deg: 1.5, backlash_release_cents: 25.0, max_angle_deg: 400.0}
+      s2: {cents_per_deg: 0.32, min_effective_deg: 1.0, backlash_release_cents: 20.0, max_angle_deg: 300.0}
+      s1: {cents_per_deg: 0.40, min_effective_deg: 1.0, backlash_release_cents: 20.0, max_angle_deg: 300.0}
