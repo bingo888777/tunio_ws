@@ -87,6 +87,24 @@ def test_motion_overrides(fake_api):
     assert retract[1][:3] == [0, 0, -10]
 
 
+def test_stroke_sign_flips_direction(fake_api):
+    """2·1번은 고음 쪽 바깥이라 6·5번과 반대로 훑는다."""
+    p = _pose_x(CONTACT)
+    p.stroke_sign = -1
+    MP.pluck_string(p, {"pluck_stroke_tool": [8, 0, 0, 0, 0, 0]})
+    stroke = fake_api.calls[2]
+    assert stroke[1][:3] == [-8.0, 0.0, 0.0]                  # 부호만 뒤집힌다
+    assert fake_api.calls[3][1][:3] == [0.0, 0.0, -8.0]       # 후퇴는 그대로
+
+
+def test_rejects_bad_stroke_sign(fake_api):
+    p = _pose_x(CONTACT)
+    p.stroke_sign = 2
+    with pytest.raises(MP.MotionError, match="stroke_sign"):
+        MP.pluck_string(p, {})
+    assert fake_api.calls == []
+
+
 def test_rejects_joint_only_pose(fake_api):
     with pytest.raises(MP.MotionError, match="x"):
         MP.pluck_string(Pose("pluck.6", True, joints=[0] * 6), {})

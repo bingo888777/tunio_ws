@@ -49,16 +49,22 @@ STEP_CONFIRM = True        # True: 줄마다 Enter 를 기다린다 (첫 실행 
 
 # ─────────────────────────── [교시값] ────────────────────────────────
 HOME_J = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]                    # 두산 기본 홈
-STANDBY_J = [-1.37, 46.28, 23.98, 0.14, 109.74, 88.99]                   # TODO 기타 위 대기 자세 (관절각)
+STANDBY_J = [-1.69, 44.18, 31.30, 0.13, 104.52, 90.34]                   # TODO 기타 위 대기 자세 (관절각)
 
 # n번 줄 접촉점 — 피크 끝이 줄에 살짝 닿는 Base 절대 posx. TODO 4줄 채우기
 CONTACT_X = {
-    6: [644.93, -26.46, 393.09, 118.43, -180.0, 153.29],
-    5: [642.65, -22.09, 183.56, 10.24, 180.0, 100.0],
-    2: [642.54, -5.21, 182.97, 6.47, -180.0, 97.10],
-    1: [642.78, 2.66, 182.74, 8.86, -180.0, 99.41],
+    6: [645.85, -29.08, 390.28, 18.53, -180.0, 111.67],
+    5: [645.23, -19.14, 390.18, 31.81, 180.0, 124.62],
+    2: [645.24, -1.0, 389.78, 53.43, -180.0, 145.63],
+    1: [645.34, 8.06, 389.32, 56.94, -180.0, 148.73],
 }
-STRINGS_TO_PLUCK = [6]
+STRINGS_TO_PLUCK = [6, 5, 2, 1]
+
+# 줄별 스트로크 방향. pluck_stroke_tool([-8,0,0]) 에 **곱하는** 값이다.
+#   6·5번: +1 → 그대로 -8mm (사람 시점 오른쪽)
+#   2·1번: -1 → +8mm (사람 시점 왼쪽). 빈 공간이 반대라 훑는 방향이 반대다.
+#   2026-09-20 실기 확인. 확정되면 teach_points.yaml pluck.<줄>.stroke_sign 으로 옮긴다
+STROKE_SIGN = {6: +1, 5: +1, 2: -1, 1: -1}
 
 # ─────────────────────────── [동작 파라미터] ─────────────────────────
 # 값은 pluck_test.py 에서 검증한 것. pluck_string 이 motion.get(키, 기본값) 으로 읽는다.
@@ -137,12 +143,14 @@ def main():
 
         for n in STRINGS_TO_PLUCK:
             pose = Pose(f"pluck.{n}", True, task=CONTACT_X[n])   # 더미 Pose (접촉점, Base posx)
+            pose.stroke_sign = STROKE_SIGN.get(n, 1)              # 이 줄의 스트로크 방향
             if not any(abs(v) > 1e-6 for v in pose.task):
                 print(f"[{n}번] CONTACT_X 가 비어 있다 — 건너뜀")
                 continue
+            stroke = [v * pose.stroke_sign for v in MOTION['pluck_stroke_tool'][:3]]
             _confirm(f"[{n}번 줄] 대기 → 위 {MOTION['pluck_up_mm']:.0f}mm → 접촉 → "
-                     f"스트로크 {MOTION['pluck_stroke_tool'][:3]} → "
-                     f"후퇴 {MOTION['pluck_retract_tool'][:3]} → 대기")
+                     f"스트로크 {stroke} → "
+                     f"후퇴 {MOTION['pluck_retract_tool'][:3]} → 위 → 대기")
             MP.pluck_string(pose, MOTION, standby=standby)
             _log_pose(f"after_{n}")
             print(f"[{n}번 줄] 완료 — 소리가 났는지 확인")

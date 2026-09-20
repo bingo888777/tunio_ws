@@ -183,6 +183,8 @@ def pluck_string(pose, motion, standby=None):
     pose    — 발현 접촉 자세. 작업 좌표(**pose.task**, YAML 의 x: Base 절대 [X,Y,Z,A,B,C],
               교시 TCP 기준)여야 한다. 접촉점 하나만 교시하고 위 대기점은 여기서 계산한다.
               관절각(j)만 있으면 "위에서 접근"을 만들 수 없어 거부한다.
+              pose.stroke_sign (+1/-1, 없으면 +1) — 이 줄의 스트로크 방향. 6·5번(저음 쪽)과
+              2·1번(고음 쪽)은 빈 공간이 반대라 훑는 방향이 반대다 (2026-09-20 실기 확인).
     motion  — teach_points.yaml 의 motion 절. 아래 pluck_* 키가 없으면 기본값을 쓴다
               (기본값은 pluck_test.py 에서 검증한 값).
     standby — 기타 위 대기 자세(Pose, joints). 주면 발현 전후에 들른다.
@@ -199,6 +201,10 @@ def pluck_string(pose, motion, standby=None):
 
     up_mm = float(motion.get("pluck_up_mm", 20.0))
     stroke = list(motion.get("pluck_stroke_tool", [-8.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    sign = getattr(pose, "stroke_sign", 1) or 1
+    if sign not in (1, -1):
+        raise MotionError(f"{pose.name}: stroke_sign 은 +1 또는 -1 이어야 한다 (지금 {sign!r})")
+    stroke = [float(v) * sign for v in stroke[:3]] + [float(v) for v in stroke[3:]]
     retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
     v_app, a_app = motion.get("pluck_vel_approach", 100), motion.get("pluck_acc_approach", 100)
     v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
