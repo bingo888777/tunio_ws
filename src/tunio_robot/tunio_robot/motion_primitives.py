@@ -13,7 +13,8 @@
   노드가 dsr01 네임스페이스에 있어야 /dsr01/dsr_controller2/... 로 풀린다.
   (우리 Action 이름은 '/robot/...' 로 절대 경로라 네임스페이스 영향을 받지 않는다)
 
-그리퍼는 OnRobot RG2 다 (2026-09-19 확정). 폭·힘을 수치로 준다. gripper.py 참조.
+그리퍼는 OnRobot RG2 이고, Compute Box 의 WebLogic 을 디지털 I/O 로 부른다
+(2026-09-19 확정). 폭·힘은 웹에서 정하고 코드는 프리셋만 고른다. gripper.py 참조.
 
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
@@ -25,6 +26,8 @@ TODO(정묵·성현):
     티칭 펜던트에 각각 등록해야 한다
 """
 
+from tunio_robot import teach_points as TP
+
 # 두산 API 핸들. connect() 가 채운다. dry_run 이면 None 그대로다
 _api = None
 _node = None
@@ -35,11 +38,12 @@ class MotionError(Exception):
     """동작 실패. 메시지가 Action Result 의 message 로 그대로 나간다."""
 
 
-def connect(robot_cfg, logger=None):
+def connect(robot_cfg, gripper_cfg=None, logger=None):
     """
-    두산 API를 초기화한다.
+    두산 API와 그리퍼를 초기화한다.
 
-    robot_cfg — teach_points.yaml 의 robot 절 (id, model, tool, tcp)
+    robot_cfg   — teach_points.yaml 의 robot 절 (id, model, tool, tcp)
+    gripper_cfg — 같은 파일의 gripper 절 (presets, settle_sec)
     executor 에 넣지 않은 전용 노드를 만들어 DR_init 에 물린다.
     """
     global _api, _node, _gripper
@@ -63,9 +67,10 @@ def connect(robot_cfg, logger=None):
 
     _api = api
 
-    # 그리퍼. 서비스가 안 떠 있으면 여기서 걸리는 편이 동작 중에 걸리는 것보다 낫다
-    from tunio_robot.gripper import RG2
-    _gripper = RG2(_node)
+    if gripper_cfg:
+        from tunio_robot.gripper import RG2, parse_presets
+        _gripper = RG2(api, parse_presets(gripper_cfg.get("presets")),
+                       settle_sec=gripper_cfg.get("settle_sec", 0.3))
 
     if robot_cfg.get("tool"):
         api.set_tool(robot_cfg["tool"])
@@ -91,29 +96,84 @@ def _movej(joints, motion, relative=False):
                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
 
 
-def _grip(width_mm, force_n):
-    """
-    페그·피크를 잡는다.
+def _movel(task, motion):
+    """작업 좌표로 직선 이동. BASE 기준 [X, Y, Z, A, B, C]."""
+    api = _require_api()
+    from DR_common2 import posx
+    v = motion.get("travel_vel", [50.0, 30.0])
+    a = motion.get("travel_acc", [100.0, 60.0])
+    return api.movel(posx(list(task)), vel=v, acc=a)
 
-    width_mm — 목표 폭. 페그 축을 정확히 안 잡아도 되게 여유를 준다.
-      꽉 물면 손목 회전축과 페그 축이 조금만 어긋나도 페그에 옆힘이 걸려
-      더 못 돌린다. 헐겁게 물면 그 어긋남을 흡수해 한 번에 많이 돌릴 수 있다.
-      대신 그 여유가 그대로 헛돎(백래시)이 된다. 폭을 바꾸면 백래시도 바뀌므로
-      **폭을 확정한 뒤에 백래시를 재야 한다** (tools/peg_cal.py --backlash).
-    force_n — 쥐는 힘. RG2 범위 0~40N
+
+def _movejx(task, motion, sol=None):
+    """
+    작업 좌표로 가되 **관절 보간**으로 간다. 경로는 직선이 아니다.
+
+    특이점에서 출발하거나 특이점을 지나도 괜찮다. 직선 이동과 달리
+    손끝 경로를 구속하지 않기 때문이다. 경유지에서 페그 접근점까지처럼
+    "가기만 하면 되는" 구간에 쓴다.
+
+    sol — 팔 자세(어느 역기구학 해를 쓸지). None 이면 지금 자세를 유지한다.
+          엉뚱한 값을 주면 팔이 통째로 뒤집힌다.
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    if sol is None:
+        sol = api.get_current_solution_space()
+    return api.movejx(posx(list(task)),
+                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
+
+
+def goto_route(route, motion):
+    """
+    경유지로 간다. null 인 관절은 지금 값을 그대로 둔다.
+
+    관절 이동이라 특이점과 무관하다. 특이점이 문제가 되는 건 직선 이동뿐이다.
+    """
+    api = _require_api()
+    current = list(api.get_current_posj())
+    _movej(route.resolve(current), motion)
+
+
+def _goto_pose(pose, motion):
+    """
+    교시 자세로 이동한다. 관절각이면 movej, 작업 좌표면 접근축을 따라 들어간다.
+
+    작업 좌표는 물러난 지점까지 먼저 가고 거기서 직선으로 들어간다.
+    바로 가면 경로가 기타를 쓸고 갈 수 있다.
+    """
+    if pose.kind == "joint":
+        return _movej(pose.joints, motion)
+    back = motion.get("approach_mm", 100.0)
+    # 접근점까지는 관절 보간. 경유지가 특이점 자세라 직선으로 출발하면 안 된다
+    _movejx(TP.backed_off(pose.task, back), motion, sol=getattr(pose, "sol", None))
+    # 마지막 짧은 구간만 직선. 페그에 똑바로 들어가야 한다
+    _movel(pose.task, motion)
+
+
+def _retreat(pose, motion):
+    """들어온 직선 그대로 물러난다."""
+    if pose.kind == "task":
+        _movel(TP.backed_off(pose.task, motion.get("approach_mm", 100.0)), motion)
+
+
+def _grip(preset_name):
+    """
+    프리셋 이름으로 잡는다.
+
+    폭·힘은 WebLogic 에 설정된 값이고 여기서 못 바꾼다. 'peg' 프리셋은
+    페그 두께보다 1~2mm 여유를 준 폭이다. 꽉 물면 손목 회전축과 페그 축이
+    조금만 어긋나도 옆힘이 걸려 많이 못 돌린다. 대신 그 여유(와 고무 골무의
+    비틀림)가 그대로 헛돎이 되어 백래시에 더해진다.
     """
     if _gripper is None:
         raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
-    if width_mm is None or force_n is None:
-        raise MotionError("파지 폭·힘이 교시점 YAML 에 없다 (grip_width_mm / grip_force_n)")
-    _gripper.grip(float(width_mm), float(force_n))
+    return _gripper.select(preset_name)
 
 
 def _release():
     """그리퍼를 연다."""
-    if _gripper is None:
-        raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
-    _gripper.release()
+    return _grip("open")
 
 
 def pluck_string(pose, motion):
@@ -134,14 +194,15 @@ def adjust_peg(pose, joint, delta_deg, motion):
     이중으로 겹쳐 결과가 어긋난다.
     """
     _require_api()
-    _movej(pose.joints, motion)                     # 페그 앞으로
-    _grip(pose.grip_width_mm, pose.grip_force_n)    # 여유를 준 폭으로 파지
+    _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
+    _grip("peg")                                    # 여유를 준 폭으로 파지
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
         _movej(delta, motion, relative=True)        # 그 관절만 상대 회전
     finally:
         _release()                                  # 실패해도 페그는 놓는다
+        _retreat(pose, motion)                      # 들어온 직선 그대로 나온다
 
 
 def strum_all(string_numbers, points):

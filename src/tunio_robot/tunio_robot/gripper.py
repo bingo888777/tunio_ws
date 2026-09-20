@@ -1,101 +1,105 @@
 """
-OnRobot RG2 제어.
+OnRobot RG2 제어 — 디지털 I/O + Compute Box 의 WebLogic.
 
-onrobot_rg_control 의 /onrobot/sendCommand 서비스(문자열 하나)로 조작한다.
-명령 규약은 그 패키지의 genCommand 를 따른다.
-  'c'        — 완전히 닫기
-  'o'        — 완전히 열기
-  'i' / 'd'  — 쥐는 힘을 2.5N 올리기 / 내리기
-  숫자 문자열 — 목표 폭. 0.1mm 단위 정수 ("60" 이면 6.0mm)
+제어 경로
+  로봇 컨트롤러의 디지털 출력을 켜고 끄면, Compute Box(192.168.1.1)에서 돌고 있는
+  WebLogic 프로그램이 그 조합에 맞춰 미리 설정된 파지를 실행한다.
+  폭과 힘은 **웹 화면에서 정하는 값이고 코드가 못 바꾼다.**
+  코드가 하는 일은 "몇 번 프리셋" 을 고르는 것뿐이다.
 
-힘을 숫자로 한 번에 못 준다. 서버가 최대힘(40N)으로 시작해서
-'i'/'d' 로 2.5N씩만 움직이므로, 목표 힘까지 갈 단계 수를 계산해서 보낸다.
-그 계산이 plan_commands 다. 로봇 없이 단위 테스트로 검증된다.
+  Modbus 로 폭·힘을 직접 보내는 길(onrobot_rg_control 의 /onrobot/sendCommand)도
+  있지만 이 현장은 WebLogic 을 쓴다. 두 경로를 같이 열어두면 어느 쪽이 실제로
+  먹었는지 헷갈리므로 여기서는 I/O 만 쓴다.
 
-주의 — 런치할 때 gripper:=rg2 를 반드시 준다.
-  onrobot_rg_control 의 기본값이 rg6 다. rg6 로 뜨면 한계값이
-  힘 120N·폭 160mm 로 잡혀서, RG2 가 낼 수 없는 값을 걸러주지 못한다.
+프리셋을 바꾸려면
+  1. 웹에서 폭·힘을 고친다
+  2. teach_points.yaml 의 gripper.presets 기록을 같이 고친다
+  기록이 어긋나도 로봇은 그대로 움직인다. 코드가 알 방법이 없다. 사람이 맞춰야 한다.
 
-파지 확인 — 이 ROS 2 패키지는 grip detected 신호를 토픽으로 내보내지 않는다.
-  하드웨어는 알려준다(OnRobotRGInput 의 gsta 비트 1). 그런데 그 토픽을
-  발행하는 노드가 이 포팅본에 없다. 서버가 내부에서 읽어 /joint_states 의
-  관절각으로만 흘린다. 파지 확인이 필요하면 둘 중 하나다 —
-  (1) /joint_states 관절각을 폭으로 역산해 "덜 닫혔으면 물렸다"고 보거나
-  (2) onrobot_rg_control 에 퍼블리셔를 추가하거나.
-  확정 전까지 여기서는 파지 확인을 하지 않는다.
+출력을 거는 순서
+  먼저 쓰는 출력을 전부 0 으로 내리고, 그다음 1 로 올릴 것만 올린다.
+  한 번에 하나씩 바꾸면 중간 조합이 순간적으로 다른 프리셋과 맞아떨어져
+  엉뚱한 파지가 한 번 실행될 수 있다. 전부 0 인 조합은 어느 규칙과도 안 맞아
+  그리퍼가 직전 상태를 유지한다.
 """
-
-# RG2 한계 (onrobot_rg_msgs 주석 기준)
-MAX_FORCE_N = 40.0      # rgfr 0~400, 1/10N 단위
-MAX_WIDTH_MM = 110.0    # rgwd 0~1100, 1/10mm 단위
-FORCE_STEP_N = 2.5      # 'i' / 'd' 한 번에 움직이는 양 (rgfr 25)
-
-# 서버가 시작할 때 잡는 힘. OnRobotRGControllerServer 가 max_force 로 초기화한다
-INITIAL_FORCE_N = MAX_FORCE_N
-
-SERVICE = "/onrobot/sendCommand"
+import time
 
 
 class GripperError(Exception):
-    """그리퍼 명령이 잘못됐거나 서비스가 응답하지 않을 때."""
+    """프리셋이 없거나 그리퍼 조작이 실패했을 때."""
 
 
-def plan_commands(width_mm, force_n, current_force_n):
+class Preset:
+    """WebLogic 규칙 하나. 출력 조합과 그 조합이 내는 폭·힘 기록."""
+
+    def __init__(self, name, outputs, width_mm=None, force_n=None):
+        self.name = name
+        self.outputs = {int(k): int(v) for k, v in outputs.items()}
+        self.width_mm = width_mm
+        self.force_n = force_n
+        for idx, val in self.outputs.items():
+            if val not in (0, 1):
+                raise GripperError(f"프리셋 '{name}' 의 출력 {idx} 값이 0/1 이 아니다: {val}")
+
+    def __repr__(self):
+        return f"<Preset {self.name} {self.outputs} {self.width_mm}mm {self.force_n}N>"
+
+
+def parse_presets(config):
+    """teach_points.yaml 의 gripper.presets 절을 읽는다."""
+    if not config:
+        raise GripperError("교시점 파일에 gripper.presets 가 없다")
+    out = {}
+    for name, item in config.items():
+        outputs = item.get("outputs")
+        if not outputs:
+            raise GripperError(f"프리셋 '{name}' 에 outputs 가 없다")
+        out[name] = Preset(name, outputs,
+                           width_mm=item.get("width_mm"), force_n=item.get("force_n"))
+    return out
+
+
+def output_plan(preset, all_indexes):
     """
-    목표 폭·힘을 내기 위해 보낼 명령 문자열 순서를 만든다.
+    디지털 출력을 세팅할 순서를 만든다.
 
-    반환: (명령 목록, 실제로 도달하는 힘 N)
-    힘은 2.5N 단위로만 움직이므로 목표를 정확히 못 맞출 수 있다.
-    실제 도달값을 같이 돌려주니 호출 쪽이 그 값을 다음 current_force_n 으로 쓴다.
+    반환: [(출력번호, 값), ...]
+    쓰는 출력을 전부 0 으로 내린 뒤 1 로 올릴 것만 올린다. 중간 조합이
+    다른 프리셋과 맞아떨어지는 것을 막기 위해서다.
     """
-    if not 0.0 <= width_mm <= MAX_WIDTH_MM:
-        raise GripperError(f"폭 {width_mm}mm 는 RG2 범위 0~{MAX_WIDTH_MM} 를 벗어난다")
-    if not 0.0 <= force_n <= MAX_FORCE_N:
-        raise GripperError(f"힘 {force_n}N 은 RG2 범위 0~{MAX_FORCE_N} 를 벗어난다")
-
-    steps = round((force_n - current_force_n) / FORCE_STEP_N)
-    cmds = ["i"] * steps if steps > 0 else ["d"] * (-steps)
-    reached = current_force_n + steps * FORCE_STEP_N
-
-    # 폭은 0.1mm 단위 정수로 보낸다. 힘을 먼저 맞추고 나서 닫는다
-    cmds.append(str(int(round(width_mm * 10))))
-    return cmds, reached
+    plan = [(i, 0) for i in sorted(all_indexes)]
+    plan += [(i, 1) for i in sorted(preset.outputs) if preset.outputs[i] == 1]
+    return plan
 
 
 class RG2:
-    """/onrobot/sendCommand 로 RG2 를 조작한다."""
+    """디지털 출력으로 WebLogic 프리셋을 고른다."""
 
-    def __init__(self, node, service=SERVICE, timeout_sec=3.0):
-        from onrobot_rg_msgs.srv import SetCommand
-        self.node = node
-        self.timeout_sec = timeout_sec
-        self._force_n = INITIAL_FORCE_N
-        self._cli = node.create_client(SetCommand, service)
-        if not self._cli.wait_for_service(timeout_sec=timeout_sec):
+    def __init__(self, api, presets, settle_sec=0.3):
+        """
+        프리셋 표를 들고 그리퍼 조작 준비를 한다.
+
+        api        — DSR_ROBOT2 모듈 (set_digital_output 을 쓴다)
+        presets    — parse_presets 결과
+        settle_sec — 출력을 건 뒤 그리퍼 동작이 끝나기를 기다리는 시간.
+                     RG2 는 폭에 따라 0.1~0.5초쯤 걸린다. 짧으면 아직 움직이는
+                     중에 팔이 출발한다
+        """
+        self.api = api
+        self.presets = presets
+        self.settle_sec = settle_sec
+        self._indexes = sorted({i for p in presets.values() for i in p.outputs})
+        self.current = None
+
+    def select(self, name):
+        """이름으로 프리셋을 건다."""
+        preset = self.presets.get(name)
+        if preset is None:
             raise GripperError(
-                f"그리퍼 서비스 {service} 가 없다. "
-                f"onrobot_rg_control 을 gripper:=rg2 로 띄웠는지 확인하라")
-
-    def _send(self, command):
-        from onrobot_rg_msgs.srv import SetCommand
-        import rclpy
-        req = SetCommand.Request()
-        req.command = command
-        future = self._cli.call_async(req)
-        rclpy.spin_until_future_complete(self.node, future, timeout_sec=self.timeout_sec)
-        res = future.result()
-        if res is None:
-            raise GripperError(f"그리퍼 명령 '{command}' 응답 없음")
-        if not res.success:
-            raise GripperError(f"그리퍼 명령 '{command}' 실패: {res.message}")
-
-    def grip(self, width_mm, force_n):
-        """지정한 폭까지 지정한 힘으로 닫는다."""
-        cmds, reached = plan_commands(width_mm, force_n, self._force_n)
-        for c in cmds:
-            self._send(c)
-        self._force_n = reached
-
-    def release(self):
-        """완전히 열어 놓는다."""
-        self._send("o")
+                f"'{name}' 프리셋이 없다. 있는 것: {sorted(self.presets)}. "
+                f"웹에서 규칙을 만들고 teach_points.yaml 에도 적어야 한다")
+        for idx, val in output_plan(preset, self._indexes):
+            self.api.set_digital_output(idx, val)
+        time.sleep(self.settle_sec)
+        self.current = name
+        return preset

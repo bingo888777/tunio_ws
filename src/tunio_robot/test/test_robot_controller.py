@@ -85,9 +85,21 @@ def test_교시_끝난_상태에서_페그_조절_goal_이_성공한다(ros, tau
         h.shutdown()
 
 
-def test_미교시_상태면_실패하고_사유가_담긴다(ros):
-    """좌표가 placeholder 인 채로 움직이면 기타와 부딪힌다."""
-    h = Harness(os.path.abspath(CONFIG))
+def _untaught_yaml(tmpdir):
+    """모든 페그를 미교시로 되돌린 임시 파일."""
+    with open(CONFIG, "r", encoding="utf-8") as f:
+        d = yaml.safe_load(f)
+    for key in d["pegs"]:
+        d["pegs"][key]["taught"] = False
+    path = os.path.join(tmpdir, "untaught.yaml")
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(d, f)
+    return path
+
+
+def test_미교시_상태면_실패하고_사유가_담긴다(ros, tmp_path):
+    """교시가 한 벌로 안 맞으면 taught 를 내린다. 그때 움직이지 않아야 한다."""
+    h = Harness(_untaught_yaml(str(tmp_path)))
     try:
         goal = AdjustPeg.Goal(string_number=6, direction=1, angle_deg=30.0)
         handle = h.send(AdjustPeg, "/robot/adjust_peg", goal)

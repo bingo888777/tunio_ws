@@ -13,6 +13,7 @@
 교시 전에는 좌표가 전부 0이다. 그 상태로 움직이면 기타·로봇이 부딪히므로
 taught: false 인 항목은 조회 시 거부한다. 교시를 마치면 true 로 바꾼다.
 """
+import math
 import os
 
 import yaml
@@ -25,6 +26,41 @@ TIGHTEN = 1     # 음 높이기
 LOOSEN = -1     # 음 낮추기
 
 
+# 헤드스톡 좌우. 같은 쪽끼리는 가깝고, 반대쪽은 손목이 뒤집혀야 한다
+SIDES = {6: "left", 5: "left", 2: "right", 1: "right"}
+
+
+def side_of(string_number):
+    """그 줄의 페그가 헤드스톡 어느 쪽에 있는지."""
+    side = SIDES.get(string_number)
+    _require(side is not None, f"{string_number}번은 헤드스톡 배치에 없다")
+    return side
+
+
+class Route:
+    """
+    경유지. 관절 일부만 지정한다.
+
+    None 인 자리는 그때의 현재 관절값을 그대로 쓴다. 부딪히지 않는 데
+    필요한 관절(보통 J1 과 J3)만 적으면 된다. 전부 적으면 자세가 완전히
+    고정되고, 일부만 적으면 오던 자세를 최대한 유지한 채 그 관절만 옮긴다.
+    """
+
+    def __init__(self, name, joints, taught):
+        self.name = name
+        self.joints = list(joints)
+        self.taught = bool(taught)
+
+    def resolve(self, current):
+        """현재 관절값을 받아 실제로 명령할 6개 값을 만든다."""
+        _require(len(current) == 6, f"현재 관절값이 6개가 아니다: {current}")
+        return [current[i] if v is None else float(v)
+                for i, v in enumerate(self.joints)]
+
+    def __repr__(self):
+        return f"<Route {self.name} {self.joints}>"
+
+
 class TeachPointsError(Exception):
     """교시점 파일이 잘못됐거나 아직 교시되지 않은 항목을 요청했을 때."""
 
@@ -35,16 +71,35 @@ def _require(cond, msg):
 
 
 class Pose:
-    """관절 각도 6개짜리 자세 하나. taught=False 면 아직 placeholder 다."""
+    """
+    교시 자세 하나. 관절각(j) 또는 작업 좌표(x) 중 하나로 적는다.
 
-    def __init__(self, name, joints, taught):
+    j — 관절 1~6 각도(도). 대기 자세처럼 팔 모양 자체가 중요한 곳
+    x — BASE 기준 [X, Y, Z, A, B, C]. 위치 mm, 자세 intrinsic ZYZ 도.
+        페그처럼 "기타의 이 지점"이 중요한 곳. 좌표계 계산으로 다른 페그를
+        내려면 작업 좌표여야 한다
+
+    작업 좌표는 **교시할 때 켜져 있던 TCP 기준**이다. 다른 TCP 로 실행하면
+    같은 숫자가 다른 위치를 가리킨다. robot.tcp 를 반드시 맞춰야 한다.
+    """
+
+    def __init__(self, name, taught, joints=None, task=None):
         self.name = name
-        self.joints = list(joints)
+        self.joints = list(joints) if joints is not None else None
+        self.task = list(task) if task is not None else None
         self.taught = bool(taught)
+
+    @property
+    def kind(self):
+        return "joint" if self.joints is not None else "task"
+
+    @property
+    def values(self):
+        return self.joints if self.joints is not None else self.task
 
     def __repr__(self):
         mark = "" if self.taught else " (미교시)"
-        return f"<Pose {self.name} {self.joints}{mark}>"
+        return f"<Pose {self.name} {self.kind} {self.values}{mark}>"
 
 
 class TeachPoints:
@@ -55,10 +110,12 @@ class TeachPoints:
         self._raw = data
         self.robot = data.get("robot", {})
         self.motion = data.get("motion", {})
+        self.gripper = data.get("gripper", {})
         self._frames = {}
         self._pegs = {}
         self._plucks = {}
         self._pick = None
+        self._routes = {}
         self._parse()
 
     # -------------------------------------------------- 파싱·검증
@@ -66,7 +123,7 @@ class TeachPoints:
         d = self._raw
         _require(isinstance(d, dict), "최상위가 매핑이 아니다")
 
-        for key in ("robot", "motion", "frames", "pegs", "pluck"):
+        for key in ("robot", "motion", "gripper", "frames", "pegs", "pluck"):
             _require(key in d, f"'{key}' 항목이 없다")
 
         # 로봇 식별 — DR_init 에 넣을 값. 예제 기준 dsr01 / m0609
@@ -77,6 +134,8 @@ class TeachPoints:
         joint = self.motion.get("peg_joint")
         _require(isinstance(joint, int) and 1 <= joint <= 6,
                  f"motion.peg_joint 는 1~6 이어야 한다 (지금 {joint!r})")
+
+        _require(self.gripper.get("presets"), "gripper.presets 가 비었다")
 
         limit = self.motion.get("max_angle_deg")
         _require(isinstance(limit, (int, float)) and limit > 0,
@@ -98,6 +157,17 @@ class TeachPoints:
         missing = [s for s in STRINGS if s not in self._plucks]
         _require(not missing, f"pluck 에 빠진 줄: {missing}")
 
+        # 좌우 전환 경유지. 없으면 경유 없이 바로 간다
+        for name, item in (d.get("routes") or {}).items():
+            joints = item.get("j")
+            _require(isinstance(joints, list) and len(joints) == 6,
+                     f"routes.{name}.j 는 값 6개 목록이어야 한다 (지금 {joints!r})")
+            for v in joints:
+                _require(v is None or isinstance(v, (int, float)),
+                         f"routes.{name}.j 는 숫자 아니면 null 이어야 한다")
+            self._routes[name] = Route(f"routes.{name}", joints,
+                                       item.get("taught", False))
+
         # 피크 거치대. 없는 YAML 도 로드는 되고, 조회할 때 걸린다
         holder = d.get("pick", {}).get("holder")
         if holder is not None:
@@ -115,12 +185,16 @@ class TeachPoints:
     @staticmethod
     def _pose(name, item):
         _require(isinstance(item, dict), f"{name} 이 매핑이 아니다")
-        joints = item.get("j")
-        _require(isinstance(joints, list) and len(joints) == 6,
-                 f"{name}.j 는 관절 6개 목록이어야 한다 (지금 {joints!r})")
-        for v in joints:
-            _require(isinstance(v, (int, float)), f"{name}.j 에 숫자가 아닌 값이 있다")
-        return Pose(name, joints, item.get("taught", False))
+        joints, task = item.get("j"), item.get("x")
+        _require((joints is None) != (task is None),
+                 f"{name} 은 j(관절각) 또는 x(작업좌표) 중 하나만 있어야 한다")
+        values = joints if joints is not None else task
+        label = "j" if joints is not None else "x"
+        _require(isinstance(values, list) and len(values) == 6,
+                 f"{name}.{label} 는 값 6개 목록이어야 한다 (지금 {values!r})")
+        for v in values:
+            _require(isinstance(v, (int, float)), f"{name}.{label} 에 숫자가 아닌 값이 있다")
+        return Pose(name, item.get("taught", False), joints=joints, task=task)
 
     def _grip_pose(self, name, item):
         """자세 + 파지 설정(폭·힘)을 묶어 읽는다."""
@@ -131,6 +205,12 @@ class TeachPoints:
 
     def _peg(self, no, item):
         pose = self._grip_pose(f"pegs.{no}", item)
+        # 팔 자세(역기구학 해). 경유지에서 접근점으로 갈 때 movejx 가 쓴다.
+        # None 이면 그때의 현재 자세를 유지한다
+        sol = item.get("sol")
+        _require(sol is None or isinstance(sol, int),
+                 f"pegs.{no}.sol 은 정수 아니면 null 이어야 한다 (지금 {sol!r})")
+        pose.sol = sol
         sign = item.get("turn_sign")
         _require(sign in (1, -1), f"pegs.{no}.turn_sign 은 1 또는 -1 이어야 한다 (지금 {sign!r})")
         pose.turn_sign = sign
@@ -145,6 +225,16 @@ class TeachPoints:
     def peg(self, string_number):
         _require(string_number in self._pegs, f"pegs 에 {string_number}번 줄이 없다")
         return self._taught(self._pegs[string_number])
+
+    def route(self, name="transit"):
+        """
+        경유지. 없거나 미교시면 None 이고, 그러면 경유 없이 간다.
+
+        경유 없이 가면 경로가 기타를 쓸고 갈 수 있다. 교시가 끝나면
+        taught 를 올려야 한다.
+        """
+        r = self._routes.get(name)
+        return r if (r is not None and r.taught) else None
 
     def pick_holder(self):
         """피크 거치대 자세. 피크를 집고 반환하는 자리다."""
@@ -186,6 +276,32 @@ class TeachPoints:
         validate_goal(string_number, direction, angle_deg, self.max_angle_deg)
         peg = self.peg(string_number)
         return self.peg_joint, direction * peg.turn_sign * float(angle_deg)
+
+
+def approach_axis(task_pose):
+    """
+    그리퍼가 다가가는 방향(툴 Z)을 BASE 기준 단위벡터로 돌려준다.
+
+    자세는 intrinsic ZYZ. R = Rz(A)Ry(B)Rz(C) 의 3열이 툴 Z 다.
+    Rz(C) 는 툴 Z 를 그대로 두므로 C 는 영향이 없다.
+    """
+    a, b = math.radians(task_pose[3]), math.radians(task_pose[4])
+    return (math.sin(b) * math.cos(a), math.sin(b) * math.sin(a), math.cos(b))
+
+
+def backed_off(task_pose, distance_mm):
+    """
+    같은 자세로 접근축을 따라 뒤로 물러난 자세를 만든다.
+
+    페그로 바로 가면 경로가 기타를 쓸고 갈 수 있다. 접근축 위에서 물러난
+    지점까지 먼저 가고, 거기서 직선으로 들어가면 경로가 예측 가능해진다.
+    나올 때도 같은 직선으로 나온다.
+    """
+    axis = approach_axis(task_pose)
+    out = list(task_pose)
+    for i in range(3):
+        out[i] = task_pose[i] - axis[i] * distance_mm
+    return out
 
 
 def validate_goal(string_number, direction, angle_deg, max_angle_deg):
