@@ -30,7 +30,7 @@ from tunio_server import peg_calibration as PC
 from tunio_server import tuning_logic as L
 
 # 명세 5절: /tuning/state 는 reliable, depth 1, transient local.
-# 늦게 켠 UI도 마지막 상태를 즉시 받는다. hmi_node 쪽 값과 같아야 매칭된다.
+# 늦게 켠 UI도 마지막 상태를 즉시 받는다. web_node 쪽 값과 같아야 매칭된다.
 STATE_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.RELIABLE,
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,

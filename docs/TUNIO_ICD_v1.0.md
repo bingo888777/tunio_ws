@@ -135,7 +135,7 @@ SPEC 에 없는 상세가 여기 있으면 그대로 쓰고, 둘이 충돌하면
 호출하는 Service
 - `/tuning/save_job`
 
-### hmi_node (서버 PC · 정동휘)
+### web_node (서버 PC · 정동휘)
 
 구독하는 Topic
 - `/tuning/state`
@@ -736,8 +736,8 @@ string message
 ### 6.4 취소
 
 ```
-1. hmi_node  →  task_manager   /tuning/cancel
-2. task_manager →  hmi_node     accepted = true
+1. web_node  →  task_manager   /tuning/cancel
+2. task_manager →  web_node     accepted = true
 3. task_manager                 진행 중인 Action에 취소 요청
 4. audio_analyzer →  task_manager  Result (success=false, FAIL_CANCELED)
 5. robot_controller             현재 위치 정지, 파지 유지

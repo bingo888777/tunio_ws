@@ -305,14 +305,17 @@ ros2 launch tunio_bringup real_all.launch.py dry_run:=false gripper:=rg2
 성능의 근거가 되지 않는다.** 3 은 그 파일을 지정하지 않으므로 실측 전에는
 조절 단계에서 PHASE_ERROR 로 멈춘다.
 
-**`tunio_server` 에서는 `colcon test` 를 그대로 믿지 말 것.** 테스트를 0개 실행한다.
-(`tunio_robot` 과 `tunio_audio` 는 정상으로 돈다. `tunio_interfaces`·`tunio_bringup` 도
-같은 설정이 없지만 아직 테스트 파일이 없어 증상이 드러나지 않는다.)
-colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
-아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
-러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
-굳이 colcon으로 돌리려면 `colcon test --python-testing pytest`.
-(고치면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
+`colcon test` 로 돌린다. 5개 패키지 전부 pytest 로 수집된다.
+
+```bash
+colcon test --packages-select tunio_server && colcon test-result --all
+```
+
+2026-09-20 이전에는 `tunio_server` 만 테스트를 0개 실행했다. `setup.py` 에
+`tests_require=['pytest']` 가 없어 colcon 이 `python3 -m unittest -v` 로 폴백했고,
+인자 없는 unittest 는 아무것도 탐색하지 않아 **"NO TESTS RAN" 이 통과처럼 보였다.**
+넣으면 `test_flake8` 이 기존 위반으로 빨개져서 미뤄 뒀던 것인데, PyQt 잔재를
+지우면서 위반이 0건이 되어 함께 해결했다 (이슈 #9).
 
 ---
 

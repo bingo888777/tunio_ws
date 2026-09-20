@@ -1,5 +1,5 @@
 """
-web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘
+web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘.
 
 브라우저 화면은 기획서 10.1 의 탭 3개(실시간 작업 / 작업 이력 / 설정)를 그대로 옮긴 것이다.
 판정은 센트지만 화면 표시는 Hz 다(기획 2.2).
@@ -25,14 +25,14 @@ web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘
   ⚠ task_manager 는 /tuning/state 를 변화 시에만 발행한다. 주기 갱신이 아니므로
   화면의 '갱신 시각'도 변화가 있을 때만 움직인다. 정상이다.
 """
-import json
-import queue
-import threading
-import webbrowser
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
+import queue
+import threading
 from urllib.parse import parse_qs, urlparse
+import webbrowser
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -104,7 +104,7 @@ def _stamp_to_float(stamp):
 
 
 def _string_result_to_dict(r):
-    """StringResult -> dict. has_* 가 false 인 주파수는 None 으로 낸다(0Hz 를 쓰지 않는다)."""
+    """메시지를 dict 로 바꾼다. has_* 가 false 인 주파수는 None 으로 낸다(0Hz 를 쓰지 않는다)."""
     return {
         'string_number': r.string_number,
         'target_hz': r.target_hz,
