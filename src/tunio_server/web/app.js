@@ -199,7 +199,8 @@ function buildGuitar() {
   // 페그는 헤드 좌우로 갈려 균등 간격이 아니라 6개를 따로 둔다.
   const VB_W = 584.35, VB_H = 1513.5;
   const X0 = 259.35, X_STEP = 13.13;     // 너트~브릿지 구간의 x
-  const NUT_Y = 259.9, BRIDGE_Y = 1283.3;
+  const NUT_Y = 259.9;
+  const BRIDGE_Y = 320;      // 헤드 화면 아래 끝. 지판으로 이어지는 느낌만 준다
 
   // 줄 순서(6→1)대로. 6·5·4 는 헤드 왼쪽, 3·2·1 은 오른쪽에 감긴다.
   const PEGS = {
@@ -231,8 +232,10 @@ function buildGuitar() {
     </g>`;
   }).join('');
 
-  return `<svg class="guitar-overlay" viewBox="0 0 ${VB_W} ${VB_H}"
-         role="img" aria-label="기타 줄 상태">${parts}</svg>`;
+  // 헤드 구간만 보여 준다. 바디까지 넣으면 세로로 너무 길어져 화면이 빈다.
+  // guitar_head.svg 의 viewBox 와 같은 값이라 그림과 줄이 정확히 겹친다.
+  return `<svg class="guitar-overlay" viewBox="200 0 185 320"
+         role="img" aria-label="기타 헤드와 줄 상태">${parts}</svg>`;
 }
 
 // 대상 4줄(6·5·2·1)의 진행을 점으로 보여 준다. 기타 그림만으로는

@@ -50,7 +50,7 @@
 
   <div class="stage">
 
-    <!-- 기타 헤드스톡. 지금 어느 줄을 하고 있는지 한눈에 보이게 한다. -->
+    <!-- 헤드스톡. 조율에서 실제로 보는 곳은 페그와 줄이라 바디는 쓰지 않는다. -->
     <div class="guitar-wrap">
       <div class="progress">
         <span class="progress-label">조율 진행</span>
@@ -61,55 +61,61 @@
       <p class="guitar-cap">대상 줄 6 · 5 · 2 · 1 (4 · 3번은 조율하지 않는다)</p>
     </div>
 
-    <!-- 튜너. 큰 음이름 + 센트 바늘. -->
-    <div class="tuner">
-      <div class="tuner-top">
-        <span id="now-stringno" class="tuner-stringno">—</span>
-        <div class="tuner-note">
-          <strong id="now-note" class="note">—</strong>
-          <span id="now-octave" class="octave"></span>
-        </div>
-        <span id="now-adjust" class="tuner-adjust">—</span>
-      </div>
+    <!-- 튜너 + 줄별 결과. 한 화면에 같이 두려고 오른쪽 칸에 세로로 쌓는다. -->
+    <div class="stage-right">
 
-      <div class="meter">
-        <div class="meter-scale">
-          <span class="flat">♭</span>
-          <div class="meter-track">
-            <div class="meter-zone"></div>
-            <div class="meter-ticks">
-              <i style="left:0%"></i><i style="left:25%"></i>
-              <i class="mid" style="left:50%"></i>
-              <i style="left:75%"></i><i style="left:100%"></i>
-            </div>
-            <div id="needle" class="needle"></div>
+      <div class="tuner">
+        <div class="tuner-top">
+          <span id="now-stringno" class="tuner-stringno">—</span>
+          <div class="tuner-note">
+            <strong id="now-note" class="note">—</strong>
+            <span id="now-octave" class="octave"></span>
           </div>
-          <span class="sharp">♯</span>
+          <span id="now-adjust" class="tuner-adjust">—</span>
         </div>
-        <div class="meter-labels">
-          <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+
+        <div class="meter">
+          <div class="meter-scale">
+            <span class="flat">♭</span>
+            <div class="meter-track">
+              <div class="meter-zone"></div>
+              <div class="meter-ticks">
+                <i style="left:0%"></i><i style="left:25%"></i>
+                <i class="mid" style="left:50%"></i>
+                <i style="left:75%"></i><i style="left:100%"></i>
+              </div>
+              <div id="needle" class="needle"></div>
+            </div>
+            <span class="sharp">♯</span>
+          </div>
+          <div class="meter-labels">
+            <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+          </div>
+        </div>
+
+        <div class="tuner-bottom">
+          <div class="cents-wrap">
+            <strong id="now-cents" class="cents-big">—</strong>
+            <span class="cents-unit">센트</span>
+          </div>
+          <div class="hzline">
+            <span class="hz-item"><span class="k">측정</span>
+              <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
+            <span class="hz-sep">/</span>
+            <span class="hz-item"><span class="k">목표</span>
+              <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
+          </div>
         </div>
       </div>
 
-      <div class="tuner-bottom">
-        <div class="cents-wrap">
-          <strong id="now-cents" class="cents-big">—</strong>
-          <span class="cents-unit">센트</span>
-        </div>
-        <div class="hzline">
-          <span class="hz-item"><span class="k">측정</span>
-            <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
-          <span class="hz-sep">/</span>
-          <span class="hz-item"><span class="k">목표</span>
-            <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
-        </div>
+      <div class="results">
+        <h2 class="section-title">줄별 결과</h2>
+        <div id="strings" class="strings"></div>
       </div>
+
     </div>
 
   </div>
-
-  <h2 class="section-title">줄별 결과</h2>
-  <div id="strings" class="strings"></div>
 
 </section>
 
