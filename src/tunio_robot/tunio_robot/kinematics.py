@@ -104,6 +104,44 @@ def fk(joints_deg, tcp_mm=DEFAULT_TCP_MM):
     }
 
 
+def tool_z_axis(posx):
+    """
+    주어진 posx 자세의 툴 Z축을 Base 기준 단위벡터로.
+
+    두산 posx 의 자세 [A, B, C] 는 intrinsic ZYZ 오일러각이다.
+    R = Rz(A)·Ry(B)·Rz(C) 이고 툴 Z축은 그 3열인데, Rz(C) 는 Z축을 안 건드리므로
+    C 가 빠진다. 그래서 손목이 얼마나 돌아 있든 툴 Z 방향은 A·B 로만 정해진다.
+    """
+    a, b = math.radians(posx[3]), math.radians(posx[4])
+    return (math.cos(a) * math.sin(b), math.sin(a) * math.sin(b), math.cos(b))
+
+
+def shift_tcp(posx, delta_mm):
+    """
+    같은 물리적 자세를 **다른 TCP 기준의 posx** 로 옮긴다 (이슈 #21).
+
+    posx     — Base 절대 [X, Y, Z, A, B, C]
+    delta_mm — 원래 기준점에서 새 기준점까지 툴 Z 방향 거리(mm).
+               플랜지 → GripperDA_v1(툴 Z 208mm) 이면 +208.
+               GripperDA_v1 → 플랜지면 -208.
+
+    왜 이게 되나
+      TCP 오프셋이 [0, 0, 208, 0, 0, 0] 로 **순수 평행이동**이다. 자세를 안 돌리므로
+      A·B·C 는 그대로고 위치만 툴 Z 방향으로 밀린다. 그래서 재교시가 필요 없다.
+
+    실측 확인 (2026-09-21)
+      발현 접촉점 4줄이 플랜지 기준(태그 tcpless-4strings-ok)과 GripperDA_v1 기준
+      (2026-09-19 교시) 양쪽으로 남아 있어 서로 견줄 수 있었다. 변환한 Z 가
+      교시값과 5·2·1번에서 1.2~1.4mm 차이였다. 6번은 그 사이에 재교시돼 6.4mm 다.
+      X·Y 는 이 자세들이 B=±180 이라 변환이 건드리지 않는데 2.5~5.4mm 차이가
+      나는데, 그건 교시 세션이 달라 생긴 드리프트지 변환 오차가 아니다.
+    """
+    if len(posx) < 6:
+        raise ValueError("posx 는 [X, Y, Z, A, B, C] 6개다")
+    z = tool_z_axis(posx)
+    return [posx[i] + z[i] * delta_mm for i in range(3)] + list(posx[3:6])
+
+
 def wrist_casing(joints_deg):
     """J5 쪽 L자 케이싱이 부푼 자리만 [X, Y, Z] mm 로."""
     return fk(joints_deg)["wrist_casing"]

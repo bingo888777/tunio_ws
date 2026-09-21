@@ -117,9 +117,18 @@ def main():
     node = rclpy.create_node("tunio_grip_check", namespace=args.id)
     DR_init.__dsr__node = node
 
+    from tunio_robot import arm_pose
     from tunio_robot import motion_primitives as MP
     MP.connect(points.robot, points.gripper)
-    from DSR_ROBOT2 import get_current_posj, get_current_solution_space
+    from DR_common2 import posx
+    from DSR_ROBOT2 import get_current_posj, get_current_solution_space, ikin
+
+    if sol is None and not args.jog:
+        got = arm_pose.choose(lambda t: ikin(posx(back), t), route.joints[0])
+        if got is None:
+            raise SystemExit("쓸 만한 팔 모양이 없다. tools/sol_check.py 로 보라")
+        sol, _, casing = got
+        print(f"\n  팔 모양  자동 선택 {sol} (손목 케이싱 X {casing[0]:.0f}mm)")
 
     held = None
     try:

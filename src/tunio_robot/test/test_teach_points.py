@@ -182,12 +182,53 @@ def test_피크_거치대도_교시_전에는_거부한다():
 def test_피크_거치대_교시가_끝나면_파지_설정까지_읽힌다():
     d = _taught()
     d["pick"]["holder"]["taught"] = True
+    d["pick"]["holder"]["tcp"] = d["robot"]["tcp"]
     d["pick"]["holder"]["grip_width_mm"] = 3.0
     d["pick"]["holder"]["grip_force_n"] = 10.0
     points = tp.TeachPoints(d)
     holder = points.pick_holder()
     assert holder.grip_width_mm == 3.0
     assert holder.grip_force_n == 10.0
+
+
+# ───────────────────── 좌표 기준(TCP) 검사 — 이슈 #21 ─────────────────────
+#
+# posx 는 읽을 때 켜져 있던 TCP 기준의 숫자다. 페그는 GripperDA_v1 을 켜고,
+# 발현·거치대는 끄고(플랜지) 교시해서 한 파일에 208mm 어긋난 두 기준이 섞였다.
+# connect() 가 robot.tcp 하나만 켜므로, 다른 기준으로 적힌 좌표는 거부한다.
+
+def test_기준이_안_적혀_있으면_거부한다():
+    d = _taught()
+    d["pick"]["holder"]["taught"] = True
+    d["pick"]["holder"]["tcp"] = None
+    points = tp.TeachPoints(d)
+    with pytest.raises(tp.TeachPointsError) as e:
+        points.pick_holder()
+    assert "tcp" in str(e.value)
+
+
+def test_기준이_다르면_거부한다():
+    """플랜지로 읽은 좌표를 GripperDA_v1 로 실행하면 208mm 어긋난다."""
+    d = _taught()
+    d["pegs"][6]["tcp"] = "다른TCP"
+    points = tp.TeachPoints(d)
+    with pytest.raises(tp.TeachPointsError) as e:
+        points.peg(6)
+    assert "다른TCP" in str(e.value)
+
+
+def test_기준이_같으면_통과한다():
+    d = _taught()
+    points = tp.TeachPoints(d)
+    assert points.peg(6).tcp == d["robot"]["tcp"]
+
+
+def test_관절각_자세는_기준을_안_본다():
+    """관절각은 TCP 와 무관하다. 대기 자세에 tcp 를 적으라고 하면 안 된다."""
+    d = _taught()
+    d["frames"]["standby"].pop("tcp", None)
+    points = tp.TeachPoints(d)
+    assert points.frame("standby").joints is not None
 
 
 def test_pick_절이_없는_파일도_로드는_된다():

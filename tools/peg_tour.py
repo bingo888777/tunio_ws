@@ -17,7 +17,7 @@
 
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
-  python3 tools/peg_tour.py --speed 30              # 6 5 1 차례로
+  python3 tools/peg_tour.py                         # 6 5 1 차례로
   python3 tools/peg_tour.py --pegs 6 5 2 1          # 네 줄 전부
   python3 tools/peg_tour.py --no-grip               # 잡지 않고 이동만
   python3 tools/peg_tour.py --dry-run               # 좌표만 계산
@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
 
 DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..", "src", "tunio_robot",
                             "config", "teach_points.yaml")
+LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "robot_data")
 
 
 def fmt(vals, d=1):
@@ -48,8 +49,8 @@ def main():
                     choices=[1, 2, 5, 6], help="돌 순서")
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--approach", type=float, default=None)
-    ap.add_argument("--speed", type=float, default=30.0,
-                    help="설정 속도의 몇 %% 로. 처음에는 30 쯤으로")
+    ap.add_argument("--speed", type=float, default=100.0,
+                    help="설정 속도의 몇 %% 로. 처음 가보는 경로는 30 쯤으로 낮춰라")
     ap.add_argument("--preset", default="peg")
     ap.add_argument("--no-grip", action="store_true", help="잡지 않고 이동만")
     ap.add_argument("--dry-run", action="store_true")
@@ -57,6 +58,7 @@ def main():
     ap.add_argument("--model", default="m0609")
     args = ap.parse_args()
 
+    from tunio_robot import runlog
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
     back_mm = args.approach if args.approach is not None \
@@ -119,22 +121,17 @@ def main():
         peg = points.peg(n)
         if peg.sol is not None:
             return peg.sol, f"yaml 에 적힌 값 {peg.sol}"
-        cands = []
-        for s in range(8):
-            try:
-                j = list(ikin(posx(list(task)), s))
-            except Exception:                           # noqa: B902
-                continue
-            if j and len(j) >= 6 and not all(abs(v) < 1e-9 for v in j):
-                cands.append((s, j))
-        best = arm_pose.pick(cands, route_j1)
-        if best is None:
+        got = arm_pose.choose(lambda t: ikin(posx(list(task)), t), route_j1)
+        if got is None:
             raise RuntimeError(f"{n}번은 쓸 만한 팔 모양이 없다. sol_check.py 로 보라")
-        sol, _, casing, _ = best
+        sol, _, casing = got
         return sol, f"자동 선택 {sol} (손목 케이싱 X {casing[0]:.0f}mm)"
 
     notes = []
     chosen = {}
+    log = {"tool": "peg_tour", "pegs": list(args.pegs),
+           "gripped": not args.no_grip, "approach_mm": back_mm,
+           "speed_pct": args.speed, "visits": []}
     try:
         confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
         MP._grip("open")
@@ -164,6 +161,12 @@ def main():
                 print(f"  '{args.preset}' 로 물었다. 눈으로 보라 — "
                       f"제대로 들어갔나, 헐거운가, 빗나갔나")
             said = input("  어떤가? (문제없으면 엔터) ").strip()
+            log["visits"].append({"peg": n, "side": TP.side_of(n), "sol": sol,
+                                  "sol_source": why, "crossed": cross,
+                                  "approach": list(bk), "peg_task": list(peg.task),
+                                  "joints_at_peg": posj,
+                                  "solution_space": get_current_solution_space(),
+                                  "note": said})
             if said:
                 notes.append(f"{n}번: {said}")
 
@@ -201,10 +204,15 @@ def main():
     else:
         print("  적어둔 문제 없음")
     if chosen:
+        log["chosen_sol"] = chosen
         print("\n고른 팔 모양 — teach_points.yaml 의 pegs.<번호>.sol 에 적어라.")
         print("  null 로 두면 매번 달라진다.")
         for n in sorted(chosen):
             print(f"    pegs.{n}.sol: {chosen[n]}")
+    path = runlog.save("tour_" + "-".join(str(n) for n in args.pegs), log, LOG_DIR)
+    if path:
+        print(f"\n기록 저장: {os.path.relpath(path)}")
+        print("  (이제 화면을 놓쳐도 sol 값이 파일에 남는다)")
     return 0
 
 

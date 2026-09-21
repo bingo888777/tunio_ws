@@ -83,11 +83,14 @@ class Pose:
     같은 숫자가 다른 위치를 가리킨다. robot.tcp 를 반드시 맞춰야 한다.
     """
 
-    def __init__(self, name, taught, joints=None, task=None):
+    def __init__(self, name, taught, joints=None, task=None, tcp=None):
         self.name = name
         self.joints = list(joints) if joints is not None else None
         self.task = list(task) if task is not None else None
         self.taught = bool(taught)
+        # 이 좌표를 읽을 때 켜져 있던 TCP 이름. 작업 좌표(x)에만 뜻이 있다.
+        # None 이면 "안 적어 둬서 모른다" 이고, 그 상태로는 조회가 거부된다.
+        self.tcp = tcp
 
     @property
     def kind(self):
@@ -194,7 +197,10 @@ class TeachPoints:
                  f"{name}.{label} 는 값 6개 목록이어야 한다 (지금 {values!r})")
         for v in values:
             _require(isinstance(v, (int, float)), f"{name}.{label} 에 숫자가 아닌 값이 있다")
-        return Pose(name, item.get("taught", False), joints=joints, task=task)
+        tcp = item.get("tcp")
+        _require(tcp is None or isinstance(tcp, str),
+                 f"{name}.tcp 는 문자열 아니면 null 이어야 한다 (지금 {tcp!r})")
+        return Pose(name, item.get("taught", False), joints=joints, task=task, tcp=tcp)
 
     def _grip_pose(self, name, item):
         """자세 + 파지 설정(폭·힘)을 묶어 읽는다."""
@@ -246,11 +252,42 @@ class TeachPoints:
         _require(string_number in self._plucks, f"pluck 에 {string_number}번 줄이 없다")
         return self._taught(self._plucks[string_number])
 
-    @staticmethod
-    def _taught(pose):
+    def _taught(self, pose):
+        """교시가 끝났고 좌표 기준이 맞는 자세만 내준다. 아니면 거부한다."""
         _require(pose.taught,
                  f"{pose.name} 이 아직 교시되지 않았다. 교시 후 YAML 의 taught 를 true 로 바꿔라")
+        self._check_tcp(pose)
         return pose
+
+    def _check_tcp(self, pose):
+        """
+        작업 좌표가 **어느 TCP 로 읽힌 값인지** 확인한다 (이슈 #21).
+
+        posx 는 그때 켜져 있던 TCP 기준의 숫자다. 다른 TCP 로 실행하면 같은 숫자가
+        다른 자리를 가리킨다. 2026-09-20 에 실제로 겪었다 — 페그는 GripperDA_v1
+        (툴 Z 208mm) 을 켜고 교시했고 발현·거치대는 끄고(플랜지) 교시해서, 한
+        파일에 208mm 어긋난 두 기준이 섞여 있었다.
+
+        connect() 가 robot.tcp 하나만 켜므로, 그와 다른 기준으로 적힌 좌표는
+        **쓰면 안 된다.** 조용히 움직이는 대신 여기서 멈춘다.
+
+        관절각(j)은 TCP 와 무관하므로 검사하지 않는다.
+        기준을 옮기려면 tunio_robot.kinematics.shift_tcp 를 쓴다 — 오프셋이 순수
+        평행이동이라 재교시 없이 계산으로 옮겨진다.
+        """
+        if pose.task is None:
+            return
+        want = self.robot.get("tcp")
+        if not want:
+            return
+        _require(pose.tcp is not None,
+                 f"{pose.name} 에 tcp 가 안 적혀 있다. 이 좌표를 읽을 때 켜져 있던 TCP "
+                 f"이름을 적어라 (지금 쓰는 것은 '{want}'). 기준이 다르면 208mm "
+                 "어긋난 곳으로 들어간다 (이슈 #21)")
+        _require(pose.tcp == want,
+                 f"{pose.name} 은 '{pose.tcp}' 기준으로 교시됐는데 지금 켜는 것은 "
+                 f"'{want}' 다. 같은 숫자가 다른 자리를 가리킨다. 좌표를 옮기려면 "
+                 "kinematics.shift_tcp 를 쓰라 (이슈 #21)")
 
     @property
     def peg_joint(self):

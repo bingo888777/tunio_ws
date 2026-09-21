@@ -59,3 +59,37 @@ def pick(candidates, route_j1=None):
     if not rows or rows[0][3]:
         return None
     return rows[0]
+
+
+def gather(ikin_fn):
+    """
+    해 8가지(sol 0~7)를 물어 (sol, 관절각) 목록을 만든다.
+
+    ikin_fn — sol 번호를 받아 관절각 6개를 내는 함수. 보통
+              lambda s: DSR_ROBOT2.ikin(posx(task), s) 를 넘긴다.
+    못 푸는 해(닿지 않는 자세)는 뺀다. 전부 0 이 나오는 것도 해가 없는 것이다.
+    """
+    out = []
+    for sol in range(8):
+        try:
+            j = ikin_fn(sol)
+        except Exception:                               # noqa: B902
+            continue
+        if j is not None and len(j) >= 6 and not all(abs(v) < 1e-9 for v in j):
+            out.append((sol, [float(v) for v in j]))
+    return out
+
+
+def choose(ikin_fn, route_j1=None):
+    """
+    역기구학으로 8가지를 받아 제일 나은 것을 고른다. (sol, 관절각, 케이싱).
+
+    **팔 모양을 안 고르면 로봇이 그때그때 현재 자세를 따라간다.** 경유지가
+    특이점 자세라 그 값이 모호해서 갈 때마다 달라지고, 2026-09-19 회전 확인에서
+    실제로 경유지→6번 접근점 경로가 순회 때와 달라져 부딪힐 뻔했다.
+    """
+    best = pick(gather(ikin_fn), route_j1)
+    if best is None:
+        return None
+    sol, joints, casing, _ = best
+    return sol, joints, casing

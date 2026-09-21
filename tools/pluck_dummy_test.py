@@ -25,7 +25,6 @@ pluck_dummy_test — robot_controller 없이 motion_primitives.pluck_string 을 
 """
 import os
 import sys
-import time
 
 # 빌드 전에도 돌게 src 경로를 추가한다 (install 이 source 돼 있으면 그쪽이 먼저)
 _SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src", "tunio_robot")
@@ -41,14 +40,17 @@ import yaml  # noqa: E402
 ROBOT_CFG = {
     "id": "dsr01",
     "model": "m0609",
-    "tool": None,       # "Tool Weight" 로 켜려 했으나 set_tool/set_tcp/add_tcp 전부 -1 로 거부됨
-    "tcp": None,        # (2026-09-20). 펜던트 제어권 문제로 보임, 팀 확인 전까지 None(플랜지)으로 되돌린다.
+    # 2026-09-21 — None(플랜지 유지)에서 실제 이름으로 되돌렸다. move.py 와 같은 이름이다.
+    "tool": "Tool Weight",
+    "tcp": "GripperDA_v1",
 }
-# None 이면 TP 에 지금 켜져 있는 것(플랜지, 확인됨)을 그대로 쓴다. 아래 CONTACT_X 도 플랜지 기준으로
-# 되돌렸다. GripperDA_v1 이 다시 켜지게 되면 §"TCP 켜기" 절의 계산 변환값(182.x)으로 되돌릴 것.
-# 주의: connect() 는 set_tool/set_tcp 를 디스커버리 대기 없이 부르면 멈춘다 (#19, #21).
-#       그래서 connect() 에는 tool/tcp 를 None 으로 주고, 서비스 대기 뒤에 main() 에서 직접 켠다
-#       (ROBOT_CFG 의 tool/tcp 가 있을 때만).
+# 왜 되돌렸나 (2026-09-21)
+#   · connect() 가 **항상** set_tool/set_tcp 를 부르고 get 으로 확인하게 바뀌었다(#26).
+#     배포용이라 펜던트 설정에 기대면 안 된다 — 설정이 안 된 로봇에서도 돌아야 한다
+#   · connect() 안에 디스커버리 대기가 들어가 예전 멈춤(#19·#21)의 원인이 없어졌다
+#   · 판정을 set 반환값이 아니라 get 결과로 하므로, set 이 -1 로 거부돼도(#23)
+#     펜던트가 켜 뒀으면 그대로 진행한다. 둘 다 아니면 움직이기 전에 멈춘다
+#   · 아래 CONTACT_X·PICK_X 도 이 TCP 기준으로 같이 옮겼다. 짝이 안 맞으면 208mm 어긋난다
 
 DO_PICK = True             # 집기 → 4줄 발현 → 반환 전체 확인 (2026-09-20)
 PICK_PRESET = "close"       # DO_PICK=True 일 때 피크를 물 프리셋. yaml gripper.presets 의 이름
@@ -61,20 +63,31 @@ _YAML = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 HOME_J = [0.0, 0.0, 90.0, 0.0, 90.0, 0.0]                    # 두산 기본 홈
 STANDBY_J = [-1.69, 44.18, 31.30, 0.13, 104.52, 90.34]       # 기타 위 대기 자세 (관절각)
 
-# n번 줄 접촉점 — 피크 끝이 줄에 살짝 닿는 Base 절대 posx. **TCP 없음(플랜지) 기준.**
-#   2026-09-19 실기로 4줄 다 소리 확인된 값. ROBOT_CFG["tcp"]=None 과 짝이다.
-#   GripperDA_v1 이 다시 켜지면 Z 에 +208(툴 Z 방향)을 더한 182.x 값으로 바꿀 것
-#   (계산: 6→182.28  5→182.18  2→181.78  1→181.32, X·Y·자세는 그대로).
+# n번 줄 접촉점 — 피크 끝이 줄에 살짝 닿는 Base 절대 posx.
+# **ROBOT_CFG["tcp"](=GripperDA_v1) 기준이다.**
+#
+#   원래 값은 플랜지 기준(Z 약 390)이었고, 2026-09-19 실기로 4줄 다 소리까지
+#   확인된 것이다. 2026-09-21 에 GripperDA_v1 을 다시 켜기로 하면서 성현이 이
+#   자리에 적어 둔 계산값으로 옮겼다 — "Z 에 +208(툴 Z 방향), X·Y·자세는 그대로".
+#   kinematics.shift_tcp 로 다시 계산해도 같은 값이 나온다. 이 자세들은 B=±180
+#   (아래를 본다)이라 툴 Z 가 Base -Z 와 나란해서 Z 만 208 내려간다.
+#
+#   ⚠️ 옮긴 값 자체는 실기로 안 돌려봤다. 산술만 맞다. 처음 한 번은 천천히.
+#      되돌리려면 Z 에 +208 을 더하고 ROBOT_CFG 의 tool/tcp 를 None 으로 두면 된다.
 CONTACT_X = {
-    6: [645.85, -29.08, 390.28, 18.53, -180.0, 111.67],
-    5: [645.23, -19.14, 390.18, 31.81, 180.0, 124.62],
-    2: [645.24, -1.0, 389.78, 53.43, -180.0, 145.63],
-    1: [645.34, 8.06, 389.32, 56.94, -180.0, 148.73],
+    6: [645.85, -29.08, 182.28, 18.53, -180.0, 111.67],
+    5: [645.23, -19.14, 182.18, 31.81, 180.0, 124.62],
+    2: [645.24, -1.0, 181.78, 53.43, -180.0, 145.63],
+    1: [645.34, 8.06, 181.32, 56.94, -180.0, 148.73],
 }
 STRINGS_TO_PLUCK = [6, 5, 2, 1]
 
 # 피크 거치대 — 피크를 무는 자리. Base 절대 posx (DO_PICK=True 일 때만 쓴다)
-PICK_X = [591.63, -143.75, 369.46, 178.55, 180.0, -90.0]
+#   위 CONTACT_X 와 같이 GripperDA_v1 기준으로 옮겼다 (2026-09-21).
+#   플랜지 기준 원값 [591.63, -143.75, 369.46, 178.55, 180.0, -90.0] 에서 Z -208.
+#   ⚠️ teach_points.yaml 의 pick.holder 는 여기와 X 가 93mm 다르다. 거치대가
+#      옮겨졌거나 한쪽이 옛 교시다. 어느 쪽이 지금 자리인지 성현이 확정해야 한다
+PICK_X = [591.63, -143.75, 161.46, 178.55, 180.0, -90.0]
 
 # 줄별 스트로크 방향. pluck_stroke_tool([-8,0,0]) 에 **곱하는** 값이다.
 #   6·5번: +1 → 그대로 -8mm (사람 시점 오른쪽)
@@ -125,73 +138,6 @@ def _print_ros_env():
     print("  ↑ 브링업을 띄운 터미널과 같아야 한다. 다르면 서비스가 하나도 안 보인다")
 
 
-def _wait_services(node, robot_id):
-    """
-    DSR_ROBOT2 는 디스커버리를 기다리지 않는다. 호출 전에 서비스가 보이는지 확인한다.
-
-    반드시 **DSR 이 쓰는 그 노드**(MP._node)로 기다려야 한다. 다른 노드로 기다리면
-    그 노드만 디스커버리가 끝나고, DSR 노드는 아직이라 첫 호출이 영원히 멈춘다.
-
-    디스커버리가 불안정해(이슈 #23) 조용히 30초씩 막혀 있으면 멈춘 건지 기다리는
-    중인지 구분이 안 된다. 5초마다 지금 보이는 서비스 수를 찍어 진행 상황을 보여준다.
-    """
-    from dsr_msgs2.srv import GetCurrentPosj, GetCurrentTcp, GetCurrentTool, MoveJoint, MoveLine
-    targets = [
-        (GetCurrentTool, "dsr_controller2/tool/get_current_tool"),
-        (GetCurrentTcp, "dsr_controller2/tcp/get_current_tcp"),
-        (GetCurrentPosj, "dsr_controller2/aux_control/get_current_posj"),
-        (MoveJoint, "dsr_controller2/motion/move_joint"),
-        (MoveLine, "dsr_controller2/motion/move_line"),
-    ]
-    t0 = time.monotonic()
-    while True:
-        n = len(node.get_service_names_and_types())
-        elapsed = time.monotonic() - t0
-        missing = []
-        for srv_type, name in targets:
-            cli = node.create_client(srv_type, name)
-            ok = cli.wait_for_service(timeout_sec=0.0)
-            node.destroy_client(cli)
-            if not ok:
-                missing.append(name)
-        print(f"  … {elapsed:5.1f}초  서비스 {n}개 보임  아직 없음: {missing or '없음'}")
-        if not missing:
-            print(f"  전부 보임 ({elapsed:.1f}초)")
-            break
-        if elapsed >= SERVICE_WAIT_SEC:
-            raise RuntimeError(
-                f"{SERVICE_WAIT_SEC:.0f}초 안에 못 찾음: {missing}. "
-                f"디스커버리 불안정(이슈 #23) — 재시도하거나 tools/tcp_diag.py 로 더 길게 확인")
-        time.sleep(5.0)
-    time.sleep(1.0)   # 나머지 클라이언트(DSR_ROBOT2 가 만든 것) 디스커버리 여유
-
-
-def _apply_tcp(api):
-    """디스커버리 뒤에 tool·tcp 를 켠다. 실패 원인을 진단할 수 있게 전후 값을 찍는다."""
-    print(f"[0] 시도 전 - 활성 tool='{api.get_tool()}' tcp='{api.get_tcp()}'")
-
-    tool_ret = api.set_tool(ROBOT_CFG["tool"])
-    note = "  (실패: TP 에 이 이름이 없다)" if tool_ret == -1 else ""
-    print(f"[0] set_tool('{ROBOT_CFG['tool']}') -> {tool_ret}{note}")
-
-    tcp_ret = api.set_tcp(ROBOT_CFG["tcp"])
-    note = "  (실패: TP 에 이 이름이 없다)" if tcp_ret == -1 else ""
-    print(f"[0] set_tcp('{ROBOT_CFG['tcp']}') -> {tcp_ret}{note}")
-
-    active_tcp = api.get_tcp()
-    if active_tcp != ROBOT_CFG["tcp"]:
-        msg = (
-            f"활성 TCP 가 '{active_tcp}' 다. '{ROBOT_CFG['tcp']}' 이어야 좌표가 맞는다.\n"
-            "  set_tool/set_tcp 가 즉시 -1 을 반환했다면 통신은 됐고 TP 가 그 이름을"
-            " 못 찾았다는 뜻이다.\n"
-            "  펜던트 Workcell Manager 에서 Tool·TCP 등록 이름을 정확히 확인하라"
-            " (철자·대소문자·공백,\n"
-            "  컨트롤러 재시작/프로젝트 전환으로 초기화됐을 수 있음)."
-        )
-        raise SystemExit(msg)
-    print(f"[0] 활성 TCP 확인 완료: '{active_tcp}'")
-
-
 def main():
     _print_ros_env()
     rclpy.init()
@@ -205,13 +151,13 @@ def main():
                              f"{sorted(gripper_cfg['presets'])}")
 
     print(f"[0] 두산 API 연결 (connect) — 그리퍼 {'사용' if DO_PICK else '없이'}")
-    api = MP.connect(dict(ROBOT_CFG, tool=None, tcp=None), gripper_cfg=gripper_cfg)
-    # connect() 가 만든 DSR 전용 노드로 서비스 디스커버리를 기다린다 (이걸 빼면 첫 호출에서 멈춘다)
-    _wait_services(MP._node, ROBOT_CFG["id"])
-    if ROBOT_CFG["tool"] or ROBOT_CFG["tcp"]:
-        _apply_tcp(api)                          # 둘 다 None 이면 TP 에 켜져 있는 걸 그대로 쓴다
-    else:
-        print(f"[0] TCP 전환 안 함 (TP 그대로) — 활성 tool='{api.get_tool()}' tcp='{api.get_tcp()}'")
+    # connect() 가 디스커버리 대기 → set_tool/set_tcp → get 으로 확인까지 한다 (#26).
+    # 예전에는 tool/tcp 를 None 으로 넘기고 여기서 따로 켰는데, 그러면 배포 경로와
+    # 이 도구가 서로 다른 순서로 돌아 무엇을 검증했는지 흐려진다. 이제 같은 길을 쓴다
+    api = MP.connect(dict(ROBOT_CFG, service_wait_sec=SERVICE_WAIT_SEC),
+                     gripper_cfg=gripper_cfg)
+    print(f"[0] 활성 tool='{api.get_tool()}' tcp='{api.get_tcp()}' "
+          f"(CONTACT_X·PICK_X 가 이 TCP 기준이어야 한다)")
 
     home = Pose("frames.home", True, joints=HOME_J)
     standby = Pose("frames.standby", True, joints=STANDBY_J)
