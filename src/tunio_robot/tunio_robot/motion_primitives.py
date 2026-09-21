@@ -286,8 +286,66 @@ def _moved(ret, what):
 # 이동 속도 배율의 상한 (실기 검증 전 임시값). speed_scale 을 아무리 올려도
 # 여기서 잘린다. 가속도 상한은 속도 상한의 2배로 본다 — 이 설정 전체가
 # acc = vel x 2 로 짜여 있다 (5/10, 2/4, 100/200).
-SPEED_CAP_JOINT = 60.0        # deg/s
-SPEED_CAP_LINEAR = 250.0      # mm/s
+#
+# **관절 이동의 진짜 상한은 손끝 속도다** (#58, 2026-09-21 사용자 지적).
+# 같은 관절 속도가 팔 모양에 따라 손끝에서 240배까지 갈린다 —
+#   경유지 자세(팔이 수직)    60 deg/s -> 손끝    6 mm/s   (J1 축에서 6mm)
+#   6번 페그 자세(팔이 뻗음)  60 deg/s -> 손끝 1446 mm/s   (M0609 상한 1 m/s 초과)
+# 그래서 고정된 관절 상한은 어떤 자세에선 위험하고 어떤 자세에선 쓸데없이 느리다.
+# _movej 가 이번 이동의 기하를 보고 관절 속도를 직접 낮춘다 (_joint_vel_for).
+SPEED_CAP_JOINT = 60.0        # deg/s — 손끝 상한이 먼저 걸리는 게 보통이다
+SPEED_CAP_LINEAR = 250.0      # mm/s  — 직선 이동(movel)
+# 관절 이동 중 손끝이 낼 수 있는 최고 속도. ISO/TS 15066 협동 감속 기준이 250mm/s 다.
+SPEED_CAP_TCP = 250.0         # mm/s
+# 지금 관절각을 못 읽어 기하를 못 볼 때. 실측 자세에서 360mm/s 쯤 나오는 값이다.
+SPEED_CAP_JOINT_BLIND = 15.0  # deg/s
+
+
+def _peak_tcp_mm_per_deg(start, goal, n=64):
+    """
+    가장 많이 도는 관절 1도당 손끝이 최대 몇 mm 움직이는지 잰다.
+
+    movej 는 관절을 동시에 보간하므로 손끝 경로는 직선이 아니고, 속도도 구간마다
+    다르다. 경로를 잘게 떠서 최고점을 찾는다. 시간이 아니라 '도당 mm' 로 재기
+    때문에 속도 가정이 안 들어간다 — 관절 속도를 곱하면 그대로 mm/s 가 된다.
+    """
+    span = max(abs(float(goal[i]) - float(start[i])) for i in range(6))
+    if span <= 1e-6:
+        return 0.0
+    from . import kinematics as K
+    prev, peak = None, 0.0
+    for k in range(n + 1):
+        t = k / n
+        j = [float(start[i]) + (float(goal[i]) - float(start[i])) * t for i in range(6)]
+        tcp = K.fk(j)["tcp"]
+        if prev is not None:
+            step = sum((tcp[i] - prev[i]) ** 2 for i in range(3)) ** 0.5
+            peak = max(peak, step / (span / n))
+        prev = tcp
+    return peak
+
+
+def _joint_vel_for(goal, want_vel):
+    """
+    손끝이 SPEED_CAP_TCP 를 넘지 않도록 관절 속도를 낮춘다 (#58).
+
+    지금 관절각을 로봇에서 읽어 이번 이동의 기하를 본다. 못 읽으면 기하를 모르므로
+    SPEED_CAP_JOINT_BLIND 로 떨어진다 — 모를 때는 느린 쪽이다.
+    """
+    api = _require_api()
+    try:
+        start = [float(v) for v in api.get_current_posj()]
+    except Exception:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    if len(start) < 6:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    try:
+        peak = _peak_tcp_mm_per_deg(start, goal)
+    except Exception:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    if peak <= 0.0:
+        return want_vel                      # 제자리다. 손끝이 안 움직인다
+    return min(want_vel, SPEED_CAP_TCP / peak)
 
 
 def _speed_scale(motion):
@@ -327,10 +385,16 @@ def _movej(joints, motion, relative=False):
     api = _require_api()
     from DR_common2 import posj
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
-    return _moved(api.movej(posj(list(joints)),
-                            vel=_fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT),
-                            acc=_fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2),
-                            mod=mod), "movej")
+    vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT)
+    acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2)
+    if not relative:
+        # 상대 이동은 목표 관절각을 여기서 모른다 — 절대 이동에만 건다.
+        # 상대 movej 는 페그 회전(turn_motion, 배율 1.0)에만 쓰여서 원래 느리다.
+        capped = _joint_vel_for(joints, vel)
+        if capped < vel:
+            acc *= capped / vel               # 가속도도 같은 비로 내린다
+            vel = capped
+    return _moved(api.movej(posj(list(joints)), vel=vel, acc=acc, mod=mod), "movej")
 
 
 def _movel(task, motion):
@@ -361,10 +425,12 @@ def _movejx(task, motion, sol=None):
     from DR_common2 import posx
     if sol is None:
         sol = api.get_current_solution_space()
-    return _moved(api.movejx(posx(list(task)),
-                             vel=_fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT),
-                             acc=_fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2),
-                             sol=sol), "movejx")
+    # movejx 도 관절 보간이지만 목표가 작업 좌표라 목표 관절각을 여기서 모른다.
+    # ikin 을 부르면 알 수 있으나 그건 또 한 번의 서비스 왕복이고, 실패하면
+    # 이동 자체가 막힌다. 기하를 못 보는 이동이므로 느린 쪽 상한을 쓴다 (#58).
+    vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT_BLIND)
+    acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT_BLIND * 2)
+    return _moved(api.movejx(posx(list(task)), vel=vel, acc=acc, sol=sol), "movejx")
 
 
 def turn_motion(motion):

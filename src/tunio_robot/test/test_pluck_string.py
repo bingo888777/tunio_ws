@@ -447,3 +447,72 @@ def test_pick_without_sol_keeps_the_straight_approach(fake_api, fake_gripper):
     """안 주면 예전 그대로 직선이다. 값이 null 인 동안 아무것도 안 바뀐다."""
     MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
     assert [c[0] for c in fake_api.calls] == ["movel"] * 3
+
+
+# ---------------------------------------------------------- 손끝 속도 상한 (#58)
+PEG6_J = [129.28, -47.87, -97.35, 48.66, -115.17, 28.98]    # 9/21 허공 회차 실측
+TRANSIT_J = [90.0, 0.0, 0.0, 0.0, 0.0, 28.98]
+STANDBY_J = [0.0, 0.0, 75.0, 0.0, 100.0, 0.0]
+
+
+class PosjApi(FakeApi):
+    """get_current_posj 를 흉내 낸다."""
+
+    def __init__(self, joints):
+        super().__init__()
+        self.joints = list(joints)
+
+    def get_current_posj(self):
+        return list(self.joints)
+
+
+def test_같은_관절속도가_팔_모양에_따라_손끝에서_크게_갈린다():
+    """
+    Movej 상한을 관절 속도로 거는 것 자체가 틀렸다는 근거다 (#58).
+
+    경유지 자세는 팔이 수직이라 J1 축에서 6mm 밖에 안 떨어져 있고, 페그 자세는
+    팔이 뻗어 있다. 같은 관절 속도가 손끝에서 두 자릿수로 갈린다.
+    """
+    near = MP._peak_tcp_mm_per_deg(TRANSIT_J, [v + 30 for v in TRANSIT_J[:1]] + TRANSIT_J[1:])
+    far = MP._peak_tcp_mm_per_deg(PEG6_J, TRANSIT_J)
+    assert far > near * 10
+
+
+def test_팔이_뻗은_구간은_관절속도를_낮춘다(monkeypatch):
+    """6번 페그에서 경유지로 가는 구간. 50deg/s 면 손끝이 1.2m/s 다."""
+    api = PosjApi(PEG6_J)
+    monkeypatch.setattr(MP, "_api", api)
+    vel = MP._joint_vel_for(TRANSIT_J, 50.0)
+    assert vel < 50.0
+    peak = MP._peak_tcp_mm_per_deg(PEG6_J, TRANSIT_J)
+    assert vel * peak <= MP.SPEED_CAP_TCP + 1e-6      # 손끝이 상한 안이다
+
+
+def test_팔이_접힌_구간은_안_낮춘다(monkeypatch):
+    """대기 자세 근처는 손끝이 느리다. 쓸데없이 조이지 않는다."""
+    api = PosjApi(STANDBY_J)
+    monkeypatch.setattr(MP, "_api", api)
+    target = [-1.69, 44.18, 31.30, 0.13, 104.52, 90.34]   # pluck_standby
+    assert MP._joint_vel_for(target, 50.0) == 50.0
+
+
+def test_관절각을_못_읽으면_느린_쪽으로_떨어진다(fake_api):
+    """기하를 모르면 느린 쪽이다 — FakeApi 에는 get_current_posj 가 없다."""
+    assert MP._joint_vel_for(TRANSIT_J, 50.0) == MP.SPEED_CAP_JOINT_BLIND
+
+
+def test_제자리_이동은_안_낮춘다(monkeypatch):
+    """손끝이 안 움직이면 상한이 걸릴 이유가 없다."""
+    api = PosjApi(STANDBY_J)
+    monkeypatch.setattr(MP, "_api", api)
+    assert MP._joint_vel_for(STANDBY_J, 50.0) == 50.0
+
+
+def test_movej_가_가속도도_같은_비로_내린다(monkeypatch):
+    """속도만 내리고 가속도를 두면 그 가속 구간에서 손끝이 상한을 넘는다."""
+    api = PosjApi(PEG6_J)
+    monkeypatch.setattr(MP, "_api", api)
+    MP._movej(TRANSIT_J, {"vel": 50.0, "acc": 100.0})
+    kw = api.calls[0][2]
+    assert kw["vel"] < 50.0
+    assert abs(kw["acc"] / kw["vel"] - 2.0) < 1e-6        # 비가 유지된다
