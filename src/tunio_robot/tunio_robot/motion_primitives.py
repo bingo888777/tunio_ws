@@ -256,10 +256,21 @@ def _moved(ret, what):
     """
     이동 명령의 반환을 검사한다 — 버리면 안 움직여도 아무도 모른다.
 
-    두산 래퍼는 이동도 `0 if success else -1` 로 돌려준다 (DSR_ROBOT2.py 2789행
-    부근). 지금까지 이 값을 버리고 있었다 — set_tcp 를 버리던 것과 같은 실수다
-    (#26). 순응제어가 켜져 있거나 로봇이 거부하면 -1 이 오는데, 그대로 다음
-    줄로 넘어가 그리퍼를 닫아 버린다. 빈손을 물고 "등록됐다" 가 된다.
+    두산 래퍼는 이동도 `0 if success else -1` 로 돌려준다. 지금까지 이 값을
+    버리고 있었다 — set_tcp 를 버리던 것과 같은 실수다 (#26). 순응제어가 켜져
+    있거나 로봇이 거부하면 -1 이 오는데, 그대로 다음 줄로 넘어가 그리퍼를 닫아
+    버린다. 빈손을 물고 "등록됐다" 가 된다.
+
+    그 -1 이 진짜인지 확인했다 (성현, #50) — `DSR_ROBOT2.py` 2941행이
+    `ret = 0 if (result.success == True) else -1` 이고, 그 success 는
+    `dsr_controller2.cpp:448` movel_cb 이 `Drfl->movel()` 반환을 그대로 실은 값이다.
+    `get_tcp` 처럼 true 하드코딩이 아니다 — CLAUDE.md 3.5.1 의 그 경고는 `get_*` 에만
+    해당한다. 이 검사는 무력하지 않다.
+
+    ⚠️ 다만 같은 함정이 이동에도 하나 있다 — 서비스 호출이 예외로 실패하면
+    `except` 절이 `ret` 을 안 채운 채 `return ret` 을 타서 **-1 이 아니라
+    `UnboundLocalError`** 가 난다 (2934~2941행). 그 경우 여기까지 오지 못한다.
+    그래서 부르는 쪽은 `MotionError` 만 잡아선 안 된다 (pluck_string 의 스트로크 구간).
 
     -1 만 실패로 본다. None 이나 다른 값은 그냥 통과시킨다 — 래퍼 판마다 다르고,
     여기서 막는 건 **명시적 거부**다.
@@ -423,8 +434,23 @@ def pluck_string(pose, motion, standby=None):
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
     _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
     _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
-    _movel_tool_rel(stroke, v_str, a_str, radius=3)     # 옆으로 살짝 → 발현
-    _movel_tool_rel(retract, v_str, a_str)              # 즉시 후퇴 (버징 방지)
+
+    # 스트로크·후퇴는 **피크가 줄에 닿아 있는 유일한 구간**이다. 이제 이동 거부를
+    # 예외로 올리니까(#50), 여기서 그냥 빠져나가면 진동하는 줄에 피크를 얹은 채
+    # 멈춘다 — 버징이 나고 그 줄 측정이 통째로 망가진다 (CLAUDE.md 3.4).
+    # 그래서 실패해도 **일단 줄에서 떼고** 나서 예외를 다시 올린다.
+    # MotionError 만 잡으면 안 된다 — 래퍼가 UnboundLocalError 를 던지는 판이
+    # 있다 (_moved 의 주석). 줄에서 떼는 건 어느 예외에서든 해야 한다.
+    try:
+        _movel_tool_rel(stroke, v_str, a_str, radius=3)  # 옆으로 살짝 → 발현
+        _movel_tool_rel(retract, v_str, a_str)           # 즉시 후퇴 (버징 방지)
+    except Exception:
+        try:
+            _movel_base(above, v_app, a_app)             # 무슨 일이 있어도 줄에서 뗀다
+        except Exception:
+            pass                                         # 이것마저 안 되면 원래 예외가 먼저다
+        raise
+
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 

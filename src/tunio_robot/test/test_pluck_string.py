@@ -13,7 +13,14 @@ from tunio_robot.teach_points import Pose
 
 
 class FakeApi:
-    """movej/movel 호출을 순서대로 기록한다."""
+    """
+    movej/movel 호출을 순서대로 기록한다.
+
+    반환은 실물 규약을 따른다 — 성공 0, 거부 -1 (DSR_ROBOT2.py 2941행).
+    None 을 돌려주면 반환값 검사가 무조건 통과해서 테스트가 보증이 못 된다
+    (CLAUDE.md 3.5.1 "대역 API 는 실제 반환 규약을 흉내 내야 한다").
+    reject 에 호출 순번(0부터)을 넣으면 그 호출만 -1 로 거부한다.
+    """
 
     DR_BASE = "BASE"
     DR_TOOL = "TOOL"
@@ -22,12 +29,17 @@ class FakeApi:
 
     def __init__(self):
         self.calls = []
+        self.reject = set()
+
+    def _record(self, kind, pos, kw):
+        self.calls.append((kind, list(pos), kw))
+        return -1 if len(self.calls) - 1 in self.reject else 0
 
     def movej(self, pos, **kw):
-        self.calls.append(("movej", list(pos), kw))
+        return self._record("movej", pos, kw)
 
     def movel(self, pos, **kw):
-        self.calls.append(("movel", list(pos), kw))
+        return self._record("movel", pos, kw)
 
 
 @pytest.fixture
@@ -121,6 +133,50 @@ def test_rejects_joint_only_pose(fake_api):
     with pytest.raises(MP.MotionError, match="x"):
         MP.pluck_string(Pose("pluck.6", True, joints=[0] * 6), {})
     assert fake_api.calls == []                                 # 움직이지 않았다
+
+
+def test_approach_rejection_stops_before_contact(fake_api):
+    """접촉점 위로 가는 이동이 거부되면 거기서 멈춘다 — 내려가지 않는다 (#50)."""
+    fake_api.reject = {0}                                       # 첫 이동(위 2cm)을 거부
+    with pytest.raises(MP.MotionError, match="movel_base"):
+        MP.pluck_string(_pose_x(CONTACT), {})
+    assert len(fake_api.calls) == 1                             # 접촉점으로 안 내려갔다
+
+
+def test_stroke_rejection_still_lifts_off_the_string(fake_api):
+    """
+    스트로크가 거부돼도 줄에서 떼고 나서 예외를 올린다 (#50).
+
+    이 구간은 피크가 줄에 닿아 있다. 그냥 예외로 빠지면 진동하는 줄을 누른 채
+    멈춰서 버징이 나고 그 줄 측정이 망가진다 (CLAUDE.md 3.4).
+    """
+    fake_api.reject = {2}                                       # 스트로크를 거부
+    with pytest.raises(MP.MotionError, match="movel_tool_rel"):
+        MP.pluck_string(_pose_x(CONTACT), {})
+
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movel"] * 4                               # 위 → 접촉 → 스트로크 → 들어올림
+    above = fake_api.calls[0]
+    assert fake_api.calls[-1][1] == above[1]                    # 마지막은 접촉점 위로 복귀
+    assert fake_api.calls[-1][2]["ref"] == "BASE"
+
+
+def test_retract_rejection_also_lifts_off(fake_api):
+    """후퇴가 거부된 경우도 같다. 피크는 스트로크 끝점에서 줄에 닿아 있다."""
+    fake_api.reject = {3}                                       # 후퇴를 거부
+    with pytest.raises(MP.MotionError, match="movel_tool_rel"):
+        MP.pluck_string(_pose_x(CONTACT), {})
+    assert len(fake_api.calls) == 5                             # 들어올림 한 번이 더 붙는다
+    assert fake_api.calls[-1][1] == fake_api.calls[0][1]
+
+
+def test_lift_off_failure_keeps_the_original_error(fake_api):
+    """들어올림마저 거부되면 원래 실패를 올린다 — 덮어쓰지 않는다."""
+    fake_api.reject = {2, 3}                                    # 스트로크와, 그다음 들어올림
+    with pytest.raises(MP.MotionError, match="movel_tool_rel"):
+        MP.pluck_string(_pose_x(CONTACT), {})
+    assert len(fake_api.calls) == 4                             # 들어올림은 시도했다
+    assert fake_api.calls[3][2]["ref"] == "BASE"                # 그게 들어올림이었다
 
 
 def test_rejects_short_retract(fake_api):
@@ -234,59 +290,25 @@ def test_pick_rejects_joint_only_holder(fake_api, fake_gripper):
     assert fake_api.calls == [] and fake_gripper.calls == []
 
 
-# ---------------------------------------------------------- 이동 거부 (#50)
-class RejectingApi(FakeApi):
-    """n 번째 movel 부터 -1(거부)을 돌려준다. 두산 래퍼의 실패 반환값이다."""
-
-    def __init__(self, reject_from=0):
-        super().__init__()
-        self.reject_from = reject_from
-        self.movels = 0
-
-    def movel(self, pos, **kw):
-        super().movel(pos, **kw)
-        self.movels += 1
-        return -1 if self.movels > self.reject_from else 0
-
-
-def test_거치대로_내려가는_게_거부되면_그리퍼를_안_닫는다(monkeypatch, fake_gripper):
+def test_pick_up_descent_rejected_does_not_close_the_gripper(fake_api, fake_gripper):
     """
-    거부돼도 다음 줄의 그리퍼는 닫힌다 — 빈손을 물고 "집었다" 가 된다.
+    거치대로 내려가는 이동이 거부되면 그리퍼를 닫지 않는다 (#50).
 
-    피크는 놓치면 비전이 없어 되찾을 수 없다. 제일 보호가 필요한 자리였는데
-    _movel_base 가 _moved() 밖에 있어 통째로 빠져 있었다 (#50).
+    이게 #50 이 짚은 제일 위험한 자리다 — 반환을 안 보면 안 내려갔는데도 다음
+    줄에서 손가락이 닫혀 **빈손을 물고 "집었다"** 가 된다. 놓친 피크는 비전이
+    없어 되찾을 수 없다 (CLAUDE.md 2절).
     """
-    fake_common = types.ModuleType("DR_common2")
-    fake_common.posx = lambda v: list(v)
-    fake_common.posj = lambda v: list(v)
-    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
-    api = RejectingApi(reject_from=1)               # 위까지는 가고 하강에서 거부
-    monkeypatch.setattr(MP, "_api", api)
-
+    fake_api.reject = {1}                                      # 내려가는 이동을 거부
     with pytest.raises(MP.MotionError, match="movel_base"):
         MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
-    assert fake_gripper.calls == ["open"]           # 열기만 하고 안 닫혔다
+
+    assert fake_gripper.calls == ["open"]                       # 열기만 했고 닫지 않았다
+    assert len(fake_api.calls) == 2                            # 들어 올리지도 않았다
 
 
-def test_발현_이동이_거부되면_멈춘다(monkeypatch):
-    """안 움직였는데 다음 동작으로 넘어가면 줄을 안 튕기고 튕겼다고 보고한다."""
-    fake_common = types.ModuleType("DR_common2")
-    fake_common.posx = lambda v: list(v)
-    fake_common.posj = lambda v: list(v)
-    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
-    monkeypatch.setattr(MP, "_api", RejectingApi(reject_from=0))
-
+def test_pick_return_descent_rejected_does_not_open_the_gripper(fake_api, fake_gripper):
+    """반환도 같다 — 안 내려갔는데 손을 펴면 피크를 거치대 밖에 떨군다 (#50)."""
+    fake_api.reject = {1}
     with pytest.raises(MP.MotionError, match="movel_base"):
-        MP.pluck_string(_pose_x(CONTACT), {})
-
-
-def test_발현_후퇴가_거부되면_멈춘다(monkeypatch):
-    """Tool 상대 이동도 같이 본다. 후퇴가 안 되면 진동하는 줄에 피크가 닿은 채다."""
-    fake_common = types.ModuleType("DR_common2")
-    fake_common.posx = lambda v: list(v)
-    fake_common.posj = lambda v: list(v)
-    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
-    monkeypatch.setattr(MP, "_api", RejectingApi(reject_from=3))   # 위·접촉·스트로크 뒤
-
-    with pytest.raises(MP.MotionError, match="movel_tool_rel"):
-        MP.pluck_string(_pose_x(CONTACT), {})
+        MP.pick_return(Pose("pick.holder", True, task=HOLDER), {})
+    assert fake_gripper.calls == []                             # 펴지 않았다
