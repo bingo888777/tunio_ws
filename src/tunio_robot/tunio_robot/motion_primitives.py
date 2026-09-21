@@ -16,12 +16,17 @@
 그리퍼는 OnRobot RG2 이고, Compute Box 의 WebLogic 을 디지털 I/O 로 부른다
 (2026-09-19 확정). 폭·힘은 웹에서 정하고 코드는 프리셋만 고른다. gripper.py 참조.
 
-TCP 는 동작 그룹마다 자기 것을 켜고 들어간다 (2026-09-20, 이슈 #21)
-  교시 좌표는 **읽을 때 켜져 있던 TCP 와 짝**이다. 페그 4개는 GripperDA_v1
-  (툴 Z 208mm) 기준이고, 발현·거치대는 그와 다른 TCP 로 읽었다. 지금 한 파일에
-  섞여 있으므로, 좌표를 쓰는 쪽이 움직이기 직전에 자기 기준을 켠다.
-  adjust_peg 는 robot.tcp 를 켠다. 발현·피크 쪽은 ensure_tcp(pluck_tcp) 를
-  같은 방식으로 부르면 된다 (성현 몫, 이슈 #21).
+tool 과 TCP 는 connect() 가 **항상 설정하고 읽어서 확인한다** (이슈 #26·#23·#21)
+  배포용이라 펜던트 설정에 기대지 않는다. 설정이 안 된 로봇에 가져다 놓아도 같은
+  코드가 돌아야 하므로, 이미 맞아 보여도 set 을 생략하지 않는다. 이름은
+  move.py 에서 동작이 확인된 것과 같다 — tool "Tool Weight", tcp "GripperDA_v1".
+
+  판정은 set 반환값이 아니라 get 결과로 한다. 펜던트가 켜 둔 경우 set 이 -1 로
+  거부돼도 좌표는 맞기 때문이다(#23). 못 맞추면 움직이기 전에 멈춘다.
+
+  교시 좌표는 **읽을 때 켜져 있던 TCP 와 짝**이다. 그 이름을 YAML 의 pose 마다
+  tcp: 로 적어 두고, teach_points 가 robot.tcp 와 다르면 조회를 거부한다.
+  섞인 채로 움직이면 208mm 어긋난다 (#21).
 
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
@@ -86,11 +91,13 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
     # 첫 호출 전에 서비스가 보이기를 기다린다. 안 기다리면 첫 호출이 영원히 멈춘다
     _wait_services(_node, robot_cfg["id"], logger=logger)
 
+    # 배포용이라 펜던트 설정에 기대지 않는다. 항상 설정하고, 읽어서 확인한다.
+    # 순서는 tool 먼저다 — 무게 설정이 먼저 들어가야 TCP 보정이 제 값을 쓴다
     _ensure_named("tool", robot_cfg.get("tool"), logger=logger)
     _ensure_named("tcp", robot_cfg.get("tcp"), logger=logger)
     if logger:
         logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']} "
-                    f"tool='{api.get_tool()}' tcp='{api.get_tcp()}'")
+                    f"tool='{_read_named('tool')}' tcp='{_read_named('tcp')}'")
     return _api
 
 
@@ -130,40 +137,71 @@ def _wait_services(node, robot_id, timeout_sec=10.0, logger=None):
     time.sleep(1.0)   # DSR_ROBOT2 가 자기 클라이언트를 만들 여유
 
 
+def _read_named(kind):
+    """
+    활성 tool/tcp 이름을 읽는다. 못 읽으면 None.
+
+    두산 래퍼(`get_tool`/`get_tcp`)에 두 가지 함정이 있어서 그대로 못 쓴다 —
+
+    1. **타입이 섞인다.** 정상이면 `result.info`(str)지만 `result == None` 이면
+       `-1`(int)을 돌려준다. 문자열로 비교하는 쪽은 -1 을 만나면 조용히 "안 맞음"이
+       된다. 그래서 str 이 아니면 None 으로 본다.
+    2. **`ret` 이 unbound 될 수 있다.** 서비스 호출이 예외로 실패하면 except 절이
+       로그만 찍고 `ret` 을 안 채워 `return ret` 에서 UnboundLocalError 가 난다
+       (DSR_ROBOT2.py 6312·6362행). `-1` 이 아니라 파이썬 예외다. 그래서 감싼다.
+
+    응답의 `success` 는 **보지 않는다.** 컨트롤러가 `res->success = true` 로
+    하드코딩한다 (dsr_controller2.cpp 1940·1969행). 실패를 표현할 방법이 없으니
+    판단은 `info` 문자열로만 한다.
+    """
+    api = _require_api()
+    try:
+        got = getattr(api, f"get_{kind}")()
+    except Exception as e:                       # noqa: BLE001 — 래퍼가 뭘 던질지 모른다
+        raise MotionError(f"get_{kind}() 호출이 실패했다: {e!r}")
+    return got if isinstance(got, str) else None
+
+
 def _ensure_named(kind, want, logger=None):
     """
-    활성 tool/tcp 를 want 로 맞춘다. 못 맞추면 **멈춘다** (이슈 #26).
+    활성 tool/tcp 를 want 로 **반드시 설정하고**, 읽어서 확인한다 (이슈 #26·#23).
 
-    예전에는 set_tool/set_tcp 의 반환값을 버렸다. 두산 API 는 실패를 예외가 아니라
-    -1 로 돌려주므로, 거부돼도 "연결됨"이 찍히고 그대로 움직였다. 페그 좌표가
-    GripperDA_v1(툴 Z 208mm) 기준이라 TCP 가 안 켜지면 **208mm 어긋난 곳으로
-    직선 진입한다.** 헤드스톡 쪽이다.
+    배포용이라 펜던트 설정에 기대지 않는다. 설정이 안 된 로봇에 가져다 놓아도
+    같은 코드가 돌아야 하므로, 이미 맞아 보여도 `set` 을 생략하지 않는다.
+    기준 이름은 `move.py` 에서 동작이 확인된 것과 같다 —
+    tool `"Tool Weight"`, tcp `"GripperDA_v1"`.
 
-    set 이 거부돼도 **이미 켜져 있으면 통과시킨다.** 펜던트에서 직접 켜 둔 경우가
-    그렇고, 2026-09-20 시점에 set 계열이 전부 -1 로 거부됐으므로(이슈 #23)
-    이 경로가 실질적인 진행 방법이다. 판단 기준은 "set 이 성공했나"가 아니라
-    "지금 켜져 있는 것이 우리가 쓸 것인가"다.
+    판정은 **`set` 의 반환값이 아니라 `get` 결과로** 한다. 두 가지 이유다 —
+      · 펜던트가 이미 켜 둔 경우 `set` 이 -1 로 거부돼도 좌표는 맞다 (이슈 #23).
+        2026-09-19 페그 교시가 그 상태였다
+      · `set` 성공만 믿으면 컨트롤러가 다른 이름을 켜 둔 경우를 못 잡는다
+
+    못 맞추면 **움직이기 전에 멈춘다.** 페그 좌표가 GripperDA_v1(툴 Z 208mm)
+    기준이라, TCP 가 안 맞으면 208mm 어긋난 곳으로 직선 진입한다. 헤드스톡 쪽이다.
     """
     if not want:
         return
     api = _require_api()
-    getter, setter = getattr(api, f"get_{kind}"), getattr(api, f"set_{kind}")
+    before = _read_named(kind)
 
-    if getter() == want:
-        if logger:
-            logger.info(f"{kind}='{want}' 이미 켜져 있다")
-        return
+    ret, err = None, None
+    try:
+        ret = getattr(api, f"set_{kind}")(want)
+    except Exception as e:                       # noqa: BLE001 — UnboundLocalError 포함
+        err = e                                  # 실패해도 아래 확인으로 판정한다
 
-    ret = setter(want)
-    now = getter()
+    now = _read_named(kind)
     if now == want:
         if logger:
-            logger.info(f"{kind}='{want}' 설정 (반환 {ret})")
+            logger.info(f"{kind}='{want}' 확인 (set 반환 {ret}, 직전 '{before}')")
         return
+
     raise MotionError(
-        f"set_{kind}('{want}') 이 먹지 않았다 (반환 {ret}, 현재 '{now}'). "
-        f"펜던트에서 {kind} 를 '{want}' 로 직접 켜라. 교시 좌표가 그 기준이라 "
-        "다른 기준으로 움직이면 208mm 어긋난 곳으로 들어간다 (이슈 #23, #26)")
+        f"{kind} 를 '{want}' 로 못 맞췄다 (set 반환 {ret}"
+        + (f", 예외 {err!r}" if err is not None else "")
+        + f", 현재 '{now}'). 펜던트에 그 이름이 등록돼 있는지, 설정 변경 제어권이"
+        " 로봇에 있는지 확인하라. 교시 좌표가 그 기준이라 다른 기준으로 움직이면"
+        " 208mm 어긋난 곳으로 들어간다 (이슈 #23, #26)")
 
 
 def ensure_tcp(name=None, logger=None):

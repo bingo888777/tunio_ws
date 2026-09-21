@@ -56,11 +56,16 @@ def test_안_켜져_있으면_켠다(api):
     assert api.calls == [("set_tcp", "GripperDA_v1")]
 
 
-def test_이미_켜져_있으면_건드리지_않는다(api):
-    """펜던트에서 켜 둔 경우. set 이 거부돼도(#23) 이 경로로 진행할 수 있다."""
+def test_이미_켜져_있어도_다시_설정한다(api):
+    """
+    배포용이라 펜던트 설정에 기대지 않는다.
+
+    설정이 안 된 로봇에 가져다 놓아도 같은 코드가 돌아야 하므로 set 을 생략하지
+    않는다. 읽은 값이 맞아 보여도 그건 이 로봇이 우연히 그 상태인 것뿐이다.
+    """
     api.tcp = "GripperDA_v1"
     MP._ensure_named("tcp", "GripperDA_v1")
-    assert api.calls == []                       # set 을 아예 안 불렀다
+    assert api.calls == [("set_tcp", "GripperDA_v1")]
 
 
 def test_거부됐는데_이미_맞으면_통과(api):
@@ -134,3 +139,68 @@ def test_TCP_가_거부되면_페그로_안_간다(api, monkeypatch):
     with pytest.raises(MP.MotionError):
         MP.adjust_peg(object(), 6, -5.0, {})
     assert moved == []
+
+
+# ───────────────── 두산 래퍼의 함정 (DSR_ROBOT2.py 6283~6382행) ─────────────────
+#
+# get_tcp()/get_tool() 을 그대로 믿으면 안 되는 이유가 둘 있다. 실제 설치본을
+# 읽고 확인한 것이라, 드라이버가 갱신되면 이 테스트가 먼저 알려준다.
+
+class OddApi:
+    """타입을 섞거나 예외를 던지는 래퍼 흉내."""
+
+    def __init__(self, get_returns=None, get_raises=None, set_raises=None):
+        self.get_returns, self.get_raises = get_returns, get_raises
+        self.set_raises = set_raises
+        self.calls = []
+
+    def get_tcp(self):
+        if self.get_raises:
+            raise self.get_raises
+        return self.get_returns
+
+    def set_tcp(self, name):
+        self.calls.append(name)
+        if self.set_raises:
+            raise self.set_raises
+        return 0
+
+
+def test_get_가_숫자를_돌려주면_못_읽은_것으로_본다(monkeypatch):
+    """
+    응답이 None 이면 -1(int)을 돌려준다. 문자열로 비교하면 조용히 안 맞음이 된다.
+
+    -1 을 이름으로 오해하고 통과시키면 안 된다. 멈춰야 한다.
+    """
+    monkeypatch.setattr(MP, "_api", OddApi(get_returns=-1))
+    assert MP._read_named("tcp") is None
+    with pytest.raises(MP.MotionError):
+        MP._ensure_named("tcp", "GripperDA_v1")
+
+
+def test_set_이_예외를_던져도_MotionError_로_바꾼다(monkeypatch):
+    """
+    서비스가 예외로 실패하면 -1 이 아니라 UnboundLocalError 가 난다.
+
+    except 절이 로그만 찍고 ret 을 안 채운 채 return ret 을 타기 때문이다.
+    그대로 새어 나가면 부르는 쪽이 못 알아본다.
+    """
+    api = OddApi(get_returns="", set_raises=UnboundLocalError("ret"))
+    monkeypatch.setattr(MP, "_api", api)
+    with pytest.raises(MP.MotionError) as e:
+        MP._ensure_named("tcp", "GripperDA_v1")
+    assert api.calls == ["GripperDA_v1"]         # 시도는 했다
+    assert "GripperDA_v1" in str(e.value)
+
+
+def test_set_이_예외여도_결과가_맞으면_통과한다(monkeypatch):
+    """판정은 set 이 아니라 get 이 한다. 예외가 나도 켜져 있으면 진행한다."""
+    monkeypatch.setattr(MP, "_api", OddApi(get_returns="GripperDA_v1",
+                                           set_raises=UnboundLocalError("ret")))
+    MP._ensure_named("tcp", "GripperDA_v1")
+
+
+def test_get_이_예외를_던지면_멈춘다(monkeypatch):
+    monkeypatch.setattr(MP, "_api", OddApi(get_raises=RuntimeError("서비스 없음")))
+    with pytest.raises(MP.MotionError, match="get_tcp"):
+        MP._read_named("tcp")
