@@ -270,8 +270,21 @@ def test_탐색_구간이_접근_거리보다_짧다():
 def test_힘_제어를_끄면_그냥_들어간다(spy):
     MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6), use_force=False)
     assert spy.api.force == []                      # set_desired_force 를 안 불렀다
-    assert spy.api.compliance == []                 # 순응도 안 켰다
     assert [e for e in spy if e[0] == "movel"]      # 대신 직선으로 들어갔다
+
+
+def test_힘_제어를_꺼도_순응은_켠다(spy):
+    """
+    둘은 다른 것이다 (PR #37 리뷰, 정동휘).
+
+      힘 제어  "이 힘까지만 민다"   — 미검증이라 끌 수 있게 했다
+      순응제어  "걸리면 물러난다"    — 끄면 로봇이 뻣뻣해져 **오히려 더 세게 민다**
+
+    use_force 의 목적은 미검증 경로를 안 태우는 것이지 안전망을 걷는 게 아니다.
+    """
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6), use_force=False)
+    assert spy.api.compliance[0][0] == "on"
+    assert spy.api.compliance[-1] == ("off",)       # 끝나면 반드시 끈다
 
 
 def test_힘_제어를_꺼도_폭은_본다(spy):

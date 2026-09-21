@@ -678,9 +678,9 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     handle     — teach_points 의 peg_handle 절
     read_width — 지금 손가락 폭(mm)을 돌려주는 함수 (grip_width.make_reader)
     use_force  — False 면 힘 제어 없이 그냥 직선으로 들어간다. **사람이 손잡이를
-                 눕혀 놓고 지켜보는 측정 세션용**이다. 힘 제어는 사람이 빠뜨렸을 때의
-                 안전망이라, 사람이 매번 보고 있으면 굳이 태울 이유가 없다.
-                 아직 실물 검증 전이기도 하다 (#31)
+                 눕혀 놓고 지켜보는 측정 세션용**이다. 아직 실물 검증 전이기도 하다 (#31).
+                 **순응제어는 이 값과 무관하게 항상 켠다** — 끄면 로봇이 뻣뻣해져
+                 오히려 더 세게 민다 (PR #37 리뷰)
     assume_grip — True 면 폭을 안 읽고 물렸다고 본다. Modbus 가 안 붙는 PC 에서
                  측정만 할 때다. **빈손·사점을 못 가른다.** 눈으로 확인해야 한다
 
@@ -716,8 +716,12 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
     _movejx(back, motion, sol=getattr(pose, "sol", None))
 
-    if use_force:
-        compliance(motion, on=True)              # 걸리면 물러나게. 기타를 밀지 않는다
+    # 순응은 **항상** 켠다. 힘 제어와 다른 것이다 —
+    #   힘 제어  "이 힘까지만 민다"      (미검증, use_force 로 끌 수 있다)
+    #   순응제어  "걸리면 물러난다"       (끄면 로봇이 뻣뻣해져 오히려 더 세게 민다)
+    # use_force 의 목적은 미검증 힘 제어를 안 태우는 것이지 안전망을 걷는 게 아니다.
+    # 순응만으로도 미는 힘이 강성 × 남은 거리로 묶인다 (PR #37 리뷰, 정동휘)
+    compliance(motion, on=True)
     try:
         if use_force:
             _insert_force_controlled(pose, motion, handle, logger=logger)
@@ -752,8 +756,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
         return 0.0
     finally:
         _grip("open")
-        if use_force:
-            compliance(motion, on=False)         # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
+        compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
         _retreat(pose, motion)
 
 
