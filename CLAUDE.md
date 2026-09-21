@@ -266,7 +266,12 @@ src/
 
 **유효 측정 판정**: RMS(`min_db`)만으로는 방 소음을 못 거른다. 실측에서 방 소음 RMS가
 실제 연주와 완전히 겹쳤다. 그래서 두 관문을 더 건다 —
-FFT 피크 돌출 ≥16dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+FFT 피크 돌출 ≥20dB, 겹친 창 일치 폭 ≤12센트. 근거는 `src/tunio_audio/tunio_audio/pitch.py` 주석.
+2026-09-19 로봇 구동음 5분 실측 후 16 → 20dB 로 올렸다. 16dB 에서는 **발현이 없는데도**
+로봇 구동음 1194구간 중 35개(2.9%)가 유효 측정으로 통과했고, 그 값이 목표에서
+-133 ~ +92센트 벗어나 있었다. 그대로 두면 서버가 그 값으로 페그를 크게 잘못 돌린다.
+대가로 약한 발현 통과율이 96% → 64% 로 떨어지므로 **타현을 충분히 세게 해야 한다
+(분석 구간 RMS ≥ -18dBFS).** 근거는 `docs/로봇구동음_측정결과.md`.
 
 **onset 검출**: 타임아웃 기준점은 마이크가 스스로 잡는 onset이다(명세 4절).
 onset은 느슨하게 후보를 내고 진짜 발현인지는 위 관문이 판정한다.
@@ -294,12 +299,32 @@ colcon build && source install/setup.bash
 cd src/tunio_server && python3 -m pytest test/ -q
 ```
 
-**`colcon test`를 그대로 믿지 말 것.** 이 저장소에서는 테스트를 0개 실행한다.
-colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 없는 unittest는
-아무것도 탐색하지 않는다. 원인은 setup.py에 `tests_require=['pytest']`가 없어
-러너가 폴백되는 것. "NO TESTS RAN"이 통과처럼 보이기 쉽다.
-굳이 colcon으로 돌리려면 `colcon test --python-testing pytest`.
-(고치면 test_flake8이 기존 스타일 위반으로 실패하므로 지금은 그냥 둔다)
+**실행은 단계별 launch 셋 중 하나로 한다** (docs/TUNIO_관제웹_구현.md 2절).
+
+```bash
+# 1 전부 가짜 — 화면과 서버 흐름 확인. 페그를 돌리면 실제로 수렴한다
+ros2 launch tunio_bringup sim_all.launch.py            # speed:=fast 로 빠르게
+# 2 마이크만 진짜 — 사람이 직접 줄을 튕겨 측정을 검증한다
+ros2 launch tunio_bringup sim_robot.launch.py device:=2
+# 3 전부 진짜 — 최종. dry_run 기본 true 라 그냥 띄우면 로봇은 안 움직인다
+ros2 launch tunio_bringup real_all.launch.py dry_run:=false gripper:=rg2
+```
+
+1·2 는 `config/peg_calibration.sim.yaml` 을 쓴다. **지어낸 값이라 수렴해도 조율
+성능의 근거가 되지 않는다.** 3 은 그 파일을 지정하지 않으므로 실측 전에는
+조절 단계에서 PHASE_ERROR 로 멈춘다.
+
+`colcon test` 로 돌린다. 5개 패키지 전부 pytest 로 수집된다.
+
+```bash
+colcon test --packages-select tunio_server && colcon test-result --all
+```
+
+2026-09-20 이전에는 `tunio_server` 만 테스트를 0개 실행했다. `setup.py` 에
+`tests_require=['pytest']` 가 없어 colcon 이 `python3 -m unittest -v` 로 폴백했고,
+인자 없는 unittest 는 아무것도 탐색하지 않아 **"NO TESTS RAN" 이 통과처럼 보였다.**
+넣으면 `test_flake8` 이 기존 위반으로 빨개져서 미뤄 뒀던 것인데, PyQt 잔재를
+지우면서 위반이 0건이 되어 함께 해결했다 (이슈 #9).
 
 ---
 
@@ -323,7 +348,13 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 - docs/TUNIO_인터페이스_요약.md — 인터페이스 한눈에 보기. 상세는 SPEC·ICD 참조
 - docs/기획서_풀버전_v1.2.md — 전체 기획 (모든 결정과 근거)
 - docs/기획서_간략본_v1.2.md — 요약본
-- docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거
+- **docs/주파수분석_테스트가이드.md — 마이크·분석 실측 절차와 근거.**
+  페그 실측도 이 문서가 기준이다 (마이크·분석 담당)
+- docs/페그_실측표.md — 페그 회전량 대 음정 변화 실측 결과. 원자료는 docs/peg_data/
+- docs/페그_캘리브레이션_가이드.md — 페그 실측 절차
+- docs/로봇구동음_측정결과.md — 로봇 구동음이 측정을 오염시키는 정도. 돌출 문턱 근거
+- docs/로봇점검_체크리스트.md — 로봇 기동 전 점검 순서
+- docs/task_manager_구현_브리핑.md — 구현 전 미결 항목 질문 양식 (기록용)
 - docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
 - docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — 도식
 - tools/pitch_test.py — 주파수 분석 검증 스크립트 (단독 실행 가능)
@@ -351,8 +382,14 @@ colcon이 pytest가 아니라 `python3 -m unittest -v`를 돌리는데, 인자 �
 **미확정 (실측 후 확정)**
 - 허용 센트 확정값 (현재 10.0으로 시작)
 - onset 제한 시간 확정값 (현재 10.0)
-- 페그 회전량 계산식 — `config/peg_calibration.yaml` 의 줄별 실측값이 들어와야 한다.
-  `measured: false` 인 동안 task_manager 는 페그를 돌리지 않고 PHASE_ERROR 로 멈춘다
+- 페그 캘리브레이션 — 네 칸 중 `cents_per_deg` 만 실측됐다(2026-09-19).
+  `min_effective_deg`·`backlash_release_cents` 는 **페그 교시가 끝나야** 잴 수 있고,
+  `max_angle_deg` 는 로봇 담당이 가동 범위를 보고 정한다. 네 칸이 다 차기 전에는
+  `measured: true` 로 못 올리고, task_manager 는 조절이 필요한 순간 PHASE_ERROR 로
+  멈춘다. (이슈 #8, #10)
+- 5번 A2 줄의 로봇 소음 오검출 3.1% 를 감수할지 — 문턱을 22dB 로 올리면 0.17% 로
+  떨어지지만 약한 발현 통과율이 22% 로 무너진다. (이슈 #7)
+- 로봇 타현 세기 목표 — 분석 구간 RMS ≥ -18dBFS 를 만족하는 타현 조건. (이슈 #6)
 - **피크 거치대 왕복 시간** — onset_timeout_sec 확정에 필요하다. 피크를 가지러 가는
   시간이 onset 제한 시간 예산에 들어가, 넘기면 발현 실패(FAIL_LOW_SIGNAL)로 오보고된다
 - **페그 파지 확인 방법 자체** — 토크로 될지 아직 모른다. 2026-09-19 6번 줄 실측에서

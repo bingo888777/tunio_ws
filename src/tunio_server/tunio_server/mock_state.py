@@ -1,5 +1,5 @@
 """
-mock_state — 로봇·마이크 없이 관제 웹 화면만 확인하기 위한 모의 발행기. 담당: 정동휘
+mock_state — 로봇·마이크 없이 관제 웹 화면만 확인하기 위한 모의 발행기. 담당: 정동휘.
 
 기획 11.1 의 "UI는 모의 측정값으로 개발"에 해당한다. 조율 로직이 아니라 화면 검증용이다.
 판정식도 수렴 규칙도 진짜가 아니다 — 화면에 나타날 수 있는 경우를 순서대로 보여주는 것이 목적이다.
@@ -344,15 +344,17 @@ class MockState(Node):
         self._history.append((job, list(self.results), snapshot))
 
     def _run(self):
-        self.results = []
+        # 대상 4줄을 처음부터 RESULT_PENDING 으로 채워 둔다. 끝난 것만 덧붙이면
+        # 아직 차례가 오지 않은 줄이 배열에 없어서, 화면이 목표 주파수조차 못 그린다.
+        # task_manager 도 같은 방식이다 (항상 4개를 다 보낸다).
+        self.results = [self._new_result(n, t) for n, t in TARGETS]
         self.overall = TuningState.OVERALL_PENDING
         self.measurement_valid = False
         self.measured_hz = 0.0
         self._publish()
         try:
-            for n, target in TARGETS:
-                r = self._new_result(n, target)
-                self.results.append(r)
+            for idx, (n, target) in enumerate(TARGETS):
+                r = self.results[idx]
                 self._publish()
                 self._tune_string(n, target, r)
 

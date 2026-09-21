@@ -1,6 +1,7 @@
-from setuptools import find_packages, setup
-import os
 from glob import glob
+import os
+
+from setuptools import find_packages, setup
 
 package_name = 'tunio_server'
 
@@ -19,6 +20,7 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
+    tests_require=['pytest'],
     maintainer='tunio-team',
     maintainer_email='team@example.com',
     description='tunio_server',
@@ -26,7 +28,6 @@ setup(
     entry_points={
         'console_scripts': [
             'task_manager = tunio_server.task_manager:main',
-            'hmi_node = tunio_server.hmi_node:main',
             'web_node = tunio_server.web_node:main',
             'mock_state = tunio_server.mock_state:main',
             'result_store = tunio_server.result_store:main',

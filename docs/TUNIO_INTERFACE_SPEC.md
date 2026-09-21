@@ -4,7 +4,7 @@
 아래 정의와 실제 파일이 다르면 **이 문서 쪽이 기준**이다.
 
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
-PC 3대가 ROS 2 Jazzy로 통신한다. 서버(task_manager, hmi_node, result_store) / 로봇(robot_controller) / 마이크(audio_analyzer).
+PC 3대가 ROS 2 Jazzy로 통신한다. 서버(task_manager, web_node, result_store) / 로봇(robot_controller) / 마이크(audio_analyzer).
 
 ---
 
@@ -267,7 +267,7 @@ uint8 overall_result
 
 ### msg/TuningState.msg
 
-`/tuning/state` · task_manager → hmi_node
+`/tuning/state` · task_manager → web_node
 UI는 이 메시지 하나만 보고 실시간 탭을 그린다.
 QoS는 reliable, depth 1, transient local. 늦게 켠 UI도 마지막 상태를 즉시 받는다.
 
