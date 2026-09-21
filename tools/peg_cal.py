@@ -114,10 +114,16 @@ def measure_once(rec, center_hz, duration, sim=None):
 _last_level = None
 LEVEL_DRIFT_DB = 3.0       # 이만큼 차이나면 경고 (약 1.5센트 편향에 해당)
 
+# 방금 끝난 measure_stable 한 번의 평균 세기. 호출한 쪽이 원자료에 같이 적으려고
+# 읽는다. _last_level 과 나눠 두는 이유는 그쪽이 '직전 측정' 을 계속 들고 있어야
+# 해서다 — 이번에 세기를 못 얻었는데 그 값을 적으면 남의 RMS 가 이 측정에 붙는다.
+_this_level = None
+
 
 def measure_stable(rec, center_hz, duration, tries=4, sim=None):
     """여러 번 재서 중앙값. 2회 이상 성공해야 값을 준다."""
-    global _last_level
+    global _last_level, _this_level
+    _this_level = None
     vals, levels, last = [], [], ""
     for i in range(tries):
         if i:
@@ -162,7 +168,17 @@ def measure_stable(rec, center_hz, duration, tries=4, sim=None):
                   f"({_last_level:+.1f} → {lv:+.1f} dBFS). 이것만으로 "
                   f"{d * 0.516:+.1f}센트가 생깁니다 — 회전 결과와 구분되지 않습니다")
         _last_level = lv
+        _this_level = lv
     return med
+
+
+def level_or_none():
+    """방금 측정의 평균 세기(dBFS). 못 얻었으면 None.
+
+    원자료에 (RMS, 센트) 쌍을 남기려고 둔다. 이 쌍이 있어야 나중에 측정 편향
+    (0.516 센트/dB)을 회전 결과에서 떼어내 재계산할 수 있다.
+    """
+    return None if _this_level is None else round(float(_this_level), 2)
 
 
 def ask_angle(default):
@@ -412,8 +428,14 @@ def value_at_target(segs, target):
     return float(v.mean()), "전 구간 평균 (주파수 범위가 좁음)"
 
 
-def run_backlash(rec, args, name, target):
-    """푸는 방향으로 돌릴 때 음이 떨어지기 시작하는 누적 각도 (가이드 7절)."""
+def run_backlash(rec, args, name, target, out=None):
+    """
+    푸는 방향으로 돌릴 때 음이 떨어지기 시작하는 누적 각도 (가이드 7절).
+
+    결론 한 숫자 말고 회전마다의 값을 out 에 같이 담는다 (이슈 #55).
+    표에 옮겨 적은 다섯 값이 아니라 이 원자료에서 백래시를 다시 계산할 수
+    있어야, 거기서 나온 backlash_release_cents 가 검증 가능한 숫자가 된다.
+    """
     print(f"\n{'=' * 64}")
     print(f"백래시 측정 — {args.string}번 줄 {name}")
     print(f"{'=' * 64}")
@@ -424,7 +446,24 @@ def run_backlash(rec, args, name, target):
                           sim=target if args.sim is not None else None)
     if base is None:
         return None
-    print(f"  기준 {base:.3f} Hz. 이제 **푸는 방향**으로 {args.step:.0f}도씩 돌립니다")
+
+    raw = {
+        # 기준은 조이는 방향으로 맞춰 두고 푸는 방향으로 돌린다. 그 첫 회전이
+        # 곧 방향 전환이고, 거기서 먹히는 각이 백래시다.
+        "기준_맞춤_방향": "조임",
+        "회전_방향": "풀림",
+        "방향전환_회차": 1,
+        "단위각도_도": args.step,
+        "기준_hz": round(base, 4),
+        "기준_rms_dbfs": level_or_none(),
+        "열": [
+            "누적각도_도", "측정_hz", "센트변화", "누적효율_센트per도", "rms_dbfs",
+        ],
+        "점": [],
+    }
+    if out is not None:
+        out["백래시_원자료"] = raw
+
     total, seen = 0.0, []
     for i in range(1, 13):
         deg = turn(args, args.step, direction=-1)      # 백래시는 푸는 방향이다
@@ -443,6 +482,10 @@ def run_backlash(rec, args, name, target):
             continue
         c = cents(f, base)
         seen.append((total, c))
+        raw["점"].append([
+            round(total, 1), round(f, 4), round(c, 4),
+            round(c / total, 5) if total else None, level_or_none(),
+        ])
         print(f"    누적 {total:.0f}도 → {f:.3f} Hz  {c:+.1f}센트")
         if c < -5.0:
             # -5센트에 닿은 각도가 아니라 '떨어지기 시작한' 각도가 백래시다.
@@ -453,6 +496,18 @@ def run_backlash(rec, args, name, target):
                 slope = (c2 - c1) / (d2 - d1)
                 if slope < -1e-6:
                     start = max(0.0, d2 - c2 / slope)
+            if len(seen) >= 2:
+                used = [[round(d1, 1), round(c1, 4)],
+                        [round(d2, 1), round(c2, 4)]]
+                used_slope = round(slope, 5)
+            else:
+                used, used_slope = None, None
+            raw["역산"] = {
+                "문턱_센트": -5.0,
+                "쓴_두_점": used,
+                "기울기_센트per도": used_slope,
+                "백래시_도": round(start, 1),
+            }
             print(f"\n  {total:.0f}도에서 {c:+.1f}센트 — 기울기로 역산한 백래시 "
                   f"= 약 {start:.0f}도")
             print(f"  → 되돌릴 때는 여유를 둬 {start * 2:.0f}~{start * 2.5:.0f}도쯤 "
@@ -479,7 +534,7 @@ MIN_ANGLE_RATIO = 0.7
 MIN_ANGLE_STEADY = 0.6
 
 
-def run_min_angle(rec, args, name, target):
+def run_min_angle(rec, args, name, target, out=None):
     """
     유격에 묻히지 않고 실제로 음이 변하기 시작하는 최소 각도 (가이드 7절).
 
@@ -496,6 +551,10 @@ def run_min_angle(rec, args, name, target):
     그래서 사다리를 센트 기준으로 짜고(줄마다 각도가 달라진다), 판정도
     "기대한 만큼 움직였는가"로 바꿨다. 같은 각도를 여러 번 이어 돌려
     누적 변화를 보므로 신호는 쌓이고 잡음은 안 쌓인다.
+
+    단·회마다의 값을 out 에 같이 담는다 (이슈 #55). 표준편차·고른비는 결론이
+    아니라 이 회별 값에서 나오는 것이라, 원자료가 있어야 판정 기준을 나중에
+    바꿔도 다시 재지 않고 재계산할 수 있다.
     """
     cpd = args.cpd if args.cpd else MEASURED_CPD.get(args.string)
     if not cpd:
@@ -510,6 +569,19 @@ def run_min_angle(rec, args, name, target):
     print("  목표 근처에서, 조이는 방향으로만 돌립니다")
     print(f"  각 단을 {args.repeat}번 이어 돌려 누적 변화를 봅니다\n")
 
+    raw = {
+        "기준_민감도_센트per도": round(float(cpd), 4),
+        "민감도_출처": "--cpd" if args.cpd else "MEASURED_CPD",
+        "사다리_센트": list(MIN_ANGLE_RUNGS_CENTS),
+        "단별_반복": args.repeat,
+        "판정_누적비_문턱": MIN_ANGLE_RATIO,
+        "판정_고른비_문턱": MIN_ANGLE_STEADY,
+        "수렴한계_도": round(10.0 / cpd, 2),
+        "단": [],
+    }
+    if out is not None:
+        out["최소유효각도_원자료"] = raw
+
     found, rows = None, []
     for want_cents in MIN_ANGLE_RUNGS_CENTS:
         deg = round(want_cents / cpd, 1)
@@ -521,7 +593,19 @@ def run_min_angle(rec, args, name, target):
             input("      준비되면 엔터 ")
         base = measure_stable(rec, target, args.duration,
                               sim=target if args.sim is not None else None)
+        rung = {
+            "단_도": deg,
+            "기대_센트": want_cents,
+            "기준_hz": round(base, 4) if base is not None else None,
+            "기준_rms_dbfs": level_or_none(),
+            "열": [
+                "실제각도_도", "측정_hz", "센트변화", "기대_센트", "비율", "rms_dbfs",
+            ],
+            "회": [],
+        }
+        raw["단"].append(rung)
         if base is None:
+            rung["판정"] = "기준 측정 실패"
             continue
 
         prev, total_deg, ok_count, steps = base, 0.0, 0, []
@@ -547,6 +631,10 @@ def run_min_angle(rec, args, name, target):
             step_c = cents(f, prev)
             want = actual * cpd
             steps.append(step_c / want if want else 0.0)
+            rung["회"].append([
+                round(actual, 2), round(f, 4), round(step_c, 4),
+                round(want, 4), round(steps[-1], 4), level_or_none(),
+            ])
             print(f"        {actual:.1f}도 → {step_c:+.2f}센트 "
                   f"(기대 {want:.2f}, {100 * steps[-1]:.0f}%)"
                   f"  누적 {total_deg:.1f}도 / {cents(f, base):+.2f}센트")
@@ -554,6 +642,7 @@ def run_min_angle(rec, args, name, target):
             ok_count += 1
 
         if ok_count < 2 or total_deg <= 0:
+            rung["판정"] = "측정 부족"
             print("      측정이 모자라 이 단계는 건너뜁니다")
             continue
         got = cents(prev, base)
@@ -562,6 +651,14 @@ def run_min_angle(rec, args, name, target):
         steady = sum(1 for r in steps if 0.5 <= r <= 1.5) / len(steps)
         ok = ratio >= MIN_ANGLE_RATIO and steady >= MIN_ANGLE_STEADY
         rows.append((deg, total_deg, eff, ratio, steady))
+        rung.update({
+            "누적각도_도": round(total_deg, 2),
+            "누적_센트": round(got, 4),
+            "효율_센트per도": round(eff, 5),
+            "누적비": round(ratio, 4),
+            "고른비": round(steady, 4),
+            "판정": "먹힘" if ok else "못 씀",
+        })
         print(f"      누적 {total_deg:.1f}도에 {got:+.2f}센트 = {eff:.3f} 센트/도")
         print(f"      누적비 {ratio * 100:.0f}%  고른비 {steady * 100:.0f}%"
               f"  →  {'먹힘' if ok else '못 씀'}")
@@ -571,6 +668,7 @@ def run_min_angle(rec, args, name, target):
             print("       결과를 예측할 수 없습니다)")
         if ok and found is None:
             found = deg
+            raw["최소유효각도_도"] = deg
             print(f"      ★ 최소 유효 각도 = 약 {deg}도")
             break
 
@@ -657,9 +755,9 @@ def main():
            "단위각도": args.step}
 
     if args.backlash:
-        out["백래시_도"] = run_backlash(rec, args, name, target)
+        out["백래시_도"] = run_backlash(rec, args, name, target, out)
     elif args.min_angle:
-        out["최소유효각도_도"] = run_min_angle(rec, args, name, target)
+        out["최소유효각도_도"] = run_min_angle(rec, args, name, target, out)
     else:
         rounds = run_sweep(rec, args, name, target, out)
         if not rounds:

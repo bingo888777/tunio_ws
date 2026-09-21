@@ -17,6 +17,8 @@
 """
 
 import argparse
+from datetime import datetime
+import json
 import sys
 import time
 
@@ -259,6 +261,9 @@ def main():
                     help="스펙트럼 피크·클리핑 비율 출력")
     ap.add_argument("--save", type=str, default=None,
                     help="녹음을 WAV로 저장 (예: --save test → test_1.wav, test_2.wav ...)")
+    ap.add_argument("--save-json", type=str, default=None,
+                    help="회차별 원자료를 JSON 으로 저장 (회차·f0·센트·RMS). "
+                         "측정 편향을 나중에 재계산하려면 이게 있어야 한다")
     args = ap.parse_args()
 
     if sd is None:
@@ -291,6 +296,10 @@ def main():
     print(f"녹음 {args.duration}초, 앞 {args.skip}초 제외, {args.repeat}회 반복\n")
 
     results = []
+    # 회차마다의 원자료. (RMS, 센트) 쌍이 여기 있어야 측정 편향을 나중에 다시
+    # 계산할 수 있다 — 2026-09-21 에 r=0.913 / 0.516 센트per dB 를 얻은 8점이
+    # 화면에만 있고 저장소에 없어서 재계산이 안 됐다 (이슈 #55).
+    rows = []
     for i in range(args.repeat):
         input(f"[{i + 1}/{args.repeat}] 엔터를 누른 뒤 줄을 뜯으세요 ")
         for c in (3, 2, 1):
@@ -314,11 +323,15 @@ def main():
             print(f"  클리핑 {cr * 100:.2f}%   피크: {pk}")
 
         if level < args.min_db:
+            rows.append([i + 1, None, None, round(level, 2), 0, 0,
+                         "소리 부족"])
             print(f"  → 소리 부족 (RMS {level:.1f} dBFS < {args.min_db})\n")
             continue
 
         f0, ok, total, frames, method = estimate_pitch(sig, SR, fmin, fmax)
         if f0 is None:
+            rows.append([i + 1, None, None, round(level, 2), 0, total,
+                         "주파수 판별 불가"])
             print(f"  → 주파수 판별 불가 (RMS {level:.1f} dBFS, 유효 프레임 0/{total})\n")
             continue
 
@@ -329,7 +342,11 @@ def main():
             line += f"   오차 {c:+.2f} 센트 ({f0 - f_target:+.3f} Hz)"
             results.append(c)
         else:
+            c = None
             results.append(f0)
+        rows.append([i + 1, round(f0, 4),
+                     round(c, 4) if c is not None else None,
+                     round(level, 2), ok, total, method])
         print(line + "\n")
 
     # ------ 요약 ------
@@ -351,6 +368,33 @@ def main():
             print(f"측정 {len(arr)}회  평균 {arr.mean():.3f} Hz  "
                   f"표준편차 {arr.std(ddof=1):.3f} Hz")
         print("=" * 60)
+
+    save_json(args, f_target, rows)
+
+
+def save_json(args, f_target, rows):
+    """회차별 원자료를 JSON 으로 남긴다 (이슈 #55).
+
+    --save 는 WAV 저장이라 이름이 겹친다. 그래서 --save-json 을 따로 뒀다.
+    결론(평균·표준편차)은 이 행들에서 다시 나오므로 행만 남기면 된다.
+    """
+    if not args.save_json:
+        return
+    out = {
+        "측정일": datetime.now().isoformat(timespec="seconds"),
+        "줄": args.string,
+        "목표_hz": round(f_target, 4) if f_target else None,
+        "녹음초": args.duration,
+        "앞제외초": args.skip,
+        "최소_rms_dbfs": args.min_db,
+        "열": [
+            "회차", "f0_hz", "센트", "rms_dbfs", "유효프레임", "전체프레임", "비고",
+        ],
+        "회": rows,
+    }
+    with open(args.save_json, "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"원자료 저장: {args.save_json}")
 
 
 if __name__ == "__main__":
