@@ -58,6 +58,14 @@ class RobotController(Node):
         # 필요해 발현↔페그 조절 사이마다 반환·집기가 한 번씩 낀다.
         # 노드 시작 시 피크는 거치대에 있다고 가정한다 — Phase 0 은 페그
         # 손잡이 각도만 다루고 피크는 다루지 않는다
+        #
+        # True/False 둘로는 부족하다 — None(모름)이 있다. pick_up() 은
+        # 그리퍼를 닫은 **뒤에도** 들어 올리기·대기 자세 이동이 남아 있는데,
+        # 그 사이 예외가 나면 물리적으로는 피크를 쥔 채 함수만 실패한다. 그때
+        # False 로 남으면 다음 _ensure_pick() 이 pick_up() 을 다시 불러
+        # **그 첫 동작인 _release() 가 지금 팔이 있는 자리에서 피크를 놓아버린다**
+        # (거치대 위가 아닐 수 있다). None 이면 그 대신 멈추고 사람을 부른다
+        # (이슈 #34-1).
         self._holding_pick = False
 
         cb = ReentrantCallbackGroup()
@@ -158,19 +166,39 @@ class RobotController(Node):
         집는 시점을 여기서 판단하는 이유 — 서버는 play_string 이 언제 오는지만
         알지, 로봇이 지금 손이 비어 있는지는 모른다. 인터페이스를 안 늘리려면
         로봇이 스스로 판단해야 한다 (CLAUDE.md 2절).
+
+        _holding_pick 이 None(모름)이면 거부한다 — 이전 집기가 중간에 실패해
+        실제로는 쥐고 있을 수 있다. 그 상태로 또 pick_up() 을 부르면 첫 동작인
+        _release() 가 지금 팔 위치에서 피크를 놓아버린다 (이슈 #34-1).
         """
+        if self._holding_pick is None:
+            raise MP.MotionError(
+                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
+                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
         if self._holding_pick:
             return
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
         standby = self.points.frame("standby")
         if self.dry_run:
             self.get_logger().info(f"[dry_run] 피크 집기 {holder.task}")
-        else:
-            MP.pick_up(holder, self.points.motion, standby=standby)
+            self._holding_pick = True
+            return
+        self._holding_pick = None                     # 시도 중 — 끝나기 전엔 모른다
+        MP.pick_up(holder, self.points.motion, standby=standby)
         self._holding_pick = True
 
     def _release_pick(self):
-        """페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다."""
+        """
+        페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다.
+
+        반환한 뒤에는 팔이 거치대 위에 남는다. 그 자리에서 페그로 직행하는
+        경로(movejx)는 아직 실기 충돌 검증이 없어서(이슈 #34-2), _side 를
+        비워 다음 adjust_peg 가 무조건 경유지를 타게 한다.
+        """
+        if self._holding_pick is None:
+            raise MP.MotionError(
+                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
+                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
         if not self._holding_pick:
             return
         holder = self.points.pick_holder()
@@ -179,6 +207,7 @@ class RobotController(Node):
         else:
             MP.pick_return(holder, self.points.motion)
         self._holding_pick = False
+        self._side = None
 
     # ------------------------------------------------------ Action
     def on_play(self, goal):
@@ -229,10 +258,12 @@ class RobotController(Node):
             # Action 이 인터페이스 13개에 없어서 이 Action 이 복귀까지 책임진다
             # (2026-09-19 결정). 정상 완료 경로에만 있다.
             standby = self.points.frame("standby")
-            # 화음도 발현이라 피크가 필요하다. 작업 마지막이니 훑은 뒤 거치대에
-            # 돌려놓고 빈손으로 복귀한다 — 다음 작업 시작도 "거치대에 있다"는
-            # 가정(Phase 0)이 그대로 성립해야 한다
-            self._ensure_pick()
+            # TODO(성현, 이슈 #34-3): strum_all 이 구현되면 여기 _ensure_pick() 을
+            # 다시 넣는다 — 화음도 발현이라 피크가 필요하다. 지금 넣어두면
+            # motion_primitives.strum_all() 이 NotImplementedError 를 던지기
+            # *전에* 실제로 피크를 집어버려서, dry_run 이 아닌 실기에서 로봇이
+            # 피크를 쥔 채 반환도 못 하고 멈춘다. 미구현 상태에선 빼 둔다.
+            # (반환 쪽은 그대로 둔다 — play_string 이 앞서 쥐어 놨을 수 있어서다)
             if self.dry_run:
                 self.get_logger().info(
                     f"[dry_run] 화음 훑기 {numbers} -> 대기 자세 복귀 {standby.joints}")
