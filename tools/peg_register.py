@@ -13,7 +13,8 @@ peg_register — Phase 0 등록부터 재진입까지 **전체 흐름**을 확�
 
 안전
   · Phase 0 는 꽉 물지만(15mm) **돌리지 않는다.** 돌릴 때는 21mm 로 푼다
-  · 진입은 순응제어(삽입축 무르게)로 나눠서 들어간다. 걸리면 물러나고 멈춘다
+  · 진입은 **힘 제어**다. 미는 힘에 상한을 걸어 그보다 세게는 못 민다.
+    기타가 몇 N 에서 밀리는지 몰라도 안전하다 (2026-09-21 변경)
 
 시작 전에
   **세로로 선 손잡이가 있으면 손으로 눕혀 두세요.** 열기 폭 38mm 로는 서 있는
@@ -93,8 +94,8 @@ def main():
     print(f"  열기           open ({points.gripper['presets']['open'].get('width_mm')}mm)")
     print(f"  문턱           빈손 < {handle['thresholds_mm']['empty_below']} "
           f"< 물림 < {handle['thresholds_mm']['dead_above']} < 사점  (mm)")
-    print(f"  접촉 문턱      {handle['contact_force_n']:.1f}N, "
-          f"{handle['insert_steps']}단계로 나눠 진입")
+    print(f"  진입           힘 제어 — 미는 힘 {handle['insert_force_n']:.1f}N 상한, "
+          f"{handle['contact_force_n']:.1f}N 에 막힘 판정")
     if handle.get("requires_prealign"):
         print("  ⚠️ 세로로 선 손잡이는 미리 손으로 눕혀 둘 것 (열기 38mm 로는 못 지난다)")
     if args.turn:
@@ -135,8 +136,9 @@ def main():
             MP.goto_route(route, motion)
 
         rec = {"attempts": []}
-        confirm("\n1) 등록 — 순응 켜고 나눠 들어간 뒤 꽉 물어 각을 확정한다.\n"
-                "    손잡이가 서 있으면 들어가다 걸려 멈춘다. 그때는 손으로 눕히고 다시.")
+        confirm(f"\n1) 등록 — 순응 켜고 {handle['insert_force_n']:.1f}N 상한으로 밀어 넣은 뒤\n"
+                "    꽉 물어 각을 확정한다. 손잡이가 서 있으면 막혀서 멈춘다.\n"
+                "    ⚠️ 힘 제어 첫 실행이면 기타에서 떨어진 자리에서 한 번 보라.")
         try:
             roll = MP.register_peg(peg, motion, handle, read_width)
         except MP.MotionError as e:

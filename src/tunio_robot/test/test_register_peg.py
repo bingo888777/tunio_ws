@@ -15,7 +15,8 @@ from tunio_robot import motion_primitives as MP
 HANDLE = {
     "measured": True, "requires_prealign": True,
     "thickness_mm": 19.6, "length_mm": 32.8, "empty_mm": 13.0,
-    "probe_preset": "close", "contact_force_n": 8.0, "insert_steps": 4,
+    "probe_preset": "close", "insert_force_n": 3.0, "contact_force_n": 2.0,
+    "arrive_tol_mm": 2.0, "insert_timeout_sec": 5.0,
     "thresholds_mm": {"empty_below": 16.3, "dead_above": 26.2},
 }
 MOTION = {"peg_joint": 6, "approach_mm": 100.0,
@@ -31,10 +32,16 @@ class _Peg:
 
 
 class _Api:
-    """순응제어 호출만 기록하는 가짜 두산 API."""
+    """순응제어·힘 제어 호출을 기록하는 가짜 두산 API."""
 
-    def __init__(self):
+    DR_AXIS_X, DR_AXIS_Y, DR_AXIS_Z = 0, 1, 2
+    DR_BASE, DR_MV_MOD_ABS, DR_FC_MOD_REL = 0, 0, 1
+    DR_COND_NONE = -10000
+
+    def __init__(self, blocked=False):
         self.compliance = []
+        self.force = []
+        self.blocked = blocked          # True 면 막혀서 목표에 영영 못 닿는다
 
     def task_compliance_ctrl(self, stx):
         self.compliance.append(("on", list(stx)))
@@ -43,6 +50,22 @@ class _Api:
     def release_compliance_ctrl(self):
         self.compliance.append(("off",))
         return 0
+
+    # 두산 시그니처를 그대로 흉내 낸다. 이름이 내장함수와 겹치는 건 원본 탓이다
+    def set_desired_force(self, fd, dir, mod=None):        # noqa: A002
+        self.force.append(("push", list(fd), list(dir)))
+        return 0
+
+    def release_force(self, time=0):
+        self.force.append(("release",))
+        return 0
+
+    def check_position_condition(self, axis, min=None, max=None,   # noqa: A002
+                                 ref=None, mod=None):
+        return not self.blocked         # 안 막혔으면 바로 도달한 것으로 본다
+
+    def check_force_condition(self, axis, max=None, min=None, ref=None):  # noqa: A002
+        return self.blocked
 
 
 class _Log(list):
@@ -59,7 +82,6 @@ def spy(monkeypatch):
     monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
     monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: log.append(("movejx", list(t))))
     monkeypatch.setattr(MP, "_movel", lambda t, m: log.append(("movel", list(t))))
-    monkeypatch.setattr(MP, "read_force", lambda: [0.0, 0.0, 0.0, 0, 0, 0])
     log.api = api
     return log
 
@@ -82,45 +104,58 @@ def test_꽉_무는_프리셋으로_잰다(spy):
     assert ("grip", "peg") not in spy
 
 
-def test_나눠서_들어간다(spy):
-    """한 번에 직선으로 들어가면 도중에 걸렸는지 볼 지점이 없다."""
+# ------------------------------------------------------------ 힘 제어 진입
+def test_접근축으로_민다(spy):
+    """
+    네 페그 접근축이 전부 base ±Y 다. 지배축을 골라 그 방향으로만 힘을 준다.
+
+    6번은 툴 Z 가 +Y 라 +Y 로 밀어야 한다. 부호가 뒤집히면 뒤로 간다.
+    """
     MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
-    ins = [e for e in spy if e[0] == "movel"]
-    assert len(ins) >= HANDLE["insert_steps"]
+    push = next(e for e in spy.api.force if e[0] == "push")
+    fd, dir_ = push[1], push[2]
+    assert dir_ == [0.0, 1.0, 0.0, 0.0, 0.0, 0.0]      # Y 축만
+    assert fd[1] == pytest.approx(HANDLE["insert_force_n"])
 
 
-# ------------------------------------------------------------ 접촉 감지
-def test_걸리면_멈추고_어느_줄인지_알린다(spy, monkeypatch):
+def test_미는_힘이_상한이다(spy):
+    """기타가 몇 N 에서 밀리는지 몰라도, 이보다 세게는 못 민다."""
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    fd = next(e for e in spy.api.force if e[0] == "push")[1]
+    assert max(abs(v) for v in fd) == pytest.approx(HANDLE["insert_force_n"])
+
+
+def test_막히면_멈추고_어느_줄인지_알린다(spy):
     """
     열기 38mm 로는 59도쯤 선 손잡이(38.2mm 필요)를 못 지난다.
 
-    폭을 키우면 옆 페그를 친다. 그래서 들이받기 전에 멈추고 사람에게 알린다.
+    폭을 키우면 옆 페그를 친다. 그래서 막히면 사람에게 알린다.
     """
-    monkeypatch.setattr(MP, "read_force", lambda: [9.0, 0.0, 0.0, 0, 0, 0])
+    spy.api.blocked = True
     with pytest.raises(MP.MotionError) as e:
         MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
     assert "pegs.6" in str(e.value)
     assert "눕힌" in str(e.value)
 
 
-def test_걸리면_물러난다_밀지_않는다(spy, monkeypatch):
-    monkeypatch.setattr(MP, "read_force", lambda: [9.0, 0.0, 0.0, 0, 0, 0])
+def test_막혀도_힘_제어를_푼다(spy):
+    """켠 채로 두면 다음 동작이 전부 흐물거린다."""
+    spy.api.blocked = True
     with pytest.raises(MP.MotionError):
         MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
-    assert abs(spy[-1][1][1] - PEG6[1]) > 50.0       # 마지막 이동이 물러난 지점
+    assert spy.api.force[-1] == ("release",)
 
 
-def test_문턱_아래면_그냥_들어간다(spy, monkeypatch):
-    monkeypatch.setattr(MP, "read_force", lambda: [7.9, 0.0, 0.0, 0, 0, 0])
-    assert MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6)) == pytest.approx(0.0)
+def test_막히면_물러난다(spy):
+    spy.api.blocked = True
+    with pytest.raises(MP.MotionError):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    assert abs(spy[-1][1][1] - PEG6[1]) > 50.0
 
 
-def test_힘을_못_읽어도_진행한다(spy, monkeypatch):
-    """감시가 안 되는 건 아쉽지만, 그것 때문에 등록 자체를 막지는 않는다."""
-    def boom():
-        raise RuntimeError("센서 없음")
-    monkeypatch.setattr(MP, "read_force", boom)
-    assert MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6)) == pytest.approx(0.0)
+def test_상한이_미는_힘보다_낮다():
+    """상한이 미는 힘 이상이면 막혀도 영영 안 걸린다."""
+    assert HANDLE["contact_force_n"] < HANDLE["insert_force_n"]
 
 
 # ------------------------------------------------------------ 폭 판정

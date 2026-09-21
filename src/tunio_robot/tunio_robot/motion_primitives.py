@@ -545,37 +545,69 @@ def compliance(motion, on=True):
     return api.task_compliance_ctrl(list(stx))
 
 
-def _insert_watching_force(pose, motion, limit_n, steps):
+def _insert_force_controlled(pose, motion, handle, logger=None):
     """
-    접근점에서 페그까지 **나눠서** 들어가며 걸리는지 본다 (이슈 #31).
+    접근점에서 페그까지 **힘 상한을 정해 놓고** 들어간다 (이슈 #31).
 
-    왜 필요한가
-      열기 폭이 38mm 인데 손잡이가 59도쯤 서 있으면 38.2mm 가 필요하다. 못 들어간다.
-      폭을 키우면 옆 페그를 치므로 늘릴 수도 없다. 그래서 **들이받기 전에 멈춘다.**
+    왜 위치 제어로 나눠 들어가면 안 되나
+      위치를 명령하면 로봇은 그 자리까지 **어떻게든 간다.** 막혀 있으면 밀어버린다.
+      걸음을 잘게 쪼개고 힘을 확인해도 "밀고 나서 확인"이라 이미 늦다.
+      2026-09-21 실물에서 기타가 밀렸다. 순응 강성 0.2 N/mm 에 걸음 12.5mm 라
+      한 걸음에 2.5N 밖에 안 쌓여 8N 문턱에 영영 못 닿았고, 그대로 밀고 들어갔다.
+      강성을 더 낮추는 건 답이 아니다 — 낮출수록 힘이 늦게 쌓여 감지가 더 늦어진다.
 
-      한 번에 직선으로 들어가면 도중에 확인할 지점이 없다. 짧게 끊어 들어가면서
-      매 구간 뒤에 툴에 걸리는 힘을 본다. 문턱을 넘으면 손잡이에 걸린 것이다.
+    그래서 힘을 명령한다
+      set_desired_force 로 접근축 방향에 상한을 걸면 로봇이 **그 힘까지만 민다.**
+      감지가 아니라 제어다. 기타가 몇 N 에서 밀리는지 몰라도 상한을 낮게 잡으면
+      그보다 세게 미는 일이 없다. 나사로 고정된 게 아니라 마찰이 매번 다른
+      상황에 맞는 방식이다.
 
-    걸리면 물러난 뒤 MotionError 를 낸다. 사람이 그 줄 손잡이만 눕히면 된다.
+    끝나는 조건은 둘
+      · 목표 깊이 도달 — 손잡이를 무사히 지났다. 물면 된다
+      · 힘이 상한 — 뭔가에 막혔다. 이미 안 밀고 버티는 중이라 기타는 안 밀린다
     """
-    back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
-    for i in range(1, steps + 1):
-        t = i / float(steps)
-        mid = [back[k] + (pose.task[k] - back[k]) * t for k in range(3)] + list(pose.task[3:6])
-        _movel(mid, motion)
-        try:
-            f = read_force()
-        except Exception:                        # noqa: BLE001 — 못 읽으면 감시를 포기한다
-            continue
-        if not (isinstance(f, (list, tuple)) and len(f) >= 3):
-            continue
-        mag = sum(float(v) ** 2 for v in f[:3]) ** 0.5
-        if mag > limit_n:
-            _movel(back, motion)                 # 밀지 말고 곧장 물러난다
-            raise MotionError(
-                f"{pose.name}: 들어가다 {mag:.1f}N 에 걸렸다 (문턱 {limit_n:.1f}N). "
-                "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "
-                "다시 시도하라 (#31)")
+    api = _require_api()
+    axis = TP.approach_axis(pose.task)          # 접근축(툴 Z)의 BASE 단위벡터
+    push_n = float(handle.get("insert_force_n", 3.0))
+    limit_n = float(handle.get("contact_force_n", 2.0))
+    tol_mm = float(handle.get("arrive_tol_mm", 2.0))
+    timeout = float(handle.get("insert_timeout_sec", 20.0))
+
+    # 네 페그 모두 접근축이 base ±Y 다(실측 |Y| >= 0.998). 지배축을 골라 쓴다
+    k = max(range(3), key=lambda i: abs(axis[i]))
+    dir_vec = [0.0] * 6
+    dir_vec[k] = 1.0
+    fd = [0.0] * 6
+    fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
+
+    target = pose.task[k]
+    dr_axis = (api.DR_AXIS_X, api.DR_AXIS_Y, api.DR_AXIS_Z)[k]
+    if axis[k] > 0:                             # 좌표가 커지는 쪽으로 간다
+        lo, hi = target - tol_mm, api.DR_COND_NONE
+    else:
+        lo, hi = api.DR_COND_NONE, target + tol_mm
+
+    api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
+    t0 = time.monotonic()
+    try:
+        while True:
+            if api.check_position_condition(dr_axis, min=lo, max=hi,
+                                            ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS):
+                if logger:
+                    logger.info(f"{pose.name} 진입 완료 ({'XYZ'[k]} 축 목표 도달)")
+                return
+            if api.check_force_condition(dr_axis, max=limit_n, ref=api.DR_BASE):
+                raise MotionError(
+                    f"{pose.name}: 들어가다 막혔다 ({'XYZ'[k]} 축 {limit_n:.1f}N). "
+                    "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "
+                    "다시 시도하라 (#31)")
+            if time.monotonic() - t0 > timeout:
+                raise MotionError(
+                    f"{pose.name}: {timeout:.0f}초 안에 목표에도 못 닿고 막히지도 "
+                    f"않았다. 미는 힘 {push_n:.1f}N 이 너무 약해 못 가고 있을 수 있다")
+            time.sleep(0.05)
+    finally:
+        api.release_force()                     # 힘 제어는 반드시 푼다
 
 
 def register_peg(pose, motion, handle, read_width, logger=None):
@@ -597,6 +629,12 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     손가락과 평행하게 강제되고 그 각이 곧 답이 된다. 여기서는 돌리지 않으므로
     꽉 물어도 안전모드 조건이 아니다.
 
+    ## 진입은 힘 제어로 한다
+
+    위치를 명령하면 막혀 있어도 밀고 들어간다. 2026-09-21 실물에서 기타가 밀렸다.
+    `set_desired_force` 로 상한을 걸면 **그 힘까지만 민다.** 감지가 아니라 제어라,
+    기타가 몇 N 에서 밀리는지 몰라도 낮게 잡으면 그보다 세게 미는 일이 없다.
+
     ## 왜 사점에서 돌려 빠져나오지 않나
 
     **그럴 공간이 없다.** 열기 폭이 38mm 인데 손잡이가 59도쯤 서면 38.2mm 가
@@ -610,9 +648,6 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     ensure_tcp()
     probe = handle.get("probe_preset", "close")
     thresholds = handle["thresholds_mm"]
-    limit_n = float(handle.get("contact_force_n", 8.0))
-    steps = max(1, int(handle.get("insert_steps", 8)))
-
     from tunio_robot.grip_width import classify
 
     _grip("open")
@@ -621,7 +656,7 @@ def register_peg(pose, motion, handle, read_width, logger=None):
 
     compliance(motion, on=True)                  # 걸리면 물러나게. 기타를 밀지 않는다
     try:
-        _insert_watching_force(pose, motion, limit_n, steps)
+        _insert_force_controlled(pose, motion, handle, logger=logger)
         _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
         width = read_width()
         verdict = classify(width, thresholds)
