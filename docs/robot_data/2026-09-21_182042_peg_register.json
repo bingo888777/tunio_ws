@@ -1,0 +1,16 @@
+{
+  "tool": "peg_register",
+  "pegs": [
+    6
+  ],
+  "direction": "loosen",
+  "turn_deg": null,
+  "cycles": 1,
+  "results": {
+    "6": {
+      "attempts": [],
+      "error": "pegs.6: 20초 동안 +7.5mm 밖에 못 갔다 (접촉 0.66N). 미는 힘 4.0N 이 순응 스프링(0.20 N/mm)을 이기고 갈 수 있는 거리는 14mm 다. search_mm 을 줄이거나 insert_force_n 을 올려라"
+    }
+  },
+  "saved_at": "2026-09-21 18:20:42"
+}
