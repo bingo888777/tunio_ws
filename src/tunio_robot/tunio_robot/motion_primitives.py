@@ -283,13 +283,53 @@ def _moved(ret, what):
     return ret
 
 
+# 이동 속도 배율의 상한 (실기 검증 전 임시값). speed_scale 을 아무리 올려도
+# 여기서 잘린다. 가속도 상한은 속도 상한의 2배로 본다 — 이 설정 전체가
+# acc = vel x 2 로 짜여 있다 (5/10, 2/4, 100/200).
+SPEED_CAP_JOINT = 60.0        # deg/s
+SPEED_CAP_LINEAR = 250.0      # mm/s
+
+
+def _speed_scale(motion):
+    """이동 속도 배율. 없거나 이상하면 1.0(그대로)."""
+    try:
+        s = float(motion.get("speed_scale", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return s if s > 0 else 1.0
+
+
+def _fast(motion, value, cap):
+    """
+    **이동·접근** 속도에 배율을 먹이고 상한에서 자른다 (#56). 리스트도 받는다.
+
+    검증된 물리값에는 절대 부르지 않는다 —
+      turn_vel/turn_acc       페그 회전. 줄에 장력을 거는 동작이라 느린 게 설계다
+                              (turn_motion 이 사본에 speed_scale=1.0 을 박아 막는다)
+      pluck_vel/acc_stroke    피크가 줄을 긁는 구간. 소리 세기가 여기서 정해진다
+                              (2026-09-20 검증값 100/200, PR #54)
+      *_vel_fine/*_acc_fine   접촉 직전 마지막 구간. 빠르면 그대로 박는다
+      힘 제어 진입             속도가 아니라 힘으로 묶여 있다
+
+    cap 이 튜플이면 칸마다 다른 상한을 쓴다 — travel_vel 이 [직선 mm/s, 회전 deg/s]
+    라 상한을 하나로 먹이면 회전이 직선 상한까지 올라간다.
+    """
+    s = _speed_scale(motion)
+    if isinstance(value, (list, tuple)):
+        caps = cap if isinstance(cap, tuple) else (cap,) * len(value)
+        return [min(float(v) * s, caps[min(i, len(caps) - 1)])
+                for i, v in enumerate(value)]
+    return min(float(value) * s, cap)
+
+
 def _movej(joints, motion, relative=False):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
     return _moved(api.movej(posj(list(joints)),
-                            vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                            vel=_fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT),
+                            acc=_fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2),
                             mod=mod), "movej")
 
 
@@ -297,8 +337,12 @@ def _movel(task, motion):
     """작업 좌표로 직선 이동. BASE 기준 [X, Y, Z, A, B, C]."""
     api = _require_api()
     from DR_common2 import posx
-    v = motion.get("travel_vel", [50.0, 30.0])
-    a = motion.get("travel_acc", [100.0, 60.0])
+    # travel_vel/acc 는 [직선, 회전] 쌍이다 — mm/s 와 deg/s 가 한 리스트에 같이 있다.
+    # 상한을 하나로 먹이면 회전이 250deg/s 가 되므로 칸마다 다른 상한을 쓴다.
+    caps = (SPEED_CAP_LINEAR, SPEED_CAP_JOINT)
+    v = _fast(motion, motion.get("travel_vel", [50.0, 30.0]), caps)
+    a = _fast(motion, motion.get("travel_acc", [100.0, 60.0]),
+              tuple(c * 2 for c in caps))
     return _moved(api.movel(posx(list(task)), vel=v, acc=a), "movel")
 
 
@@ -318,7 +362,8 @@ def _movejx(task, motion, sol=None):
     if sol is None:
         sol = api.get_current_solution_space()
     return _moved(api.movejx(posx(list(task)),
-                             vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                             vel=_fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT),
+                             acc=_fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2),
                              sol=sol), "movejx")
 
 
@@ -329,10 +374,15 @@ def turn_motion(motion):
     페그를 돌리는 건 줄에 장력을 거는 동작이라 이동보다 느려야 한다.
     토크를 읽어 파지를 확인하는 것도 이 구간이다(CLAUDE.md 3.6).
     turn_vel/turn_acc 가 없으면 이동 속도를 그대로 쓴다.
+
+    **speed_scale 을 1.0 으로 못박는다** (#56). 이 사본은 그대로 _movej 로 넘어가는데,
+    거기서 배율이 곱해지면 "이동은 빨라도 회전은 아니다" 는 이 함수의 존재 이유가
+    통째로 사라진다. 회전을 빠르게 하려면 turn_vel 을 직접 올릴 것.
     """
     out = dict(motion)
     out["vel"] = motion.get("turn_vel", motion.get("vel", 30))
     out["acc"] = motion.get("turn_acc", motion.get("acc", 30))
+    out["speed_scale"] = 1.0
     return out
 
 
@@ -420,7 +470,8 @@ def pluck_string(pose, motion, standby=None):
         raise MotionError(f"{pose.name}: stroke_sign 은 +1 또는 -1 이어야 한다 (지금 {sign!r})")
     stroke = [float(v) * sign for v in stroke[:3]] + [float(v) for v in stroke[3:]]
     retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
-    v_app, a_app = motion.get("pluck_vel_approach", 100), motion.get("pluck_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pluck_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pluck_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
     v_str, a_str = motion.get("pluck_vel_stroke", 1000), motion.get("pluck_acc_stroke", 2000)
 
@@ -455,10 +506,67 @@ def pluck_string(pose, motion, standby=None):
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 
 
+def _standby_xyz(standby):
+    """대기 자세의 TCP 위치 [X,Y,Z]. 못 구하면 None."""
+    if standby.kind == "joint":
+        try:
+            from . import kinematics as K
+            return [float(v) for v in K.fk(list(standby.joints))["tcp"]]
+        except Exception:
+            return None
+    x = getattr(standby, "task", None)
+    if not x or len(x) < 3:
+        return None
+    return [float(v) for v in x[:3]]
+
+
+def _current_xyz():
+    """지금 TCP 위치 [X,Y,Z]. 못 읽으면 None."""
+    api = _require_api()
+    try:
+        now = api.get_current_posx()
+    except Exception:
+        return None
+    if isinstance(now, (list, tuple)) and now and isinstance(now[0], (list, tuple)):
+        now = now[0]                       # (posx, sol) 로 주는 판이 있다
+    if not isinstance(now, (list, tuple)) or len(now) < 3:
+        return None
+    try:
+        return [float(v) for v in now[:3]]
+    except (TypeError, ValueError):
+        return None
+
+
 def _goto_standby(standby, motion, vel, acc):
-    """Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel)."""
+    """
+    Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel).
+
+    **이미 거기 있으면 안 간다** (#56). 발현 대기 자세는 네 줄의 접근점
+    (접촉점 위 pluck_up_mm)에서 10~20mm 밖에 안 떨어져 있다 —
+
+      pluck_standby TCP  [642.60, -12.03, 192.52]   (fk, 오차 +-3mm)
+      6번 접근점         [645.85, -29.08, 202.28]   17.1mm
+      5번 접근점         [645.23, -19.14, 202.18]   12.0mm
+      2번 접근점         [645.24, -1.00, 201.78]    14.4mm
+      1번 접근점         [645.34,   8.06, 201.32]   22.1mm
+
+    그래서 발현이 끝날 때마다 "거의 제자리" 로 한 번 갔다가 다음 발현이 다시
+    내려오는 왕복이 붙었다. 거리는 20mm 인데 관절 이동 한 번 값을 그대로 낸다.
+    2026-09-21 통합 실기에서 사용자가 지적한 그 동작이다.
+
+    현재 자세를 **로봇에서 읽어서** 판단한다. 플래그로 기억하지 않는 이유는
+    _holding_pick 과 같다 — 중간에 예외가 나면 기억이 실제와 어긋난다.
+    못 읽으면 건너뛰지 않고 그냥 간다 (안전한 쪽).
+    """
     if standby is None:
         return
+    skip_mm = float(motion.get("standby_skip_mm", 30.0))
+    if skip_mm > 0:
+        here, there = _current_xyz(), _standby_xyz(standby)
+        if here and there:
+            gap = sum((here[i] - there[i]) ** 2 for i in range(3)) ** 0.5
+            if gap <= skip_mm:
+                return                     # 이미 거기다. 가 봐야 제자리
     if standby.kind == "joint":
         _movej(standby.joints, motion)
     else:
@@ -506,7 +614,8 @@ def pick_up(holder, motion, standby=None, via=None):
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
     preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
-    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pick_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pick_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
@@ -537,7 +646,8 @@ def pick_return(holder, motion, via=None, home=None):
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
-    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pick_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pick_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
 
     if via is not None:

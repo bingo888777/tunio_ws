@@ -312,3 +312,104 @@ def test_pick_return_descent_rejected_does_not_open_the_gripper(fake_api, fake_g
     with pytest.raises(MP.MotionError, match="movel_base"):
         MP.pick_return(Pose("pick.holder", True, task=HOLDER), {})
     assert fake_gripper.calls == []                             # 펴지 않았다
+
+
+# ---------------------------------------------------------- 이동 속도 배율 (#56)
+def test_speed_scale_multiplies_travel_but_not_the_stroke(fake_api):
+    """
+    배율은 **이동·접근에만** 걸린다.
+
+    스트로크는 피크가 줄을 긁는 구간이라 소리 세기가 여기서 정해진다.
+    2026-09-20 에 4줄 소리가 확인된 값이 100/200 이고, PR #54 가 코드 기본값
+    1000/2000 과 갈려 있던 걸 막 고쳤다. 배율이 여기까지 먹으면 그 수정이
+    통째로 무효가 된다.
+    """
+    MP.pluck_string(_pose_x(CONTACT), {"speed_scale": 10.0,
+                                       "pluck_vel_stroke": 100, "pluck_acc_stroke": 200})
+    above, contact, stroke, _retract, _back = fake_api.calls
+    assert above[2]["vel"] == 250.0                     # 100 x 10, 상한 250 에서 잘림
+    assert contact[2]["vel"] == 20                      # fine 은 안 걸린다
+    assert stroke[2]["vel"] == 100                      # 검증값 그대로
+    assert stroke[2]["acc"] == 200
+
+
+def test_speed_scale_is_capped(fake_api):
+    """상한을 넘기지 않는다. 배율을 크게 줘도 직선은 SPEED_CAP_LINEAR 에서 잘린다."""
+    MP.pluck_string(_pose_x(CONTACT), {"speed_scale": 1000.0})
+    assert fake_api.calls[0][2]["vel"] == MP.SPEED_CAP_LINEAR
+    assert fake_api.calls[0][2]["acc"] == MP.SPEED_CAP_LINEAR * 2
+
+
+def test_no_speed_scale_keeps_old_numbers(fake_api):
+    """안 주면 예전 그대로다. 도구들이 자기 dict 로 이 경로를 쓴다."""
+    MP.pluck_string(_pose_x(CONTACT), {})
+    assert fake_api.calls[0][2]["vel"] == 100
+
+
+def test_turn_motion_refuses_the_scale():
+    """페그 회전은 배율을 안 탄다. 줄에 장력을 거는 동작이라 느린 게 설계다."""
+    out = MP.turn_motion({"speed_scale": 10.0, "turn_vel": 2.0, "turn_acc": 4.0})
+    assert out["speed_scale"] == 1.0
+    assert out["vel"] == 2.0 and out["acc"] == 4.0
+
+
+# ---------------------------------------------------------- 대기 자세 건너뛰기 (#56)
+class PosxApi(FakeApi):
+    """get_current_posx 를 흉내 낸다. 두산 래퍼는 (posx, sol) 로 준다."""
+
+    def __init__(self, xyz):
+        super().__init__()
+        self.xyz = list(xyz)
+
+    def get_current_posx(self):
+        return (self.xyz + [0.0, 0.0, 0.0])[:6], 2
+
+
+PLUCK_STANDBY_J = [-1.69, 44.18, 31.30, 0.13, 104.52, 90.34]
+
+
+def _standby_j():
+    return Pose("frames.pluck_standby", True, joints=PLUCK_STANDBY_J)
+
+
+def test_standby_is_skipped_when_the_arm_is_already_there(monkeypatch, fake_api):
+    """
+    발현 접근점은 대기 자세에서 12~22mm 다. 거기서 대기 자세로 가 봐야 제자리다.
+
+    그런데 관절 이동 한 번 값을 그대로 낸다 — 발현마다 두 번(앞·뒤) 붙는다.
+    2026-09-21 통합 실기에서 사용자가 지적한 그 왕복이다.
+    """
+    from tunio_robot import kinematics as K
+    here = K.fk(PLUCK_STANDBY_J)["tcp"]
+    api = PosxApi(here)
+    monkeypatch.setattr(MP, "_api", api)
+
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=_standby_j())
+    assert [c[0] for c in api.calls] == ["movel"] * 5        # movej 가 하나도 없다
+
+
+def test_standby_still_runs_when_the_arm_is_far(monkeypatch, fake_api):
+    """멀면 그대로 간다. 거치대에서 오는 경로가 이쪽이다."""
+    api = PosxApi([591.63, -143.75, 372.0])                 # 거치대 위
+    monkeypatch.setattr(MP, "_api", api)
+
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=_standby_j())
+    kinds = [c[0] for c in api.calls]
+    assert kinds[0] == "movej" and kinds[-1] == "movej"
+
+
+def test_standby_runs_when_the_position_cannot_be_read(fake_api):
+    """못 읽으면 건너뛰지 않는다. 모를 때는 가는 쪽이 안전하다."""
+    # FakeApi 에는 get_current_posx 가 없다
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=_standby_j())
+    assert [c[0] for c in fake_api.calls][0] == "movej"
+
+
+def test_standby_skip_can_be_turned_off(monkeypatch, fake_api):
+    """0 이면 예전 동작이다."""
+    from tunio_robot import kinematics as K
+    api = PosxApi(K.fk(PLUCK_STANDBY_J)["tcp"])
+    monkeypatch.setattr(MP, "_api", api)
+
+    MP.pluck_string(_pose_x(CONTACT), {"standby_skip_mm": 0.0}, standby=_standby_j())
+    assert [c[0] for c in api.calls][0] == "movej"

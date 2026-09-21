@@ -60,6 +60,12 @@ class RobotController(Node):
         #   들어가는 구조였다. 지금 진입의 안전망은 사람의 사전 정렬(CLAUDE.md 5절)과
         #   로봇 보호정지뿐이고, 보호정지 문턱은 아직 확인 안 됐다 (이슈 #53).
         self.declare_parameter("peg_register_force", False)
+        # 이동 속도 배율. 0 이면 teach_points.yaml 의 motion.speed_scale 을 그대로 쓴다.
+        # 실기에서 값을 바꿔 가며 보려고 런치 인자로 뺐다 — 빌드 없이 바꾼다 (#56).
+        #   ros2 run ... --ros-args -p speed_scale:=4.0
+        # **이동·접근에만 걸린다.** 페그 회전·발현 스트로크·접촉 직전 구간은
+        # 배율을 안 탄다 (motion_primitives._fast 의 주석).
+        self.declare_parameter("speed_scale", 0.0)
         self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
         self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
@@ -71,6 +77,16 @@ class RobotController(Node):
         self._read_width = None
         self.points = TP.load(path)
         self.get_logger().info(f"교시점 로드: {path}")
+
+        override = float(self.get_parameter("speed_scale").value or 0.0)
+        if override > 0:
+            self.points.motion["speed_scale"] = override
+        scale = float(self.points.motion.get("speed_scale", 1.0))
+        if scale != 1.0:
+            self.get_logger().info(
+                f"이동 속도 배율 {scale:g}배 "
+                f"(관절 {MP.SPEED_CAP_JOINT:g}deg/s · 직선 {MP.SPEED_CAP_LINEAR:g}mm/s 에서 자른다). "
+                "페그 회전·발현 스트로크·접촉 직전은 배율을 안 탄다")
 
         # 페그 손잡이 각. 조절할 때마다 바뀌므로 기억해 둬야 다음에 제대로 문다 (#31).
         # 파일로 남겨 노드가 죽었다 살아나도 Phase 0 를 다시 안 돌게 한다. 단 오래된
