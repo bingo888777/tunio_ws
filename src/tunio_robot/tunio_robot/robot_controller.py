@@ -25,6 +25,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
 from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
+from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
 from tunio_robot import teach_points as TP
@@ -40,10 +41,17 @@ class RobotController(Node):
         self.declare_parameter("dry_run", True)
         self.declare_parameter("peg_state_file", PS.DEFAULT_PATH)
         self.declare_parameter("peg_state_max_age_sec", PS.DEFAULT_MAX_AGE_SEC)
+        # Phase 0 등록. 미등록 페그를 만나면 그 자리에서 돈다 (아래 _ensure_registered)
+        self.declare_parameter("peg_register_force", True)
+        self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
+        self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
+        self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
+        self.declare_parameter("gripper_width_reg", GW.WIDTH_REG)
 
         path = self.get_parameter("teach_points").value
         self.dry_run = bool(self.get_parameter("dry_run").value)
 
+        self._read_width = None
         self.points = TP.load(path)
         self.get_logger().info(f"교시점 로드: {path}")
 
@@ -164,6 +172,49 @@ class RobotController(Node):
             self.get_logger().info(f"경유지를 거쳐 {side} 쪽으로")
             MP.goto_route(route, self.points.motion)
 
+    def _ensure_registered(self, string_number):
+        """
+        페그 손잡이 각이 등록돼 있는지 보고, 없으면 **그 자리에서 Phase 0 를 돈다**.
+
+        왜 여기서 하나
+          서버는 "작업 시작" 을 로봇에 알리지 않는다. 로봇이 아는 건 Action 세 개뿐이다.
+          피크 집기·반환 시점을 로봇이 스스로 판단하는 것과 같은 방식으로(CLAUDE.md 2절),
+          등록도 **필요해지는 순간** 한다. 인터페이스가 안 바뀐다.
+
+        왜 등록이 꼭 있어야 하나
+          손잡이가 돌아가 있는데 교시 자세로 들어가면, 물리는 순간 페그가 그 각으로
+          비틀려 **직전에 돌린 것이 통째로 풀린다.** 파지에 성공하고 동작도 성공으로
+          보고하면서 조용히 틀린다 (#31). 그래서 모르면 돌리지 않는다.
+
+        등록에 실패하면 예외가 그대로 올라가 이 goal 이 실패한다. 사람이 손잡이를
+        눕혀야 하는 경우가 대부분이라, 메시지에 어느 줄인지가 들어 있다.
+        """
+        roll = self.pegs.roll_of(string_number)
+        if roll is not None:
+            return roll
+
+        self.get_logger().info(
+            f"{string_number}번 페그가 미등록이다. 지금 Phase 0 를 돈다 (#31)")
+        roll = MP.register_peg(
+            self.points.peg(string_number), self.points.motion,
+            self.points.peg_handle(), self._width_reader(),
+            logger=self.get_logger(),
+            use_force=bool(self.get_parameter("peg_register_force").value))
+        self.pegs.register(string_number, roll)
+        self.pegs.save()
+        self.get_logger().info(f"{string_number}번 손잡이 각 {roll:+.1f}도 등록")
+        return roll
+
+    def _width_reader(self):
+        """그리퍼 폭을 읽는 함수. 한 번 만들어 두고 다시 쓴다."""
+        if getattr(self, "_read_width", None) is None:
+            self._read_width = GW.make_reader(
+                self.get_parameter("gripper_host").value,
+                int(self.get_parameter("gripper_port").value),
+                int(self.get_parameter("gripper_unit").value),
+                int(self.get_parameter("gripper_width_reg").value))
+        return self._read_width
+
     def _ensure_pick(self):
         """
         피크가 필요한 동작(발현·화음) 전에 부른다. 이미 쥐고 있으면 아무 일도 안 한다.
@@ -228,22 +279,18 @@ class RobotController(Node):
                     f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도{via}")
                 self._side = side
                 return
-            # 손잡이가 지금 몇 도 돌아가 있는지 (#31). 미등록이면 교시 자세 그대로 간다
-            roll = self.pegs.roll_of(r.string_number)
-            if roll is None:
-                self.get_logger().warn(
-                    f"{r.string_number}번 페그의 손잡이 각이 등록돼 있지 않다. "
-                    "교시 자세 그대로 들어간다 — 헛물 수 있다 (Phase 0 미구현, #31)")
             self._cross_to(side)
-            MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll or 0.0)
+            # 손잡이 각을 모르면 돌리지 않는다. 미등록이면 여기서 Phase 0 를 돈다 (#31)
+            roll = self._ensure_registered(r.string_number)
+            MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll)
             # 돌린 만큼 손잡이도 돌아갔다. **성공한 뒤에만** 적는다 —
             # 중간에 실패하면 얼마나 돌았는지 모르므로 누적하면 더 틀어진다
             # J6 일 때만 누적한다. 관절 회전량이 곧 손목 롤(posx 의 C)인 건 J6 뿐이라,
             # 다른 관절 값을 각으로 쌓으면 다음 진입이 틀린 방향으로 돈다 (#31)
-            if roll is not None and joint == 6:
+            if joint == 6:
                 self.pegs.add_turn(r.string_number, delta)
                 self.pegs.save()
-            elif roll is not None:
+            else:
                 self.get_logger().warn(
                     f"peg_joint 가 J{joint} 라 손잡이 각을 누적하지 않는다. "
                     "각 추적은 J6 전용이다 (#31)")

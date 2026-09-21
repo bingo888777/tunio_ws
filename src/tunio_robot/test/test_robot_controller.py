@@ -140,3 +140,80 @@ def test_발현_goal_도_같은_경로로_돈다(ros, taught):
         assert handle.result.success is True
     finally:
         h.shutdown()
+
+
+# ─────────── Phase 0 를 노드가 스스로 돈다 (이슈 #31) ───────────
+#
+# 서버는 "작업 시작" 을 로봇에 알리지 않는다. 로봇이 아는 건 Action 세 개뿐이라,
+# 피크 집기·반환처럼 **필요해지는 순간** 등록한다. 인터페이스가 안 바뀐다.
+#
+# 등록이 없으면 교시 자세로 들어가 물리는 순간 페그가 되돌려진다. 파지에 성공하고
+# 성공으로 보고하면서 조용히 틀리는 게 #31 이다. 그래서 모르면 돌리지 않는다.
+
+def _node(yaml_path):
+    """노드만 만든다 (executor 없이). 등록 로직만 볼 때 쓴다."""
+    node = RobotController()
+    from tunio_robot import teach_points as tp
+    node.points = tp.load(yaml_path)
+    return node
+
+
+def test_미등록이면_등록부터_한다(ros, taught, monkeypatch, tmp_path):
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.pegs.path = str(tmp_path / "state.json")
+        node.pegs.forget()
+        called = []
+        monkeypatch.setattr(MP, "register_peg",
+                            lambda *a, **k: called.append(k) or 37.0)
+        assert node._ensure_registered(6) == pytest.approx(37.0)
+        assert called, "register_peg 을 안 불렀다"
+        assert node.pegs.roll_of(6) == pytest.approx(37.0)   # 기억한다
+    finally:
+        node.destroy_node()
+
+
+def test_이미_등록돼_있으면_다시_안_한다(ros, taught, monkeypatch, tmp_path):
+    """등록은 싸지 않다. 매번 돌면 사이클 타임에 그대로 얹힌다."""
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.pegs.path = str(tmp_path / "state.json")
+        node.pegs.register(6, 12.0)
+        called = []
+        monkeypatch.setattr(MP, "register_peg", lambda *a, **k: called.append(1) or 0.0)
+        assert node._ensure_registered(6) == pytest.approx(12.0)
+        assert called == [], "이미 아는데 또 등록했다"
+    finally:
+        node.destroy_node()
+
+
+def test_등록에_실패하면_그대로_올라간다(ros, taught, monkeypatch, tmp_path):
+    """
+    손잡이가 서 있으면 사람이 눕혀야 한다. 조용히 넘어가면 페그를 되돌린다.
+
+    예외가 올라가면 _run() 이 잡아 goal 을 실패로 만들고, 메시지에 어느 줄인지가 남는다.
+    """
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.pegs.path = str(tmp_path / "state.json")
+        node.pegs.forget()
+
+        def boom(*a, **k):
+            raise MP.MotionError("pegs.6: 손잡이가 서 있어 못 물었다")
+        monkeypatch.setattr(MP, "register_peg", boom)
+        with pytest.raises(MP.MotionError, match="pegs.6"):
+            node._ensure_registered(6)
+        assert node.pegs.roll_of(6) is None      # 실패는 기억하지 않는다
+    finally:
+        node.destroy_node()
+
+
+def test_폭_읽기는_한_번만_만든다(ros, taught):
+    node = _node(taught)
+    try:
+        assert node._width_reader() is node._width_reader()
+    finally:
+        node.destroy_node()
