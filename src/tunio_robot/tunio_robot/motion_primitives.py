@@ -430,12 +430,20 @@ def _pick_points(holder, motion):
     return contact, above
 
 
-def pick_up(holder, motion, standby=None):
+def pick_up(holder, motion, standby=None, via=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
-    순서: 그리퍼 열기 → 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 닫기(프리셋)
-          → 거치대 위 → (standby 가 있으면) 기타 위 대기 자세
+    순서: (via 가 있으면) 경유 자세 → 그리퍼 열기 → 거치대 위 pick_up_mm
+          → 거치대(느리게) → 그리퍼 닫기(프리셋) → 거치대 위
+          → (standby 가 있으면) 기타 위 대기 자세
+
+    via — 거치대로 내려가기 전에 먼저 들르는 안전 경유 관절 자세(Pose, joints).
+          pick_return 의 via 와 같은 이유인데 **방향이 반대다.** 피크를 가지러
+          갈 때 팔은 직전 동작이 남긴 자리에 있다 — 페그 조절 직후면 헤드스톡
+          쪽 접근점이다. 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다.
+          2026-09-19 충돌 검증은 페그↔페그와 경유지뿐이라 이 경로는 본 적이 없다.
+          관절 자세를 한 번 거쳐 직선 구간을 거치대 근처로 좁힌다 (#34 후속)
 
     holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
               없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
@@ -454,6 +462,8 @@ def pick_up(holder, motion, standby=None):
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
+    if via is not None:
+        _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
     _release()                                          # 열고 간다
     _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
     _movel_base(contact, v_fine, a_fine)                # 내려가서

@@ -247,11 +247,15 @@ class RobotController(Node):
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
         standby = self.points.frame("standby")
         if self.dry_run:
-            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task}")
+            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task} (경유 {standby.joints})")
             self._holding_pick = True
             return
         self._holding_pick = None                     # 시도 중 — 끝나기 전엔 모른다
-        MP.pick_up(holder, self.points.motion, standby=standby)
+        # via — 거치대로 내려가기 전에 관절 자세를 한 번 거친다. 피크를 가지러 갈 때
+        # 팔은 직전 동작이 남긴 자리에 있고, 페그 조절 직후면 헤드스톡 쪽이다.
+        # 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다. pick_return 이
+        # 반대 방향에 같은 경유를 쓴다(성현, PR #38) — 이쪽만 비어 있었다 (#34 후속)
+        MP.pick_up(holder, self.points.motion, standby=standby, via=standby)
         self._holding_pick = True
 
     def _release_pick(self):

@@ -196,6 +196,38 @@ def test_pick_return_with_via(fake_api, fake_gripper):
     assert fake_api.calls[0][1] == [0, 0, 75, 0, 100, 0]
 
 
+def test_pick_up_with_via(fake_api, fake_gripper):
+    """
+    피크를 가지러 갈 때도 경유 자세를 먼저 거친다 (#34 후속).
+
+    반대 방향(pick_return)은 PR #38 에서 막혔는데 이쪽은 비어 있었다.
+    팔은 직전 동작이 남긴 자리에 있고, 페그 조절 직후면 헤드스톡 쪽이다.
+    거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다.
+    """
+    holder = Pose("pick.holder", True, task=HOLDER)
+    via = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_up(holder, {"pick_up_mm": 50.0}, via=via)
+
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movej", "movel", "movel", "movel"]        # 경유 → 위 → 거치대 → 위
+    assert fake_api.calls[0][1] == [0, 0, 75, 0, 100, 0]
+
+
+def test_pick_up_via_runs_before_the_straight_descent(fake_api, fake_gripper):
+    """경유는 직선 하강보다 먼저다. 뒤로 가면 막으려던 그 직선을 그대로 탄다."""
+    via = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, via=via)
+    assert fake_api.calls[0][0] == "movej"                      # 관절 보간이 먼저
+    assert fake_gripper.calls == ["open", "close"]              # 그다음 열고 잡는다
+
+
+def test_pick_up_without_via_keeps_old_path(fake_api, fake_gripper):
+    """경유를 안 주면 예전 그대로 돈다. 도구들이 이 경로를 쓴다."""
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movel", "movel", "movel"]                 # 경유 없음
+
+
 def test_pick_rejects_joint_only_holder(fake_api, fake_gripper):
     with pytest.raises(MP.MotionError, match="x"):
         MP.pick_up(Pose("pick.holder", True, joints=[0] * 6), {})
