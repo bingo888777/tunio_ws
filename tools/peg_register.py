@@ -76,6 +76,12 @@ def main():
     ap.add_argument("--width-reg", type=int, default=9)
     ap.add_argument("--state", default=None, help="peg_state 파일 경로")
     ap.add_argument("--fresh", action="store_true", help="기존 등록을 무시하고 새로 등록")
+    ap.add_argument("--no-force", action="store_true",
+                    help="힘 제어 없이 그냥 들어간다. 사람이 손잡이를 눕혀 놓고 "
+                         "지켜보는 측정 세션용 (#13, #8)")
+    ap.add_argument("--assume-grip", action="store_true",
+                    help="폭을 안 읽고 물렸다고 본다. Modbus 가 안 붙는 PC 용. "
+                         "빈손·사점을 못 가리니 눈으로 확인할 것")
     ap.add_argument("--speed", type=float, default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--id", default="dsr01")
@@ -106,9 +112,15 @@ def main():
     print(f"  열기           open ({points.gripper['presets']['open'].get('width_mm')}mm)")
     print(f"  문턱           빈손 < {handle['thresholds_mm']['empty_below']} "
           f"< 물림 < {handle['thresholds_mm']['dead_above']} < 사점  (mm)")
-    print(f"  진입           접근점 → 페그 앞 {handle['search_mm']:.0f}mm 는 위치 제어,\n"
-          f"                 거기서부터 힘 제어 — 미는 힘 {handle['insert_force_n']:.1f}N 상한, "
-          f"{handle['contact_force_n']:.1f}N 에 막힘 판정")
+    if args.no_force:
+        print("  진입           힘 제어 없이 그냥 들어간다 (--no-force)")
+        print("                 ⚠️ 손잡이가 눕혀져 있는지 **사람이** 확인할 것")
+    else:
+        print(f"  진입           접근점 → 페그 앞 {handle['search_mm']:.0f}mm 는 위치 제어,\n"
+              f"                 거기서부터 힘 제어 — 미는 힘 {handle['insert_force_n']:.1f}N 상한, "
+              f"{handle['contact_force_n']:.1f}N 에 막힘 판정")
+    if args.assume_grip:
+        print("  폭 판정        안 한다 (--assume-grip). 물렸는지 눈으로 확인할 것")
     if handle.get("requires_prealign"):
         print("  ⚠️ 세로로 선 손잡이는 미리 손으로 눕혀 둘 것 (열기 38mm 로는 못 지난다)")
     if args.turn:
@@ -153,7 +165,9 @@ def main():
                 "    꽉 물어 각을 확정한다. 손잡이가 서 있으면 막혀서 멈춘다.\n"
                 "    ⚠️ 힘 제어 첫 실행이면 기타에서 떨어진 자리에서 한 번 보라.")
         try:
-            roll = MP.register_peg(peg, motion, handle, read_width, logger=_Say())
+            roll = MP.register_peg(peg, motion, handle, read_width, logger=_Say(),
+                                   use_force=not args.no_force,
+                                   assume_grip=args.assume_grip)
         except MP.MotionError as e:
             print(f"    ✗ 등록 실패 — {e}")
             rec["error"] = str(e)

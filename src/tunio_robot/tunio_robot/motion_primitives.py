@@ -665,7 +665,8 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
         api.release_force()                     # 힘 제어는 반드시 푼다
 
 
-def register_peg(pose, motion, handle, read_width, logger=None):
+def register_peg(pose, motion, handle, read_width, logger=None,
+                 use_force=True, assume_grip=False):
     """
     Phase 0 — 페그를 물어서 손잡이 각을 확정하고 그 각을 돌려준다 (#31).
 
@@ -676,6 +677,12 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     pose       — 페그 파지 자세
     handle     — teach_points 의 peg_handle 절
     read_width — 지금 손가락 폭(mm)을 돌려주는 함수 (grip_width.make_reader)
+    use_force  — False 면 힘 제어 없이 그냥 직선으로 들어간다. **사람이 손잡이를
+                 눕혀 놓고 지켜보는 측정 세션용**이다. 힘 제어는 사람이 빠뜨렸을 때의
+                 안전망이라, 사람이 매번 보고 있으면 굳이 태울 이유가 없다.
+                 아직 실물 검증 전이기도 하다 (#31)
+    assume_grip — True 면 폭을 안 읽고 물렸다고 본다. Modbus 가 안 붙는 PC 에서
+                 측정만 할 때다. **빈손·사점을 못 가른다.** 눈으로 확인해야 한다
 
     ## 왜 꽉 무나 (probe 프리셋, 15mm)
 
@@ -709,10 +716,21 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
     _movejx(back, motion, sol=getattr(pose, "sol", None))
 
-    compliance(motion, on=True)                  # 걸리면 물러나게. 기타를 밀지 않는다
+    if use_force:
+        compliance(motion, on=True)              # 걸리면 물러나게. 기타를 밀지 않는다
     try:
-        _insert_force_controlled(pose, motion, handle, logger=logger)
+        if use_force:
+            _insert_force_controlled(pose, motion, handle, logger=logger)
+        else:
+            # 사람이 손잡이를 눕혀 놓고 보고 있는 세션. 그냥 들어간다
+            if logger:
+                logger.warn("힘 제어를 건너뛴다 — 손잡이가 눕혀져 있는지 사람이 볼 것")
+            _movel(pose.task, motion)
         _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
+        if assume_grip:
+            if logger:
+                logger.warn("폭을 안 읽는다 — 물렸는지 눈으로 확인할 것 (빈손·사점 못 가림)")
+            return 0.0
         width = read_width()
         verdict = classify(width, thresholds)
         if logger:
@@ -734,7 +752,8 @@ def register_peg(pose, motion, handle, read_width, logger=None):
         return 0.0
     finally:
         _grip("open")
-        compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
+        if use_force:
+            compliance(motion, on=False)         # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
         _retreat(pose, motion)
 
 

@@ -259,3 +259,45 @@ def test_먼_구간은_위치_제어로_간다(spy):
 def test_탐색_구간이_접근_거리보다_짧다():
     """같거나 길면 위치 제어 구간이 없어져 처음부터 힘 제어로 기어간다."""
     assert HANDLE["search_mm"] < MOTION["approach_mm"]
+
+
+# ───────── 측정 세션용 — 힘 제어를 끈다 (#13, #8) ─────────
+#
+# 힘 제어는 **초기 등록에만** 필요하다. 손잡이가 어느 각인지 모르는 그 한 번뿐이고,
+# 등록되고 나면 각을 알고 들어가므로 막힐 일이 없다. adjust_peg 는 원래부터 안 쓴다.
+# 사람이 손잡이를 눕혀 놓고 지켜보는 측정 세션이면 등록에서도 뺄 수 있다.
+
+def test_힘_제어를_끄면_그냥_들어간다(spy):
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6), use_force=False)
+    assert spy.api.force == []                      # set_desired_force 를 안 불렀다
+    assert spy.api.compliance == []                 # 순응도 안 켰다
+    assert [e for e in spy if e[0] == "movel"]      # 대신 직선으로 들어갔다
+
+
+def test_힘_제어를_꺼도_폭은_본다(spy):
+    """진입 방식과 파지 판정은 별개다. 빈손은 여전히 걸러야 한다."""
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0), use_force=False)
+
+
+def test_폭도_끄면_물렸다고_본다(spy):
+    """Modbus 가 안 붙는 PC 에서 측정만 할 때. 사람이 눈으로 본다는 전제다."""
+    roll = MP.register_peg(_Peg(), MOTION, HANDLE, _widths(), use_force=False,
+                           assume_grip=True)
+    assert roll == pytest.approx(0.0)
+    assert ("grip", "close") in spy                 # 물기는 한다 (각이 확정돼야 하니까)
+
+
+def test_adjust_peg_는_힘_제어를_안_쓴다(spy, monkeypatch):
+    """
+    각을 아는 뒤로는 막힐 일이 없다. 조절 경로에는 힘 제어가 처음부터 없었다.
+
+    측정 세션(#13)이 이걸 반복해서 돌린다.
+    """
+    monkeypatch.setattr(MP, "_goto_pose", lambda *a: None)
+    monkeypatch.setattr(MP, "_release", lambda: None)
+    monkeypatch.setattr(MP, "_retreat", lambda *a: None)
+    monkeypatch.setattr(MP, "_movej", lambda *a, **k: None)
+    MP.adjust_peg(_Peg(), 6, -30.0, MOTION, roll_deg=45.0)
+    assert spy.api.force == []
+    assert spy.api.compliance == []
