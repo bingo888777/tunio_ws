@@ -482,3 +482,19 @@ def test_피크를_안_쥐고_있으면_쪽_기억을_안_지운다(ros, taught)
         assert node._side == "left"
     finally:
         node.destroy_node()
+
+
+# ---------------------------------------------------------- 힘 제어 (#51)
+def test_힘_제어는_기본으로_꺼져_있다(ros):
+    """
+    통합 뒤로 미뤘다 (2026-09-21 결정).
+
+    아직 실물 검증이 안 끝났다. 9/21 회차가 4N 으로 20초에 +7.5mm 밖에 못 갔고,
+    스프링을 이기고 갈 수 있는 거리도 자세마다 달라진다. 통합 실기에서 여기서
+    막히면 그 시간이 통째로 날아간다. 켜려면 런치에서 명시한다.
+    """
+    node = RobotController()
+    try:
+        assert node.get_parameter("peg_register_force").value is False
+    finally:
+        node.destroy_node()

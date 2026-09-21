@@ -42,7 +42,20 @@ class RobotController(Node):
         self.declare_parameter("peg_state_file", PS.DEFAULT_PATH)
         self.declare_parameter("peg_state_max_age_sec", PS.DEFAULT_MAX_AGE_SEC)
         # Phase 0 등록. 미등록 페그를 만나면 그 자리에서 돈다 (아래 _ensure_registered)
-        self.declare_parameter("peg_register_force", True)
+        #
+        # **힘 제어는 통합 뒤로 미뤘다** (2026-09-21 결정, #51 · #31).
+        #   기본값이 False 라 진입은 위치 제어 + 순응제어로만 한다. 힘 제어를 켜려면
+        #   런치에서 peg_register_force:=true 를 준다.
+        #
+        #   미룬 이유 — 아직 실물 검증이 안 끝났다. 9/21 회차가 4N 으로 20초에
+        #   +7.5mm 밖에 못 갔고, 스프링을 이기고 갈 수 있는 거리도 자세마다 달라진다.
+        #   통합 실기에서 봐야 할 것이 많은데 여기서 한 번 더 막히면 그 시간이 통째로
+        #   날아간다. 값(search_mm · insert_force_n · insert_timeout_sec)은 계산이
+        #   맞게 고쳐 뒀으므로 통합이 끝나면 이 기본값만 다시 올리면 된다.
+        #
+        #   대신 **순응제어는 이 값과 무관하게 항상 켠다.** 끄면 로봇이 뻣뻣해져
+        #   오히려 더 세게 민다 (PR #37 리뷰). 미는 힘이 강성 × 남은 거리로 묶인다.
+        self.declare_parameter("peg_register_force", False)
         self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
         self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
