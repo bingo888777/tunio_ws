@@ -51,9 +51,13 @@ tcp         'GripperDA_v1'     ← 펜던트에서 켜져 있음
 tool        'Tool Weight'      ← 펜던트에서 켜져 있음
 ```
 
-**둘 다 펜던트에서 켜 둔 것이고 코드는 확인만 한다.** `set_tcp`/`set_tool` 은
-컨트롤러가 `-1` 로 거부한다(이슈 #23). 이름이 정확히 일치해야 `robot_controller` 가
-출발한다 — `_ensure_named` 가 `==` 로 비교하므로 공백·대소문자 하나도 틀리면 안 된다.
+**코드가 `set_tool`/`set_tcp` 를 시도하고 `get` 으로 판정한다** (CLAUDE.md 3.5.1).
+배포용이라 펜던트 설정에 기대지 않고, 이미 맞아 보여도 `set` 을 생략하지 않는다.
+다만 **이 컨트롤러는 `set` 을 `-1` 로 거부하므로**(이슈 #23) 실제로는 펜던트에
+켜져 있어야 `get` 이 맞아 통과한다.
+
+이름이 정확히 일치해야 `robot_controller` 가 출발한다 — `_ensure_named` 가 `==` 로
+비교하므로 공백·대소문자 하나도 틀리면 안 된다.
 
 ### 마이크
 
@@ -126,7 +130,8 @@ tcp   = 'GripperDA_v1'
 tool  = 'Tool Weight'
 ```
 
-빈 문자열(`''`)이나 다른 이름이면 **펜던트에서 켜야 한다.** 코드로는 못 켠다(#23).
+빈 문자열(`''`)이나 다른 이름이면 **펜던트에서 켜야 한다.**
+코드가 켜려 하지만 이 컨트롤러가 거부한다(#23).
 
 확인됐으면 `robot_controller`:
 
@@ -135,28 +140,18 @@ source ~/tunio_ws/install/setup.bash
 ros2 run tunio_robot robot_controller --ros-args -p dry_run:=false
 ```
 
-> ⚠️ **PR #28 이 머지되기 전이라면** `tunio_robot` 을 따로 빌드해서 덮어써야 한다.
-> 머지 전 버전은 `connect()` 에 디스커버리 대기가 없어 **영원히 멈춘다.**
-> 머지된 뒤에는 이 항목을 지울 것.
->
-> ```bash
-> # 별도 worktree 에서 빌드 (내 저장소는 안 건드린다)
-> git worktree add /tmp/pr28 origin/feature/tunio-robot
-> cd /tmp/pr28 && colcon build --packages-select tunio_robot
-> # 쓸 때: tunio_ws 를 source 한 *뒤에* 이걸 겹친다
-> source /tmp/pr28/install/setup.bash
-> ```
-
 **이렇게 떠야 정상이다:**
 
 ```
 서비스 디스커버리 확인 (5개)
-tool='Tool Weight' 이미 켜져 있다        ← set 을 아예 안 부른다
-tcp='GripperDA_v1' 이미 켜져 있다
+tool='Tool Weight' 확인 (set 반환 -1, 직전 'Tool Weight')
+tcp='GripperDA_v1' 확인 (set 반환 -1, 직전 'GripperDA_v1')
 두산 API 연결: dsr01 / m0609 tool='Tool Weight' tcp='GripperDA_v1'
 ```
 
-**"이미 켜져 있다"가 핵심이다.** `set_tcp` 를 호출조차 안 하므로 `-1` 거부를 안 만난다.
+**`set 반환 -1` 이 정상이다.** 이 컨트롤러가 설정 변경을 거부하는 것이고(#23),
+판정은 반환값이 아니라 `get` 결과로 한다. `직전` 이 이미 원하는 이름이면
+펜던트에 켜져 있었다는 뜻이다. 셋째 줄까지 나오면 출발한 것이다.
 
 ### 터미널 3 · 측정
 
@@ -229,7 +224,14 @@ unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT
 > 통합할 때 어차피 디스커버리 서버를 거치므로, 같은 조건에서 검증해두는 게 이득이다.
 > 2026-09-21 실측에서는 **켠 채로 잘 붙었다** (서비스 220개, 기다리니 1.0초).
 
-### `set_tcp('GripperDA_v1') 이 먹지 않았다` 로 멈춘다
+### `tcp 를 'GripperDA_v1' 로 못 맞췄다` 로 멈춘다
+
+로그 문구는 `motion_primitives.py` 의 `_ensure_named` 가 낸다.
+
+```
+tcp 를 'GripperDA_v1' 로 못 맞췄다 (set 반환 -1, 현재 ''). 펜던트에 그 이름이
+등록돼 있는지, 설정 변경 제어권이 로봇에 있는지 확인하라.
+```
 
 **가드가 제대로 일한 것이다.** 펜던트의 TCP/Tool 이 YAML 과 다르다는 뜻.
 펜던트에서 `GripperDA_v1` / `Tool Weight` 를 켜면 된다. 코드는 고치지 말 것.

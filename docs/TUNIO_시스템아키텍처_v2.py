@@ -9,6 +9,14 @@
 
 고치는 법
   NODES / WIRES 만 고치면 된다. 좌표는 위에서 아래로 쌓아 계산한다.
+
+    python3 docs/TUNIO_시스템아키텍처_v2.py docs/TUNIO_시스템아키텍처_v2.svg
+
+  ⚠️ **PNG 는 이 스크립트가 만들지 않는다.** SVG 를 고쳤으면 PNG 도 손으로
+     다시 뽑아야 한다. 안 하면 PNG 만 옛날 그림으로 남는다.
+
+    rsvg-convert -w 3280 docs/TUNIO_시스템아키텍처_v2.svg \
+        -o docs/TUNIO_시스템아키텍처_v2.png
 """
 import io
 
