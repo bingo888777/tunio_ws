@@ -232,3 +232,61 @@ def test_pick_rejects_joint_only_holder(fake_api, fake_gripper):
     with pytest.raises(MP.MotionError, match="x"):
         MP.pick_up(Pose("pick.holder", True, joints=[0] * 6), {})
     assert fake_api.calls == [] and fake_gripper.calls == []
+
+
+# ---------------------------------------------------------- 이동 거부 (#50)
+class RejectingApi(FakeApi):
+    """n 번째 movel 부터 -1(거부)을 돌려준다. 두산 래퍼의 실패 반환값이다."""
+
+    def __init__(self, reject_from=0):
+        super().__init__()
+        self.reject_from = reject_from
+        self.movels = 0
+
+    def movel(self, pos, **kw):
+        super().movel(pos, **kw)
+        self.movels += 1
+        return -1 if self.movels > self.reject_from else 0
+
+
+def test_거치대로_내려가는_게_거부되면_그리퍼를_안_닫는다(monkeypatch, fake_gripper):
+    """
+    거부돼도 다음 줄의 그리퍼는 닫힌다 — 빈손을 물고 "집었다" 가 된다.
+
+    피크는 놓치면 비전이 없어 되찾을 수 없다. 제일 보호가 필요한 자리였는데
+    _movel_base 가 _moved() 밖에 있어 통째로 빠져 있었다 (#50).
+    """
+    fake_common = types.ModuleType("DR_common2")
+    fake_common.posx = lambda v: list(v)
+    fake_common.posj = lambda v: list(v)
+    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
+    api = RejectingApi(reject_from=1)               # 위까지는 가고 하강에서 거부
+    monkeypatch.setattr(MP, "_api", api)
+
+    with pytest.raises(MP.MotionError, match="movel_base"):
+        MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
+    assert fake_gripper.calls == ["open"]           # 열기만 하고 안 닫혔다
+
+
+def test_발현_이동이_거부되면_멈춘다(monkeypatch):
+    """안 움직였는데 다음 동작으로 넘어가면 줄을 안 튕기고 튕겼다고 보고한다."""
+    fake_common = types.ModuleType("DR_common2")
+    fake_common.posx = lambda v: list(v)
+    fake_common.posj = lambda v: list(v)
+    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
+    monkeypatch.setattr(MP, "_api", RejectingApi(reject_from=0))
+
+    with pytest.raises(MP.MotionError, match="movel_base"):
+        MP.pluck_string(_pose_x(CONTACT), {})
+
+
+def test_발현_후퇴가_거부되면_멈춘다(monkeypatch):
+    """Tool 상대 이동도 같이 본다. 후퇴가 안 되면 진동하는 줄에 피크가 닿은 채다."""
+    fake_common = types.ModuleType("DR_common2")
+    fake_common.posx = lambda v: list(v)
+    fake_common.posj = lambda v: list(v)
+    monkeypatch.setitem(sys.modules, "DR_common2", fake_common)
+    monkeypatch.setattr(MP, "_api", RejectingApi(reject_from=3))   # 위·접촉·스트로크 뒤
+
+    with pytest.raises(MP.MotionError, match="movel_tool_rel"):
+        MP.pluck_string(_pose_x(CONTACT), {})
