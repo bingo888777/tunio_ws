@@ -287,3 +287,35 @@ def test_경유지에_숫자도_null도_아닌_값이_있으면_걸린다():
                               "taught": True}
     with pytest.raises(tp.TeachPointsError, match="null"):
         tp.TeachPoints(d)
+
+
+# ───────────── 발현 스트로크 방향 (이슈 #32) ─────────────
+#
+# 6·5번(저음 쪽)과 2·1번(고음 쪽)은 빈 공간이 반대라 훑는 방향이 반대다.
+# 2026-09-20 실기 확인. 도구 안에만 있던 것을 YAML 로 올렸다.
+
+def test_스트로크_방향이_YAML에서_온다():
+    points = tp.TeachPoints(_taught())
+    assert points.pluck(6).stroke_sign == 1
+    assert points.pluck(1).stroke_sign == -1
+
+
+def test_저음과_고음의_방향이_반대다():
+    """같은 방향으로 훑으면 한쪽은 옆 줄이나 몸통에 걸린다."""
+    points = tp.TeachPoints(_taught())
+    assert points.pluck(6).stroke_sign == points.pluck(5).stroke_sign
+    assert points.pluck(2).stroke_sign == points.pluck(1).stroke_sign
+    assert points.pluck(6).stroke_sign != points.pluck(1).stroke_sign
+
+
+def test_스트로크_방향은_1_아니면_마이너스1():
+    d = _taught()
+    d["pluck"][6]["stroke_sign"] = 0
+    with pytest.raises(tp.TeachPointsError, match="stroke_sign"):
+        tp.TeachPoints(d)
+
+
+def test_스트로크_방향이_없으면_1로_본다():
+    d = _taught()
+    del d["pluck"][6]["stroke_sign"]
+    assert tp.TeachPoints(d).pluck(6).stroke_sign == 1

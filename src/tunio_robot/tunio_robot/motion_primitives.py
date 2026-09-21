@@ -110,6 +110,15 @@ _WAIT_SERVICES = [
     ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
     ("MoveJoint", "dsr_controller2/motion/move_joint"),
     ("MoveLine", "dsr_controller2/motion/move_line"),
+    # 힘 제어 계열 (Phase 0 진입이 쓴다). 접두사가 force/ 라 위와 다르다.
+    # 안 기다리면 task_compliance_ctrl 첫 호출에서 **영원히 멈춘다** —
+    # spin_until_future_complete 에 타임아웃이 없다 (#31)
+    ("TaskComplianceCtrl", "dsr_controller2/force/task_compliance_ctrl"),
+    ("ReleaseComplianceCtrl", "dsr_controller2/force/release_compliance_ctrl"),
+    ("SetDesiredForce", "dsr_controller2/force/set_desired_force"),
+    ("ReleaseForce", "dsr_controller2/force/release_force"),
+    ("CheckPositionCondition", "dsr_controller2/force/check_position_condition"),
+    ("CheckForceCondition", "dsr_controller2/force/check_force_condition"),
 ]
 
 
@@ -492,10 +501,15 @@ def _movel_tool_rel(delta, vel, acc, radius=0):
                      ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius)
 
 
-def read_force():
-    """툴에 걸리는 외력 [Fx,Fy,Fz,Mx,My,Mz] (Tool 기준). 로그·힘 제어 파라미터 산정용."""
+def read_force(ref=None):
+    """
+    툴에 걸리는 외력 [Fx,Fy,Fz,Mx,My,Mz]. ref 를 안 주면 Tool 기준.
+
+    페그 진입 감시는 BASE 기준으로 본다 — 접근축이 base ±Y 라 그 축 성분만
+    보면 되기 때문이다.
+    """
     api = _require_api()
-    return api.get_tool_force(api.DR_TOOL)
+    return api.get_tool_force(api.DR_TOOL if ref is None else ref)
 
 
 def read_posx():
@@ -562,7 +576,11 @@ def _cond_met(ret):
 
 def _insert_force_controlled(pose, motion, handle, logger=None):
     """
-    접근점에서 페그까지 **힘 상한을 정해 놓고** 들어간다 (이슈 #31).
+    페그 앞 짧은 구간을 **힘 상한을 정해 놓고** 더듬어 들어간다 (이슈 #31).
+
+    먼 구간(접근점 ~ search_mm)은 위치 제어로 빠르게 간다. 힘 제어는 접촉
+    탐색용이지 이동용이 아니다 — 3N 으로 100mm 를 가면 느리기만 하고, 손잡이와
+    부딪힐 수 있는 건 페그 바로 앞뿐이다.
 
     왜 위치 제어로 나눠 들어가면 안 되나
       위치를 명령하면 로봇은 그 자리까지 **어떻게든 간다.** 막혀 있으면 밀어버린다.
@@ -580,6 +598,15 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     끝나는 조건은 둘
       · 목표 깊이 도달 — 손잡이를 무사히 지났다. 물면 된다
       · 힘이 상한 — 뭔가에 막혔다. 이미 안 밀고 버티는 중이라 기타는 안 밀린다
+
+    왜 check_*_condition 을 안 쓰나
+      이 드라이버의 조건 검사에 두 번 속았다 (2026-09-21).
+        1. 반환이 `0 if success else -1` 이라 **진릿값으로 쓰면 뒤집힌다**
+        2. `check_force_condition(max=2.0)` 은 "2N 을 넘었다" 가 아니라
+           **"힘이 2N 이하다"** 는 뜻이다. 허공에서 늘 참이라, 로봇이 가만히
+           서 있는 채로 "막혔다" 고 보고했다
+      그래서 위치와 힘을 **직접 읽어 우리가 판단한다.** 줄 수는 비슷하고 무슨
+      일이 일어나는지가 화면에 보인다. logger 를 주면 1초마다 진행과 힘을 찍는다.
     """
     api = _require_api()
     axis = TP.approach_axis(pose.task)          # 접근축(툴 Z)의 BASE 단위벡터
@@ -595,39 +622,51 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     fd = [0.0] * 6
     fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
 
+    # 먼 구간은 위치 제어로 빠르게, 페그 앞 짧은 구간만 힘 제어로 더듬는다.
+    # 힘 제어는 **접촉 탐색용**이지 이동용이 아니다 — 3N 으로 100mm 를 가는 건
+    # 느리기만 하고 얻는 게 없다. 손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이다.
+    search_mm = float(handle.get("search_mm", 25.0))
+    approach_mm = float(motion.get("approach_mm", 100.0))
+    if search_mm < approach_mm:
+        _movel(TP.backed_off(pose.task, search_mm), motion)   # 여기까지는 그냥 간다
+
     target = pose.task[k]
-    dr_axis = (api.DR_AXIS_X, api.DR_AXIS_Y, api.DR_AXIS_Z)[k]
-    if axis[k] > 0:                             # 좌표가 커지는 쪽으로 간다
-        lo, hi = target - tol_mm, api.DR_COND_NONE
-    else:
-        lo, hi = api.DR_COND_NONE, target + tol_mm
+    start = read_posx()[0][k]
+    need = abs(target - start)                  # 남은 거리(mm). 힘 제어로 갈 구간
 
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     t0 = time.monotonic()
+    said = 0.0
     try:
         while True:
-            if _cond_met(api.check_position_condition(
-                    dr_axis, min=lo, max=hi,
-                    ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS)):
+            pos = read_posx()[0][k]
+            f = abs(read_force(api.DR_BASE)[k])
+            gone = (pos - start) * (1.0 if axis[k] > 0 else -1.0)
+
+            if logger and time.monotonic() - said > 1.0:
+                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 힘 {f:.1f}N")
+                said = time.monotonic()
+
+            if abs(pos - target) <= tol_mm or gone >= need:
                 if logger:
-                    logger.info(f"{pose.name} 진입 완료 ({'XYZ'[k]} 축 목표 도달)")
+                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 힘 {f:.1f}N)")
                 return
-            if _cond_met(api.check_force_condition(
-                    dr_axis, max=limit_n, ref=api.DR_BASE)):
+            if f >= limit_n:
                 raise MotionError(
-                    f"{pose.name}: 들어가다 막혔다 ({'XYZ'[k]} 축 {limit_n:.1f}N). "
-                    "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "
-                    "다시 시도하라 (#31)")
+                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 {f:.1f}N, "
+                    f"문턱 {limit_n:.1f}N). 손잡이가 서 있어 그리퍼가 못 들어간다. "
+                    "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
             if time.monotonic() - t0 > timeout:
                 raise MotionError(
-                    f"{pose.name}: {timeout:.0f}초 안에 목표에도 못 닿고 막히지도 "
-                    f"않았다. 미는 힘 {push_n:.1f}N 이 너무 약해 못 가고 있을 수 있다")
+                    f"{pose.name}: {timeout:.0f}초 동안 {gone:+.1f}mm 밖에 못 갔다 "
+                    f"(힘 {f:.1f}N). 미는 힘 {push_n:.1f}N 이 너무 약할 수 있다")
             time.sleep(0.05)
     finally:
         api.release_force()                     # 힘 제어는 반드시 푼다
 
 
-def register_peg(pose, motion, handle, read_width, logger=None):
+def register_peg(pose, motion, handle, read_width, logger=None,
+                 use_force=True, assume_grip=False):
     """
     Phase 0 — 페그를 물어서 손잡이 각을 확정하고 그 각을 돌려준다 (#31).
 
@@ -638,6 +677,12 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     pose       — 페그 파지 자세
     handle     — teach_points 의 peg_handle 절
     read_width — 지금 손가락 폭(mm)을 돌려주는 함수 (grip_width.make_reader)
+    use_force  — False 면 힘 제어 없이 그냥 직선으로 들어간다. **사람이 손잡이를
+                 눕혀 놓고 지켜보는 측정 세션용**이다. 아직 실물 검증 전이기도 하다 (#31).
+                 **순응제어는 이 값과 무관하게 항상 켠다** — 끄면 로봇이 뻣뻣해져
+                 오히려 더 세게 민다 (PR #37 리뷰)
+    assume_grip — True 면 폭을 안 읽고 물렸다고 본다. Modbus 가 안 붙는 PC 에서
+                 측정만 할 때다. **빈손·사점을 못 가른다.** 눈으로 확인해야 한다
 
     ## 왜 꽉 무나 (probe 프리셋, 15mm)
 
@@ -671,10 +716,25 @@ def register_peg(pose, motion, handle, read_width, logger=None):
     back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
     _movejx(back, motion, sol=getattr(pose, "sol", None))
 
-    compliance(motion, on=True)                  # 걸리면 물러나게. 기타를 밀지 않는다
+    # 순응은 **항상** 켠다. 힘 제어와 다른 것이다 —
+    #   힘 제어  "이 힘까지만 민다"      (미검증, use_force 로 끌 수 있다)
+    #   순응제어  "걸리면 물러난다"       (끄면 로봇이 뻣뻣해져 오히려 더 세게 민다)
+    # use_force 의 목적은 미검증 힘 제어를 안 태우는 것이지 안전망을 걷는 게 아니다.
+    # 순응만으로도 미는 힘이 강성 × 남은 거리로 묶인다 (PR #37 리뷰, 정동휘)
+    compliance(motion, on=True)
     try:
-        _insert_force_controlled(pose, motion, handle, logger=logger)
+        if use_force:
+            _insert_force_controlled(pose, motion, handle, logger=logger)
+        else:
+            # 사람이 손잡이를 눕혀 놓고 보고 있는 세션. 그냥 들어간다
+            if logger:
+                logger.warn("힘 제어를 건너뛴다 — 손잡이가 눕혀져 있는지 사람이 볼 것")
+            _movel(pose.task, motion)
         _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
+        if assume_grip:
+            if logger:
+                logger.warn("폭을 안 읽는다 — 물렸는지 눈으로 확인할 것 (빈손·사점 못 가림)")
+            return 0.0
         width = read_width()
         verdict = classify(width, thresholds)
         if logger:

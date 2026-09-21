@@ -366,10 +366,13 @@ PR #2로 인터페이스 13개 확정, 2026-09-18 머지. 기준 문서는 `docs
   - 4줄 실기 발현 확인됨(2026-09-20). 단 5·6번 줄 y축 미세 조정이 필요하다고
     당시 커밋에 남아 있고, 이후 재검증 기록은 없다
 - [x] 발현 직후 5mm 이상 후퇴 동작 포함 (버징 방지) — `pluck_string` 이 5mm 미만이면 거부
-- [x] ✅ **6·5·2·1번 줄의 좌표와 동작 교시, YAML 정리** (2026-09-21 완료)
-  - `teach_points.yaml`의 `pluck.6/5/2/1` 전부 `taught: true`. 정정인 실측을
-    기다리는 방식(#32 원안)에서, 정묵이 변환해준 GripperDA_v1 기준 좌표를
-    성현이 직접 확인하고 그대로 채택하는 방식으로 바꿨다 (PR #38)
+- [~] **6·5·2·1번 줄의 좌표와 동작 교시, YAML 정리** — `taught: false`로 대기 중
+  - `teach_points.yaml`의 `pluck.6/5/2/1`은 `main`(정묵)이 올린 2026-09-20 재교시분
+    (X 645.xx, `stroke_sign` 포함)으로 확정했다. 한때 9/19 교시분(X 642.xx)을
+    직접 `taught: true`로 올리려 했으나(#32 원안 변경), main과 병합하며 철회하고
+    main의 값·`taught: false`를 그대로 받았다 (feature/pluck-string, 2026-09-21)
+  - `taught: false`인 이유는 main의 주석 그대로다 — 5·6번 y축 미세 조정이 남아
+    있다(#24 커밋). 정정인 실측으로 확정되면 `taught: true`로 올린다(#32 닫는 조건)
 - [~] `/robot/play_string` 구현·반복 단위 테스트
   - `motion_primitives.pluck_string` 1차(위치 제어) 구현, 단위 테스트 6개
     (`test/test_pluck_string.py`). 피크 집기·반환도 연결됨(위 항목)

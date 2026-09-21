@@ -171,7 +171,7 @@ def main():
         "approach_mm": back_mm, "steps": [],
     }
     try:
-        confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
+        confirm("\n그리퍼를 연다(open 프리셋). 손이 끼지 않게 치워라.")
         MP._grip("open")
         confirm("경유지로 올라간다. 팔이 크게 움직인다.")
         MP.goto_route(route, motion)

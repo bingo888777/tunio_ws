@@ -153,7 +153,14 @@ class TeachPoints:
 
         for key, item in d["pluck"].items():
             no = self._string_no("pluck", key)
-            self._plucks[no] = self._pose(f"pluck.{no}", item)
+            pose = self._pose(f"pluck.{no}", item)
+            # 이 줄을 훑는 방향. pluck_stroke_tool 에 곱한다. 저음 쪽과 고음 쪽이
+            # 빈 공간이 반대라 부호가 다르다 (2026-09-20 실기 확인)
+            sign = item.get("stroke_sign", 1)
+            _require(sign in (1, -1),
+                     f"pluck.{no}.stroke_sign 은 1 또는 -1 이어야 한다 (지금 {sign!r})")
+            pose.stroke_sign = sign
+            self._plucks[no] = pose
 
         missing = [s for s in STRINGS if s not in self._pegs]
         _require(not missing, f"pegs 에 빠진 줄: {missing}")
