@@ -252,13 +252,34 @@ def _require_api():
     return _api
 
 
+def _moved(ret, what):
+    """
+    이동 명령의 반환을 검사한다 — 버리면 안 움직여도 아무도 모른다.
+
+    두산 래퍼는 이동도 `0 if success else -1` 로 돌려준다 (DSR_ROBOT2.py 2789행
+    부근). 지금까지 이 값을 버리고 있었다 — set_tcp 를 버리던 것과 같은 실수다
+    (#26). 순응제어가 켜져 있거나 로봇이 거부하면 -1 이 오는데, 그대로 다음
+    줄로 넘어가 그리퍼를 닫아 버린다. 빈손을 물고 "등록됐다" 가 된다.
+
+    -1 만 실패로 본다. None 이나 다른 값은 그냥 통과시킨다 — 래퍼 판마다 다르고,
+    여기서 막는 건 **명시적 거부**다.
+    """
+    if ret == -1:
+        raise MotionError(
+            f"{what} 가 거부됐다 (-1). 순응제어가 켜진 채 위치 명령을 줬거나 "
+            "로봇이 그 자세를 못 만든다. 안 움직였는데 다음 동작으로 넘어가면 "
+            "빈손을 물게 된다")
+    return ret
+
+
 def _movej(joints, motion, relative=False):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
-    return api.movej(posj(list(joints)),
-                     vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
+    return _moved(api.movej(posj(list(joints)),
+                            vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                            mod=mod), "movej")
 
 
 def _movel(task, motion):
@@ -267,7 +288,7 @@ def _movel(task, motion):
     from DR_common2 import posx
     v = motion.get("travel_vel", [50.0, 30.0])
     a = motion.get("travel_acc", [100.0, 60.0])
-    return api.movel(posx(list(task)), vel=v, acc=a)
+    return _moved(api.movel(posx(list(task)), vel=v, acc=a), "movel")
 
 
 def _movejx(task, motion, sol=None):
@@ -285,8 +306,9 @@ def _movejx(task, motion, sol=None):
     from DR_common2 import posx
     if sol is None:
         sol = api.get_current_solution_space()
-    return api.movejx(posx(list(task)),
-                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
+    return _moved(api.movejx(posx(list(task)),
+                             vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                             sol=sol), "movejx")
 
 
 def turn_motion(motion):
@@ -773,11 +795,15 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     # 2026-09-21 실기에서 search_mm 8 을 줬는데 힘 제어가 99.8mm 를 가려 했고,
     # 4N 으로 20초에 7.5mm 밖에 못 갔다. 먼 구간은 딱딱할 때 끝내야 한다.
     search_mm = float(handle.get("search_mm", 25.0))
-    if use_force and search_mm < approach_mm:
+    # 힘 제어를 쓰면 search_mm 앞까지만, 안 쓰면 **페그까지** 여기서 간다.
+    # --no-force 도 순응을 켠 뒤에 100mm 를 가려다 그 자리에 서 있었다
+    # (2026-09-21 실기). 순응 아래서는 위치 명령이 안 먹는다
+    stop_mm = search_mm if use_force else 0.0
+    if stop_mm < approach_mm:
+        where = f"앞 {stop_mm:.0f}mm 까지" if stop_mm else "까지"
         if logger:
-            logger.info(f"페그 앞 {search_mm:.0f}mm 까지 위치 제어로 간다 "
-                        f"(순응 켜기 전)")
-        _movel(TP.backed_off(pose.task, search_mm), motion)
+            logger.info(f"페그 {where} 위치 제어로 간다 (순응 켜기 전)")
+        _movel(TP.backed_off(pose.task, stop_mm), motion)
 
     # 순응은 **항상** 켠다. 힘 제어와 다른 것이다 —
     #   힘 제어  "이 힘까지만 민다"      (미검증, use_force 로 끌 수 있다)
@@ -792,7 +818,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
             # 사람이 손잡이를 눕혀 놓고 보고 있는 세션. 그냥 들어간다
             if logger:
                 logger.warn("힘 제어를 건너뛴다 — 손잡이가 눕혀져 있는지 사람이 볼 것")
-            _movel(pose.task, motion)
+                logger.warn("진입은 이미 끝났다(순응 켜기 전). 순응은 파지·후퇴만 지킨다")
         _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
         if assume_grip:
             if logger:
