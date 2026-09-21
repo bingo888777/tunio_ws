@@ -38,7 +38,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, PlayString
+from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
 
 
 def confirm(msg):
@@ -71,6 +71,66 @@ def send(node, cli, goal, label, timeout=120.0):
     return ok
 
 
+HELP = """
+  명령                          하는 일
+  ----------------------------------------------------------------
+  play <줄>                     그 줄을 튕긴다 (피크가 없으면 집어 온다)
+  peg <줄> <loosen|tighten> <도>  페그를 돌린다 (피크를 쥐고 있으면 먼저 반환)
+  strum                         전체 화음 (아직 미구현 — 실패가 정상)
+  ?                             이 도움말
+  q                             나가기
+
+  줄 번호는 6 5 2 1. 예 —
+    play 6
+    peg 6 loosen 3
+    play 6
+    peg 1 tighten 2
+"""
+
+
+def repl(node, play, adj, strum):
+    """
+    ROS Action 을 손으로 쏴 본다. 서버가 보내는 것과 같은 goal 이다.
+
+    순서를 마음대로 섞을 수 있어서 노드의 판단을 확인하기 좋다 —
+    피크를 언제 집고 놓는지, 경유지를 언제 타는지, Phase 0 를 언제 도는지는
+    전부 robot_controller 안에 있고 **서버는 지시하지 않는다**(CLAUDE.md 2절).
+    발현 두 번을 연달아 시키면 집기가 한 번만 나와야 맞다.
+    """
+    print(HELP)
+    while True:
+        try:
+            line = input("loop> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if not line:
+            continue
+        w = line.split()
+        cmd = w[0].lower()
+        try:
+            if cmd in ("q", "quit", "exit"):
+                return 0
+            if cmd in ("?", "h", "help"):
+                print(HELP)
+            elif cmd == "play":
+                g = PlayString.Goal()
+                g.string_number = int(w[1])
+                send(node, play, g, f"play_string {w[1]}")
+            elif cmd == "peg":
+                g = AdjustPeg.Goal()
+                g.string_number = int(w[1])
+                g.direction = -1 if w[2].startswith("l") else 1
+                g.angle_deg = float(w[3])
+                send(node, adj, g, f"adjust_peg {w[1]} {w[2]} {w[3]}도")
+            elif cmd == "strum":
+                send(node, strum, StrumAll.Goal(), "strum_all")
+            else:
+                print(f"  모르는 명령: {cmd}   ? 로 도움말")
+        except (IndexError, ValueError):
+            print("  인자가 모자라거나 숫자가 아니다.  ? 로 도움말")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--string", type=int, default=6, choices=[1, 2, 5, 6])
@@ -80,6 +140,9 @@ def main():
     ap.add_argument("--skip-pluck", action="store_true",
                     help="발현을 건너뛴다. 페그 조절만 본다")
     ap.add_argument("--yes", action="store_true", help="확인 없이 쭉 돈다")
+    ap.add_argument("-i", "--interactive", action="store_true",
+                    help="정해진 순서 대신 **손으로 명령을 쳐서** 돌린다. "
+                         "서버가 보내는 것과 같은 goal 이라 순서를 마음대로 섞어 볼 수 있다")
     args = ap.parse_args()
 
     no = args.string
@@ -87,10 +150,12 @@ def main():
 
     print()
     print("=" * 66)
-    print(f"조율 루프 확인 — {no}번 줄")
+    print("조율 루프 확인 — 손으로 명령" if args.interactive
+          else f"조율 루프 확인 — {no}번 줄")
     print("=" * 66)
-    print(f"  발현      {'건너뜀' if args.skip_pluck else f'{no}번 줄 (피크 집기 포함)'}")
-    print(f"  페그      {args.direction} {args.angle:.1f}도 (direction={direction:+d})")
+    if not args.interactive:
+        print(f"  발현      {'건너뜀' if args.skip_pluck else f'{no}번 줄 (피크 집기 포함)'}")
+        print(f"  페그      {args.direction} {args.angle:.1f}도 (direction={direction:+d})")
     print("  ⚠️ robot_controller 가 dry_run:=false 로 떠 있어야 한다")
     print("  ⚠️ 거치대에 피크가 있어야 하고 Phase 0 등록이 끝나 있어야 한다")
 
@@ -98,6 +163,14 @@ def main():
     node = Node("tunio_loop_check")
     play = ActionClient(node, PlayString, "/robot/play_string")
     adj = ActionClient(node, AdjustPeg, "/robot/adjust_peg")
+    strum = ActionClient(node, StrumAll, "/robot/strum_all")
+
+    if args.interactive:
+        try:
+            return repl(node, play, adj, strum)
+        finally:
+            node.destroy_node()
+            rclpy.shutdown()
 
     ok = True
     try:
