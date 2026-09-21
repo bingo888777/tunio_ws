@@ -19,7 +19,13 @@
   보여준다. 배치가 맞는지는 그리퍼를 여닫으며 어느 칸이 변하는지로 확인하라.
   그게 확실하다.
 
+어디에 붙나
+  로봇 컨트롤러가 192.168.1.100 이다(2026-09-19 확인). Compute Box 는 별도
+  주소이고, 예전 화면에서 192.168.1.1 로 적어 뒀으나 확실하지 않다.
+  --scan 이 흔한 조합을 훑어 어디가 답하는지 찾는다. 읽기만 보낸다.
+
 쓰는 법
+  python3 tools/gripper_status.py --scan     # 어디에 붙는지 먼저 찾는다
   python3 tools/gripper_status.py            # 한 번 읽는다
   python3 tools/gripper_status.py --watch    # 계속 읽는다 (여닫으며 보기)
   python3 tools/gripper_status.py --host 192.168.1.1 --unit 65
@@ -81,6 +87,51 @@ def read_registers(host, port, unit, address, count, timeout=2.0):
         return list(vals)
 
 
+# --scan 이 훑는 후보. 로봇 컨트롤러는 192.168.1.100 이고 Compute Box 는 별도다
+SCAN_HOSTS = ["192.168.1.1", "192.168.1.100", "192.168.1.2", "192.168.1.101"]
+SCAN_UNITS = [65, 66, 1, 0]
+
+
+def scan(extra_host, port):
+    """어느 주소·유닛이 답하는지 훑는다. 읽기만 보낸다."""
+    hosts = [extra_host] + [h for h in SCAN_HOSTS if h != extra_host]
+    print("읽기 요청만 보낸다. 아무것도 안 바꾼다.\n")
+    found = []
+    for host in hosts:
+        try:
+            with socket.create_connection((host, port), timeout=0.8):
+                pass
+        except OSError as e:
+            print(f"  {host}:{port}  못 붙는다 ({e.__class__.__name__})")
+            continue
+        print(f"  {host}:{port}  포트 열림")
+        for unit in SCAN_UNITS:
+            try:
+                regs = read_registers(host, port, unit, BASE, COUNT, timeout=1.0)
+            except (OSError, IOError) as e:
+                print(f"      유닛 {unit:3d}  응답 없음 ({e})")
+                continue
+            width = regs[9] / 10.0
+            sane = 0.0 <= width <= 120.0 and any(regs)
+            print(f"      유닛 {unit:3d}  답했다 — 폭 추정 {width:.1f}mm"
+                  f"{'' if sane else '  (값이 이상하다)'}")
+            found.append((host, unit, regs, sane))
+
+    print()
+    if not found:
+        print("답하는 데가 없다. 볼 것 —")
+        print("  · ping 192.168.1.1 / ping 192.168.1.100 이 되나")
+        print("  · 그리퍼 제어 웹이 뜨는 주소가 곧 Compute Box 다. 그 주소로 --host")
+        print("  · Modbus 를 웹에서 꺼 뒀을 수도 있다")
+        return 1
+    best = next((f for f in found if f[3]), found[0])
+    print(f"쓸 만한 것 — --host {best[0]} --unit {best[1]}")
+    print("이 값으로 다시 읽어 보라 —")
+    print(f"  python3 tools/gripper_status.py --host {best[0]} "
+          f"--unit {best[1]} --watch")
+    return 0
+
+
 def show(regs):
     print("  원본 레지스터 —")
     for i, v in enumerate(regs):
@@ -111,7 +162,12 @@ def main():
     ap.add_argument("--watch", action="store_true", help="계속 읽는다")
     ap.add_argument("--period", type=float, default=0.5)
     ap.add_argument("--save", action="store_true", help="읽은 값을 기록으로 남긴다")
+    ap.add_argument("--scan", action="store_true",
+                    help="흔한 주소 조합을 훑어 어디가 답하는지 찾는다")
     args = ap.parse_args()
+
+    if args.scan:
+        return scan(args.host, args.port)
 
     print()
     print("=" * 62)
