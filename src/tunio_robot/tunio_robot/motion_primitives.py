@@ -661,6 +661,30 @@ def _current_j1():
         return None
 
 
+def j1_flip(now_j1, want_j1, motion):
+    """
+    이 전환이 J1 을 뒤집는가. (뒤집는다, 돌아야 하는 각) 로 낸다.
+
+    **판단은 여기 한 곳에서만 한다.** _ensure_solution 과 tools/sol_check.py 가
+    같이 부른다 — 도구가 찍는 값이 곧 실기에서 코드가 내릴 판단이어야 한다.
+    따로 계산하면 도구는 "경유 안 함" 이라 찍고 코드는 경유하는 일이 생긴다.
+
+    문턱은 motion["j1_flip_deg"](기본 120도). 사용자 기준(2026-09-21) — "반대값"은
+    150~180도쯤 차이 나는 경우이고 230도 차이도 옮겨야 한다. 그 아래는 근사값이라
+    그 자리에서 이어 간다. 120 은 둘 사이의 여유값이고 실측 전 임시값이다.
+
+    **모듈러로 접지 않는다.** movej 는 관절 공간에서 곧이곧대로 보간하므로 230도
+    차이는 실제로 230도를 돈다. 130도로 줄여 보면 안 된다.
+
+    둘 중 하나라도 None(못 읽음)이면 뒤집는 것으로 본다 — 모르면서 뒤집는 것보다
+    한 번 더 들르는 쪽이 싸다. 그때 각은 None 이다.
+    """
+    if now_j1 is None or want_j1 is None:
+        return True, None
+    turn = abs(float(want_j1) - float(now_j1))
+    return turn >= float(motion.get("j1_flip_deg", 120.0)), turn
+
+
 def _ensure_solution(task, sol, route, motion, logger=None):
     """
     목표 팔 모양이 지금과 **J1 반대쪽**이면 J1=90 경유지를 먼저 지난다 (#58).
@@ -688,16 +712,14 @@ def _ensure_solution(task, sol, route, motion, logger=None):
     if sol is None:
         return False
     now, want = _current_j1(), _target_j1(task, sol)
-    if now is not None and want is not None:
-        turn = abs(want - now)
-        if turn < float(motion.get("j1_flip_deg", 120.0)):
-            if logger:
-                logger.info(f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도). "
-                            "같은 쪽이라 경유지를 안 탄다")
-            return False
-        why = f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도 뒤집힘)"
-    else:
-        why = f"J1 을 못 읽었다 (지금 {now}, 목표 {want})"
+    flip, turn = j1_flip(now, want, motion)
+    if not flip:
+        if logger:
+            logger.info(f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도). "
+                        "같은 쪽이라 경유지를 안 탄다")
+        return False
+    why = (f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도 뒤집힘)" if turn is not None
+           else f"J1 을 못 읽었다 (지금 {now}, 목표 {want})")
     if route is None:
         raise MotionError(
             f"거치대 팔 모양을 바꿔야 하는데 경유지가 없다 — {why}. "

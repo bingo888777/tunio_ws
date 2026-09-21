@@ -612,3 +612,37 @@ def test_movej_가_가속도도_같은_비로_내린다(monkeypatch):
     kw = api.calls[0][2]
     assert kw["vel"] < 50.0
     assert abs(kw["acc"] / kw["vel"] - 2.0) < 1e-6        # 비가 유지된다
+
+
+# ---------------------------------------------------------- J1 뒤집힘 판단 (#58)
+def test_j1_flip_문턱():
+    """
+    사용자 기준 — 반대값은 150~180도쯤, 230도도 옮긴다. 그 아래는 근사값이다.
+
+    이 함수 하나가 판단을 쥔다. tools/sol_check.py 도 이걸 불러서 찍으므로
+    도구가 보여주는 값이 곧 실기에서 코드가 내릴 판단이다.
+    """
+    m = {}
+    assert MP.j1_flip(-10.0, 5.0, m)[0] is False        # 15도 — 근사값
+    assert MP.j1_flip(0.0, 119.0, m)[0] is False        # 119도 — 아직 근사
+    assert MP.j1_flip(0.0, 120.0, m)[0] is True         # 120도 — 문턱
+    assert MP.j1_flip(-10.0, 170.0, m)[0] is True       # 180도 — 반대값
+    assert MP.j1_flip(-60.0, 170.0, m)[0] is True       # 230도 — 반대값
+
+
+def test_j1_flip_은_모듈러로_접지_않는다():
+    """Movej 는 관절 공간에서 곧이곧대로 돈다. 230도를 130도로 보면 안 된다."""
+    flip, turn = MP.j1_flip(-60.0, 170.0, {})
+    assert turn == 230.0 and flip is True
+
+
+def test_j1_flip_문턱은_설정으로_바꾼다():
+    """실측 전 임시값이라 실기에서 조여야 한다."""
+    assert MP.j1_flip(-10.0, 170.0, {"j1_flip_deg": 200.0})[0] is False
+    assert MP.j1_flip(-10.0, 170.0, {"j1_flip_deg": 100.0})[0] is True
+
+
+def test_j1_을_모르면_뒤집는_것으로_본다():
+    """모르면서 뒤집는 것보다 한 번 더 들르는 쪽이 싸다."""
+    assert MP.j1_flip(None, 170.0, {}) == (True, None)
+    assert MP.j1_flip(-10.0, None, {}) == (True, None)
