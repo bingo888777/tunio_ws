@@ -8,7 +8,7 @@
 왜 따로 보는가
   왼쪽 페그는 B=+90, 오른쪽은 B=-90 이라 손목이 180도 뒤집혀야 한다.
   TCP 가 208mm 라 그 뒤집힘에 손끝이 반경 20cm 짜리 호를 그린다.
-  게다가 이동 중에는 그리퍼가 열려 있어(90mm) 폭도 제일 넓다.
+  게다가 이동 중에는 그리퍼가 열려 있어 폭도 제일 넓다 (open 프리셋).
   페그를 잡는 것보다 이쪽이 부딪힐 위험이 크다.
 
 어떻게 보는가
@@ -44,8 +44,13 @@ def confirm(msg):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--from", dest="src", type=int, required=True, choices=[1, 2, 5, 6])
+    ap.add_argument("--from", dest="src", required=True,
+                    help="출발 — 줄 번호(1/2/5/6) 또는 'holder'(피크 거치대). "
+                         "거치대 출발은 피크를 반환한 직후 자세다 (#34)")
     ap.add_argument("--to", dest="dst", type=int, required=True, choices=[1, 2, 5, 6])
+    ap.add_argument("--no-route", action="store_true",
+                    help="경유지를 안 거치고 바로 간다. **거치대 직행을 볼 때만.** "
+                         "노드는 지금 거치대에서 출발하면 항상 경유지를 탄다 (#34)")
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--approach", type=float, default=None,
                     help="페그에서 물러나는 거리(mm). 기본은 motion.approach_mm")
@@ -63,14 +68,28 @@ def main():
 
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
-    if TP.side_of(args.src) == TP.side_of(args.dst):
+    if str(args.src).lower() == "holder":
+        print("출발이 피크 거치대다 — 피크를 반환한 직후 팔이 남는 자리다.")
+        print("  노드는 지금 거치대에서 출발하면 **항상 경유지를 탄다**(#34).")
+        print("  직행을 보려면 --no-route 를 준다. 처음이면 --speed 30 으로.")
+    elif TP.side_of(int(args.src)) == TP.side_of(args.dst):
         print(f"경고 — {args.src}번과 {args.dst}번은 같은 쪽이다. "
               f"실제로는 경유지를 안 거친다")
 
     back = args.approach if args.approach is not None \
         else points.motion.get("approach_mm", 100.0)
-    src_peg, dst_peg = points.peg(args.src), points.peg(args.dst)
-    src_sol = args.src_sol if args.src_sol is not None else src_peg.sol
+    # 출발이 거치대면 페그가 아니다. 피크를 반환한 직후 팔이 거기 남는다 (#34).
+    # 그 자리에서 페그로 바로 가는 경로는 아직 아무도 안 봤다 —
+    # 2026-09-19 충돌 검증은 페그↔페그와 경유지뿐이었다.
+    from_holder = str(args.src).lower() == "holder"
+    if from_holder:
+        src_peg = points.pick_holder()
+        args.src = "holder"
+    else:
+        src_peg = points.peg(int(args.src))
+        args.src = int(args.src)
+    dst_peg = points.peg(args.dst)
+    src_sol = args.src_sol if args.src_sol is not None else getattr(src_peg, "sol", None)
     dst_sol = args.dst_sol if args.dst_sol is not None else dst_peg.sol
     src_back = TP.backed_off(src_peg.task, back)
     dst_back = TP.backed_off(dst_peg.task, back)
@@ -88,17 +107,19 @@ def main():
 
     print()
     print("=" * 62)
-    print(f"좌우 전환 검증  {args.src}번({TP.side_of(args.src)}) "
-          f"→ {args.dst}번({TP.side_of(args.dst)})")
+    src_label = "거치대" if from_holder else f"{args.src}번({TP.side_of(args.src)})"
+    print(f"이동 경로 검증  {src_label} → {args.dst}번({TP.side_of(args.dst)})")
     print("=" * 62)
-    print(f"  출발 접근점  {fmt(src_back)}  (페그에서 {back:.0f}mm 뒤)")
-    print(f"  경유지       {route.joints}")
+    print(f"  출발 접근점  {fmt(src_back)}  "
+          f"({'거치대' if from_holder else '페그'}에서 {back:.0f}mm 뒤)")
+    print(f"  경유지       {route.joints}"
+          + ("   ← 건너뛴다 (--no-route)" if args.no_route else ""))
     print(f"  도착 접근점  {fmt(dst_back)}")
     print(f"  팔 자세(sol) 출발 {src_sol if src_sol is not None else '미지정'} / "
           f"도착 {dst_sol if dst_sol is not None else '미지정 — 현재 자세 유지'}")
     print(f"  속도         설정값의 {args.speed:.0f}% "
           f"(관절 {motion['vel']:.1f} deg/s)")
-    print("  그리퍼       열어둔다(90mm). 이동 중 가장 넓은 상태라 최악을 본다")
+    print("  그리퍼       열어둔다(open 프리셋). 이동 중 가장 넓은 상태라 최악을 본다")
 
     if args.dry_run:
         print("\n--dry-run 이라 여기서 멈춘다")
@@ -146,7 +167,7 @@ def main():
 
     notes = []
     try:
-        confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
+        confirm("\n그리퍼를 연다(open 프리셋). 손이 끼지 않게 치워라.")
         MP._grip("open")
 
         print("\n[1/3] 출발 접근점으로 간다. 지금 팔이 기타 근처면 주의해서 보라.")
@@ -155,12 +176,17 @@ def main():
         report("출발점")
         notes.append(input("  부딪힐 뻔한 데 있었나? (없으면 엔터) ").strip())
 
-        print("\n[2/3] 경유지로 올라간다. **여기서 손목이 뒤집힐 수 있다.**")
-        print("      손끝이 기타 쪽으로 쓸고 가는지 잘 보라.")
-        confirm("  진행할까")
-        MP.goto_route(route, motion)
-        report("경유지")
-        notes.append(input("  부딪힐 뻔한 데 있었나? (없으면 엔터) ").strip())
+        if args.no_route:
+            print("\n[2/3] **경유지를 건너뛴다 (--no-route).** 바로 도착점으로 간다.")
+            print("      이게 거치대 직행을 보는 경우다. 아무도 본 적 없는 경로다 (#34).")
+            print("      조금이라도 이상하면 즉시 비상정지.")
+        else:
+            print("\n[2/3] 경유지로 올라간다. **여기서 손목이 뒤집힐 수 있다.**")
+            print("      손끝이 기타 쪽으로 쓸고 가는지 잘 보라.")
+            confirm("  진행할까")
+            MP.goto_route(route, motion)
+            report("경유지")
+            notes.append(input("  부딪힐 뻔한 데 있었나? (없으면 엔터) ").strip())
 
         print(f"\n[3/3] {args.dst}번 접근점으로 내려간다.")
         confirm("  진행할까")

@@ -16,7 +16,7 @@ HANDLE = {
     "measured": True, "requires_prealign": True,
     "thickness_mm": 19.6, "length_mm": 32.8, "empty_mm": 13.0,
     "probe_preset": "close", "insert_force_n": 3.0, "contact_force_n": 2.0,
-    "arrive_tol_mm": 2.0, "insert_timeout_sec": 5.0,
+    "arrive_tol_mm": 2.0, "insert_timeout_sec": 5.0, "search_mm": 25.0,
     "thresholds_mm": {"empty_below": 16.3, "dead_above": 26.2},
 }
 MOTION = {"peg_joint": 6, "approach_mm": 100.0,
@@ -31,6 +31,12 @@ class _Peg:
         self.task = list(PEG6)
 
 
+class _Log(list):
+    """호출 기록 + 가짜 API 를 같이 들고 다닌다 (list 에는 속성을 못 붙인다)."""
+
+    api = None
+
+
 class _Api:
     """순응제어·힘 제어 호출을 기록하는 가짜 두산 API."""
 
@@ -41,7 +47,7 @@ class _Api:
     def __init__(self, blocked=False):
         self.compliance = []
         self.force = []
-        self.blocked = blocked          # True 면 막혀서 목표에 영영 못 닿는다
+        self.blocked = blocked          # True 면 막혀서 못 들어간다
 
     def task_compliance_ctrl(self, stx):
         self.compliance.append(("on", list(stx)))
@@ -60,21 +66,6 @@ class _Api:
         self.force.append(("release",))
         return 0
 
-    # **0 이 조건 충족, -1 이 미충족이다.** 두산 래퍼가 그렇게 돌려준다.
-    # 진릿값으로 쓰면 뒤집힌다 — 2026-09-21 실물에서 그래서 진입을 안 했다
-    def check_position_condition(self, axis, min=None, max=None,   # noqa: A002
-                                 ref=None, mod=None):
-        return -1 if self.blocked else 0        # 안 막혔으면 도달
-
-    def check_force_condition(self, axis, max=None, min=None, ref=None):  # noqa: A002
-        return 0 if self.blocked else -1
-
-
-class _Log(list):
-    """호출 기록 + 가짜 API 를 같이 들고 다닌다 (list 에는 속성을 못 붙인다)."""
-
-    api = None
-
 
 @pytest.fixture
 def spy(monkeypatch):
@@ -84,6 +75,17 @@ def spy(monkeypatch):
     monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
     monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: log.append(("movejx", list(t))))
     monkeypatch.setattr(MP, "_movel", lambda t, m: log.append(("movel", list(t))))
+
+    # 막혔으면 물러난 자리에 머무르고 힘이 오른다. 아니면 목표까지 들어간다
+    def posx(ref=None):
+        y = PEG6[1] - 100.0 if api.blocked else PEG6[1]
+        return ([PEG6[0], y, PEG6[2], 0, 0, 0], 7)
+
+    def force(ref=None):
+        return [0.0, 3.0 if api.blocked else 0.2, 0.0, 0, 0, 0]
+
+    monkeypatch.setattr(MP, "read_posx", posx)
+    monkeypatch.setattr(MP, "read_force", force)
     log.api = api
     return log
 
@@ -220,14 +222,95 @@ def test_폭이_없으면_판정_안_한다():
         GW.classify(None, HANDLE["thresholds_mm"])
 
 
-def test_조건_반환은_0이_충족이다():
+def test_힘_판정은_값을_직접_읽는다(spy):
     """
-    두산 래퍼가 `0 if success else -1` 로 돌려준다.
+    check_force_condition 을 안 쓴다. 두 번 속았다 (2026-09-21).
 
-    파이썬에서 0 은 거짓, -1 은 참이라 진릿값으로 쓰면 정확히 뒤집힌다.
-    2026-09-21 실물에서 진입이 곧바로 "도달" 로 끝나 로봇이 페그로 들어가지도
-    않고 그리퍼만 여닫았다. 그 회귀를 막는다.
+      1. 반환이 `0 if success else -1` 이라 진릿값으로 쓰면 뒤집힌다
+      2. `max=2.0` 은 "2N 을 넘었다" 가 아니라 **"힘이 2N 이하다"** 는 뜻이다.
+         허공에서 늘 참이라, 로봇이 가만히 서 있는 채로 "막혔다" 고 보고했다
+
+    그래서 get_tool_force 값을 직접 읽어 문턱과 견준다.
     """
-    assert MP._cond_met(0) is True
-    assert MP._cond_met(-1) is False
-    assert bool(0) is False and bool(-1) is True     # 진릿값은 반대다
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))       # 힘 0.2N -> 통과
+    assert not hasattr(spy.api, "condition_calls")
+
+
+def test_허공에서는_막혔다고_하지_않는다(spy):
+    """이게 2026-09-21 실물 증상이다. 안 움직인 채로 '막혔다' 고 했다."""
+    spy.api.blocked = False
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))       # 예외가 안 난다
+
+
+def test_먼_구간은_위치_제어로_간다(spy):
+    """
+    힘 제어는 접촉 탐색용이다. 3N 으로 100mm 를 가면 느리기만 하고 얻는 게 없다.
+
+    손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이라, 거기까지는 그냥 간다.
+    """
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    moves = [e for e in spy if e[0] == "movel"]
+    assert moves, "위치 제어 구간이 없다"
+    # 첫 movel 이 페그에서 search_mm 만큼 뒤여야 한다 (접근점 100mm 가 아니라)
+    y = moves[0][1][1]
+    assert abs(abs(y - PEG6[1]) - HANDLE["search_mm"]) < 1.0
+
+
+def test_탐색_구간이_접근_거리보다_짧다():
+    """같거나 길면 위치 제어 구간이 없어져 처음부터 힘 제어로 기어간다."""
+    assert HANDLE["search_mm"] < MOTION["approach_mm"]
+
+
+# ───────── 측정 세션용 — 힘 제어를 끈다 (#13, #8) ─────────
+#
+# 힘 제어는 **초기 등록에만** 필요하다. 손잡이가 어느 각인지 모르는 그 한 번뿐이고,
+# 등록되고 나면 각을 알고 들어가므로 막힐 일이 없다. adjust_peg 는 원래부터 안 쓴다.
+# 사람이 손잡이를 눕혀 놓고 지켜보는 측정 세션이면 등록에서도 뺄 수 있다.
+
+def test_힘_제어를_끄면_그냥_들어간다(spy):
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6), use_force=False)
+    assert spy.api.force == []                      # set_desired_force 를 안 불렀다
+    assert [e for e in spy if e[0] == "movel"]      # 대신 직선으로 들어갔다
+
+
+def test_힘_제어를_꺼도_순응은_켠다(spy):
+    """
+    둘은 다른 것이다 (PR #37 리뷰, 정동휘).
+
+      힘 제어  "이 힘까지만 민다"   — 미검증이라 끌 수 있게 했다
+      순응제어  "걸리면 물러난다"    — 끄면 로봇이 뻣뻣해져 **오히려 더 세게 민다**
+
+    use_force 의 목적은 미검증 경로를 안 태우는 것이지 안전망을 걷는 게 아니다.
+    """
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6), use_force=False)
+    assert spy.api.compliance[0][0] == "on"
+    assert spy.api.compliance[-1] == ("off",)       # 끝나면 반드시 끈다
+
+
+def test_힘_제어를_꺼도_폭은_본다(spy):
+    """진입 방식과 파지 판정은 별개다. 빈손은 여전히 걸러야 한다."""
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0), use_force=False)
+
+
+def test_폭도_끄면_물렸다고_본다(spy):
+    """Modbus 가 안 붙는 PC 에서 측정만 할 때. 사람이 눈으로 본다는 전제다."""
+    roll = MP.register_peg(_Peg(), MOTION, HANDLE, _widths(), use_force=False,
+                           assume_grip=True)
+    assert roll == pytest.approx(0.0)
+    assert ("grip", "close") in spy                 # 물기는 한다 (각이 확정돼야 하니까)
+
+
+def test_adjust_peg_는_힘_제어를_안_쓴다(spy, monkeypatch):
+    """
+    각을 아는 뒤로는 막힐 일이 없다. 조절 경로에는 힘 제어가 처음부터 없었다.
+
+    측정 세션(#13)이 이걸 반복해서 돌린다.
+    """
+    monkeypatch.setattr(MP, "_goto_pose", lambda *a: None)
+    monkeypatch.setattr(MP, "_release", lambda: None)
+    monkeypatch.setattr(MP, "_retreat", lambda *a: None)
+    monkeypatch.setattr(MP, "_movej", lambda *a, **k: None)
+    MP.adjust_peg(_Peg(), 6, -30.0, MOTION, roll_deg=45.0)
+    assert spy.api.force == []
+    assert spy.api.compliance == []

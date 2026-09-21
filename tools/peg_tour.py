@@ -133,7 +133,7 @@ def main():
            "gripped": not args.no_grip, "approach_mm": back_mm,
            "speed_pct": args.speed, "visits": []}
     try:
-        confirm("\n그리퍼를 연다(90mm). 손이 끼지 않게 치워라.")
+        confirm("\n그리퍼를 연다(open 프리셋). 손이 끼지 않게 치워라.")
         MP._grip("open")
         print("\n팔이 기타에 닿아 있거나 페그를 물고 있으면 먼저 빼내라.")
         confirm("경유지로 올라간다. 팔이 크게 움직인다.")
