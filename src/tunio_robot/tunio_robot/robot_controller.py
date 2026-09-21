@@ -269,10 +269,11 @@ class RobotController(Node):
         if not self._holding_pick:
             return
         holder = self.points.pick_holder()
+        via = self.points.frame("standby")
         if self.dry_run:
             self.get_logger().info(f"[dry_run] 피크 반환 {holder.task}")
         else:
-            MP.pick_return(holder, self.points.motion)
+            MP.pick_return(holder, self.points.motion, via=via)
         self._holding_pick = False
         self._side = None
 
@@ -287,10 +288,11 @@ class RobotController(Node):
         def work():
             pose = self.points.pluck(no)            # 미교시면 여기서 걸린다
             self._ensure_pick()
+            standby = self.points.frame("pluck_standby")
             if self.dry_run:
-                self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.joints}")
+                self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.task}")
                 return
-            MP.pluck_string(pose, self.points.motion)
+            MP.pluck_string(pose, self.points.motion, standby=standby)
 
         return self._run("play_string", goal, PlayString.Result, work)
 
@@ -348,8 +350,12 @@ class RobotController(Node):
                 self.get_logger().info(
                     f"[dry_run] 화음 훑기 {numbers} -> 대기 자세 복귀 {standby.joints}")
                 return
-            MP.strum_all(numbers, self.points)
+            # strum_all() 이 아직 NotImplementedError 를 던지므로, 반환을 그 뒤에
+            # 두면 절대 안 탄다 (PR #38 리뷰 ③). play_string 이 앞서 쥐어 놨을
+            # 피크를 반환하려면 여기서 먼저 해야 한다 — 미구현 상태라 앞에 둬도
+            # 잃는 게 없다.
             self._release_pick()
+            MP.strum_all(numbers, self.points)
             MP.return_home(standby, self.points.motion)
 
         return self._run("strum_all", goal, StrumAll.Result, work)

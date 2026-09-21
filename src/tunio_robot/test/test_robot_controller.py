@@ -325,6 +325,30 @@ def test_strum_all은_미구현_상태라_ensure_pick을_안_부른다(ros, taug
         h.shutdown()
 
 
+def test_strum_all_실기에서도_미리_쥔_피크는_반환한다(ros, taught, monkeypatch):
+    """
+    PR #38 리뷰 ③. strum_all() 이 예외를 던지기 전에 _release_pick() 을 부른다.
+
+    play_string 이 앞서 쥐어 놓은 피크는 strum_all() 이 NotImplementedError 로
+    죽기 전에 반환돼야 한다. 반환을 strum_all() 뒤에 두면 예외로 도달하지
+    않는다 — 실기 경로(dry_run 아님)로 확인한다.
+    """
+    h = Harness(taught)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True             # play_string 이 앞서 쥐어 놓은 상태
+        pick_return = mock.MagicMock()
+        monkeypatch.setattr(MP, "pick_return", pick_return)
+
+        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal(string_numbers=[]))
+
+        assert handle.result.success is False    # strum_all() 미구현이라 여전히 실패
+        pick_return.assert_called_once()          # 그래도 반환은 이미 됐다
+        assert h.node._holding_pick is False
+    finally:
+        h.shutdown()
+
+
 # ─────────── Phase 0 를 노드가 스스로 돈다 (이슈 #31) ───────────
 #
 # 서버는 "작업 시작" 을 로봇에 알리지 않는다. 로봇이 아는 건 Action 세 개뿐이라,
