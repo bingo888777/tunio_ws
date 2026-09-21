@@ -82,6 +82,20 @@ def main():
     ap.add_argument("--assume-grip", action="store_true",
                     help="폭을 안 읽고 물렸다고 본다. Modbus 가 안 붙는 PC 용. "
                          "빈손·사점을 못 가리니 눈으로 확인할 것")
+    # 힘 제어 값을 YAML 안 고치고 바로 바꿔 본다. 실측 전 임시값이라 쓸어 봐야 한다
+    ap.add_argument("--force-n", type=float, default=None,
+                    help="미는 힘 상한(N). YAML 의 insert_force_n 을 덮어쓴다. "
+                         "순응 스프링을 이기고 갈 거리 = (이 값 - 기준선) / 강성")
+    ap.add_argument("--contact-n", type=float, default=None,
+                    help="막힘 판정 문턱(N). YAML 의 contact_force_n 을 덮어쓴다. "
+                         "기준선과 스프링 몫을 뺀 **접촉력** 기준이다")
+    ap.add_argument("--search-mm", type=float, default=None,
+                    help="힘 제어로 더듬을 거리(mm). YAML 의 search_mm 을 덮어쓴다. "
+                         "나머지 구간은 위치 제어로 빠르게 간다")
+    ap.add_argument("--no-route", action="store_true",
+                    help="경유지를 건너뛴다. **이미 그 페그 근처에 있을 때만.** "
+                         "힘 제어 값을 여러 번 고쳐 가며 볼 때 빠르다. "
+                         "다른 쪽 페그로 넘어갈 때 쓰면 팔이 기타를 쓸고 간다")
     ap.add_argument("--speed", type=float, default=None)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--id", default="dsr01")
@@ -95,7 +109,13 @@ def main():
     from tunio_robot import peg_state as PS
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
-    handle = points.peg_handle()
+    handle = dict(points.peg_handle())
+    for flag, key in (("force_n", "insert_force_n"), ("contact_n", "contact_force_n"),
+                      ("search_mm", "search_mm")):
+        v = getattr(args, flag)
+        if v is not None:
+            print(f"  ** {key} 덮어씀: {handle.get(key)} -> {v}")
+            handle[key] = v
     motion = dict(points.motion)
     if args.speed:
         motion["vel"] = args.speed
@@ -149,6 +169,10 @@ def main():
     log = {"tool": "peg_register", "pegs": pegs, "direction": args.direction,
            "turn_deg": args.turn, "cycles": args.cycles, "results": {}}
     failed = []
+    # 경유지는 **반대쪽으로 넘어갈 때만** 쓴다. 같은 쪽 페그끼리는 37mm 밖에
+    # 안 떨어져 있어 바로 간다 (robot_controller._cross_to 와 같은 규칙).
+    # 첫 페그는 팔이 어디 있는지 모르므로 무조건 경유한다.
+    last_side = None
 
     for no in pegs:
         peg = points.peg(no)
@@ -156,9 +180,18 @@ def main():
         print(f"[{no}번 페그]  {TP.side_of(no)} 쪽")
         print("=" * 66)
         route = points.route()
-        if route is not None:
-            confirm("경유지로 올라간다. 팔이 크게 움직인다.")
+        side = TP.side_of(no)
+        if args.no_route:
+            print("  경유지를 건너뛴다 (--no-route). 지금 자리에서 바로 들어간다.")
+            print("  ⚠️ 그 페그 근처에 있을 때만 맞다. 반대쪽이면 기타를 쓸고 간다")
+        elif side == last_side:
+            print(f"  경유지를 안 거친다 — 직전 페그와 같은 {side} 쪽이다 "
+                  f"(37mm 옆). 반대쪽으로 넘어갈 때만 경유한다")
+        elif route is not None:
+            confirm(f"경유지로 올라간다 ({last_side or '어디 있는지 모름'} -> {side}). "
+                    f"팔이 크게 움직인다.")
             MP.goto_route(route, motion)
+        last_side = side
 
         rec = {"attempts": []}
         confirm(f"\n1) 등록 — 순응 켜고 {handle['insert_force_n']:.1f}N 상한으로 밀어 넣은 뒤\n"
@@ -202,7 +235,10 @@ def main():
 
     route = points.route()
     if route is not None:
-        confirm("\n끝났다. 경유지로 돌아간다.")
+        if args.no_route:
+            print("\n끝났다. 경유지를 안 거친다 (--no-route). 팔은 접근점에 선다.")
+        else:
+            confirm("\n끝났다. 경유지로 돌아간다.")
         MP.goto_route(route, motion)
 
     print("\n" + "=" * 66)

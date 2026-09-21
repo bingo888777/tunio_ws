@@ -48,6 +48,7 @@ class _Api:
         self.compliance = []
         self.force = []
         self.blocked = blocked          # True 면 막혀서 못 들어간다
+        self.pushing = False            # set_desired_force 가 걸려 있나
 
     def task_compliance_ctrl(self, stx):
         self.compliance.append(("on", list(stx)))
@@ -60,10 +61,12 @@ class _Api:
     # 두산 시그니처를 그대로 흉내 낸다. 이름이 내장함수와 겹치는 건 원본 탓이다
     def set_desired_force(self, fd, dir, mod=None):        # noqa: A002
         self.force.append(("push", list(fd), list(dir)))
+        self.pushing = True
         return 0
 
     def release_force(self, time=0):
         self.force.append(("release",))
+        self.pushing = False
         return 0
 
 
@@ -82,7 +85,18 @@ def spy(monkeypatch):
         return ([PEG6[0], y, PEG6[2], 0, 0, 0], 7)
 
     def force(ref=None):
-        return [0.0, 3.0 if api.blocked else 0.2, 0.0, 0, 0, 0]
+        """
+        실기와 같은 모양으로 낸다 (2026-09-21 6번 실측).
+
+        전에는 막히면 **처음부터** 3.0N 을 냈다. 그러면 기준선을 읽는 첫 호출이
+        이미 3.0 이라, 증가분으로 판정하는 코드가 영영 0 을 본다.
+        실물은 이렇다 — 밀기 전에도 툴 무게 몫으로 1.2N 쯤 읽히고, 막혀서
+        버티기 시작하면 그 위에 접촉력이 얹힌다.
+        """
+        base = 1.2                              # 안 밀어도 읽히는 몫
+        if not api.pushing:
+            return [0.0, base, 0.0, 0, 0, 0]
+        return [0.0, base + (3.0 if api.blocked else 0.2), 0.0, 0, 0, 0]
 
     monkeypatch.setattr(MP, "read_posx", posx)
     monkeypatch.setattr(MP, "read_force", force)
@@ -93,6 +107,71 @@ def spy(monkeypatch):
 def _widths(*seq):
     it = iter(seq)
     return lambda: next(it)
+
+
+def test_먼_구간은_순응을_켜기_전에_간다(monkeypatch):
+    """
+    순응을 켠 뒤에 위치 명령을 주면 안 간다 (2026-09-21 실기 회귀).
+
+    스프링이 흡수해서 팔이 그 자리에 선다. search_mm 8 을 줬는데 힘 제어가
+    99.8mm 를 가려 했고, 4N 으로 20초에 7.5mm 밖에 못 갔다. 먼 구간은
+    딱딱할 때 끝내야 한다. 순서가 뒤집히면 여기서 걸린다.
+    """
+    order = []
+    monkeypatch.setattr(MP, "_api", _Api())
+    monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(MP, "_grip", lambda n: order.append(f"grip:{n}"))
+    monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: order.append("movejx"))
+    monkeypatch.setattr(MP, "_movel", lambda t, m: order.append("movel"))
+    monkeypatch.setattr(MP, "_retreat", lambda p, m: order.append("retreat"))
+    monkeypatch.setattr(MP, "compliance",
+                        lambda m, on=True: order.append(f"compliance:{'on' if on else 'off'}"))
+    monkeypatch.setattr(MP, "_insert_force_controlled",
+                        lambda *a, **k: order.append("force"))
+
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+
+    assert order.index("movel") < order.index("compliance:on"), order
+    assert order.index("compliance:on") < order.index("force"), order
+
+
+# ------------------------------------------------------------ 힘 판정
+def test_순응_스프링_반력만으로는_막혔다고_하지_않는다(monkeypatch):
+    """
+    2026-09-21 실기에서 **허공인데 2mm 만에 "막혔다"** 고 했다. 그 회귀 테스트다.
+
+    순응제어 Y 강성이 200 N/m = 0.2 N/mm 다. 밀고 들어가면 스프링이 밀어내므로
+    닿지 않아도 힘이 오른다 — 25mm 면 5N 이라 문턱 2N 을 한참 넘는다.
+    거기에 밀기 전에도 읽히는 기준선(실기 1.2N)까지 얹히면 예산이 통째로 없어진다.
+
+    그래서 판정은 **읽은값 - 기준선 - 스프링 몫**, 즉 순수 접촉력으로 한다.
+    """
+    log, api = _Log(), _Api()
+    monkeypatch.setattr(MP, "_api", api)
+    monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
+    monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: None)
+    monkeypatch.setattr(MP, "_movel", lambda t, m: None)
+
+    state = {"y": PEG6[1] - HANDLE["search_mm"]}          # 페그 앞 25mm 에서 출발
+
+    def posx(ref=None):
+        if api.pushing:                                    # 밀면 5mm 씩 들어간다
+            state["y"] = min(PEG6[1], state["y"] + 5.0)
+        return ([PEG6[0], state["y"], PEG6[2], 0, 0, 0], 7)
+
+    def force(ref=None):
+        base = 1.2
+        gone = state["y"] - (PEG6[1] - HANDLE["search_mm"])
+        spring = 0.2 * gone if api.pushing else 0.0        # 닿지 않아도 오른다
+        return [0.0, base + spring, 0.0, 0, 0, 0]
+
+    monkeypatch.setattr(MP, "read_posx", posx)
+    monkeypatch.setattr(MP, "read_force", force)
+
+    # 스프링 반력이 문턱(2.0N)을 넘는데도 끝까지 들어가야 한다
+    assert 0.2 * HANDLE["search_mm"] > HANDLE["contact_force_n"]
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
 
 
 # ------------------------------------------------------------ 정상
@@ -181,6 +260,52 @@ def test_실패해도_놓고_순응을_끈다(spy):
         MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
     assert ("grip", "open") in spy
     assert spy.api.compliance[-1] == ("off",)
+
+
+# ------------------------------------------------------------ 뒷정리가 사유를 덮지 않는다 (#52)
+def test_후퇴가_실패해도_원래_사유가_남는다(spy, monkeypatch):
+    """
+    뒷정리에서 터진 예외가 원래 예외를 대체한다.
+
+    하필 제일 알고 싶은 때 겹친다 — 순응이 안 풀리는 상황과 진입이 실패하는
+    상황은 원인이 같아서 같이 일어난다. 진단이 "빈손이다" 에서 "movel 가
+    거부됐다" 로 뒤바뀌면 사람이 엉뚱한 데를 본다.
+    """
+    def 거부(pose, motion):
+        raise MP.MotionError("movel 가 거부됐다 (-1)")
+
+    monkeypatch.setattr(MP, "_retreat", 거부)
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+
+
+def test_성공했는데_후퇴가_실패하면_그건_올린다(spy, monkeypatch):
+    """덮을 원래 사유가 없다. 팔이 페그에 붙은 채인데 성공이라고 하면 안 된다."""
+    def 거부(pose, motion):
+        raise MP.MotionError("movel 가 거부됐다 (-1)")
+
+    monkeypatch.setattr(MP, "_retreat", 거부)
+    with pytest.raises(MP.MotionError, match="거부"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+
+
+def test_순응이_안_풀리면_후퇴를_안_한다(spy):
+    """
+    순응이 켜진 채로는 위치 명령이 -1 을 돌려준다 (#31).
+
+    그 상태로 후퇴를 부르면 그 -1 이 원래 사유를 덮는다. 아예 안 부르고 알린다.
+    """
+    spy.api.release_compliance_ctrl = lambda: -1
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+    assert not [m for m in spy if m[0] == "movel" and abs(m[1][1] - PEG6[1]) > 50.0]
+
+
+def test_순응이_안_풀린_채_성공으로_끝내지_않는다(spy):
+    """팔이 페그에 붙어 있고 순응이 켜진 상태다. 다음 동작이 거기서 출발한다."""
+    spy.api.release_compliance_ctrl = lambda: -1
+    with pytest.raises(MP.MotionError, match="순응제어가 안 풀렸다"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
 
 
 # ------------------------------------------------------------ 순응제어

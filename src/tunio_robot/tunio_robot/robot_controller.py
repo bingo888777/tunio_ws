@@ -42,7 +42,24 @@ class RobotController(Node):
         self.declare_parameter("peg_state_file", PS.DEFAULT_PATH)
         self.declare_parameter("peg_state_max_age_sec", PS.DEFAULT_MAX_AGE_SEC)
         # Phase 0 등록. 미등록 페그를 만나면 그 자리에서 돈다 (아래 _ensure_registered)
-        self.declare_parameter("peg_register_force", True)
+        #
+        # **힘 제어는 통합 뒤로 미뤘다** (2026-09-21 결정, #51 · #31).
+        #   기본값이 False 라 진입은 위치 제어 + 순응제어로만 한다. 힘 제어를 켜려면
+        #   런치에서 peg_register_force:=true 를 준다.
+        #
+        #   미룬 이유 — 아직 실물 검증이 안 끝났다. 9/21 회차가 4N 으로 20초에
+        #   +7.5mm 밖에 못 갔고, 스프링을 이기고 갈 수 있는 거리도 자세마다 달라진다.
+        #   통합 실기에서 봐야 할 것이 많은데 여기서 한 번 더 막히면 그 시간이 통째로
+        #   날아간다. 값(search_mm · insert_force_n · insert_timeout_sec)은 계산이
+        #   맞게 고쳐 뒀으므로 통합이 끝나면 이 기본값만 다시 올리면 된다.
+        #
+        #   순응제어는 이 값과 무관하게 켜지지만 **진입이 끝난 뒤다.** 기본값이면
+        #   stop_mm 이 0 이라 페그까지 위치 제어로 가고, 순응은 파지·후퇴만 지킨다
+        #   (motion_primitives.register_peg). PR #37 리뷰의 "미는 힘이 강성 × 남은
+        #   거리로 묶인다" 는 **진입 구간에는 해당하지 않는다** — 그때는 순응을 켠 채
+        #   들어가는 구조였다. 지금 진입의 안전망은 사람의 사전 정렬(CLAUDE.md 5절)과
+        #   로봇 보호정지뿐이고, 보호정지 문턱은 아직 확인 안 됐다 (이슈 #53).
+        self.declare_parameter("peg_register_force", False)
         self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
         self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
@@ -247,11 +264,15 @@ class RobotController(Node):
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
         standby = self.points.frame("standby")
         if self.dry_run:
-            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task}")
+            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task} (경유 {standby.joints})")
             self._holding_pick = True
             return
         self._holding_pick = None                     # 시도 중 — 끝나기 전엔 모른다
-        MP.pick_up(holder, self.points.motion, standby=standby)
+        # via — 거치대로 내려가기 전에 관절 자세를 한 번 거친다. 피크를 가지러 갈 때
+        # 팔은 직전 동작이 남긴 자리에 있고, 페그 조절 직후면 헤드스톡 쪽이다.
+        # 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다. pick_return 이
+        # 반대 방향에 같은 경유를 쓴다(성현, PR #38) — 이쪽만 비어 있었다 (#34 후속)
+        MP.pick_up(holder, self.points.motion, standby=standby, via=standby)
         self._holding_pick = True
 
     def _release_pick(self):

@@ -252,13 +252,45 @@ def _require_api():
     return _api
 
 
+def _moved(ret, what):
+    """
+    이동 명령의 반환을 검사한다 — 버리면 안 움직여도 아무도 모른다.
+
+    두산 래퍼는 이동도 `0 if success else -1` 로 돌려준다. 지금까지 이 값을
+    버리고 있었다 — set_tcp 를 버리던 것과 같은 실수다 (#26). 순응제어가 켜져
+    있거나 로봇이 거부하면 -1 이 오는데, 그대로 다음 줄로 넘어가 그리퍼를 닫아
+    버린다. 빈손을 물고 "등록됐다" 가 된다.
+
+    그 -1 이 진짜인지 확인했다 (성현, #50) — `DSR_ROBOT2.py` 2941행이
+    `ret = 0 if (result.success == True) else -1` 이고, 그 success 는
+    `dsr_controller2.cpp:448` movel_cb 이 `Drfl->movel()` 반환을 그대로 실은 값이다.
+    `get_tcp` 처럼 true 하드코딩이 아니다 — CLAUDE.md 3.5.1 의 그 경고는 `get_*` 에만
+    해당한다. 이 검사는 무력하지 않다.
+
+    ⚠️ 다만 같은 함정이 이동에도 하나 있다 — 서비스 호출이 예외로 실패하면
+    `except` 절이 `ret` 을 안 채운 채 `return ret` 을 타서 **-1 이 아니라
+    `UnboundLocalError`** 가 난다 (2934~2941행). 그 경우 여기까지 오지 못한다.
+    그래서 부르는 쪽은 `MotionError` 만 잡아선 안 된다 (pluck_string 의 스트로크 구간).
+
+    -1 만 실패로 본다. None 이나 다른 값은 그냥 통과시킨다 — 래퍼 판마다 다르고,
+    여기서 막는 건 **명시적 거부**다.
+    """
+    if ret == -1:
+        raise MotionError(
+            f"{what} 가 거부됐다 (-1). 순응제어가 켜진 채 위치 명령을 줬거나 "
+            "로봇이 그 자세를 못 만든다. 안 움직였는데 다음 동작으로 넘어가면 "
+            "빈손을 물게 된다")
+    return ret
+
+
 def _movej(joints, motion, relative=False):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
-    return api.movej(posj(list(joints)),
-                     vel=motion.get("vel", 30), acc=motion.get("acc", 30), mod=mod)
+    return _moved(api.movej(posj(list(joints)),
+                            vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                            mod=mod), "movej")
 
 
 def _movel(task, motion):
@@ -267,7 +299,7 @@ def _movel(task, motion):
     from DR_common2 import posx
     v = motion.get("travel_vel", [50.0, 30.0])
     a = motion.get("travel_acc", [100.0, 60.0])
-    return api.movel(posx(list(task)), vel=v, acc=a)
+    return _moved(api.movel(posx(list(task)), vel=v, acc=a), "movel")
 
 
 def _movejx(task, motion, sol=None):
@@ -285,8 +317,9 @@ def _movejx(task, motion, sol=None):
     from DR_common2 import posx
     if sol is None:
         sol = api.get_current_solution_space()
-    return api.movejx(posx(list(task)),
-                      vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
+    return _moved(api.movejx(posx(list(task)),
+                             vel=motion.get("vel", 30), acc=motion.get("acc", 30),
+                             sol=sol), "movejx")
 
 
 def turn_motion(motion):
@@ -407,7 +440,7 @@ def pluck_string(pose, motion, standby=None):
     # 멈춘다 — 버징이 나고 그 줄 측정이 통째로 망가진다 (CLAUDE.md 3.4).
     # 그래서 실패해도 **일단 줄에서 떼고** 나서 예외를 다시 올린다.
     # MotionError 만 잡으면 안 된다 — 래퍼가 UnboundLocalError 를 던지는 판이
-    # 있다 (_rejected 의 주석). 줄에서 떼는 건 어느 예외에서든 해야 한다.
+    # 있다 (_moved 의 주석). 줄에서 떼는 건 어느 예외에서든 해야 한다.
     try:
         _movel_tool_rel(stroke, v_str, a_str, radius=3)  # 옆으로 살짝 → 발현
         _movel_tool_rel(retract, v_str, a_str)           # 즉시 후퇴 (버징 방지)
@@ -445,12 +478,20 @@ def _pick_points(holder, motion):
     return contact, above
 
 
-def pick_up(holder, motion, standby=None):
+def pick_up(holder, motion, standby=None, via=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
-    순서: 그리퍼 열기 → 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 닫기(프리셋)
-          → 거치대 위 → (standby 가 있으면) 기타 위 대기 자세
+    순서: (via 가 있으면) 경유 자세 → 그리퍼 열기 → 거치대 위 pick_up_mm
+          → 거치대(느리게) → 그리퍼 닫기(프리셋) → 거치대 위
+          → (standby 가 있으면) 기타 위 대기 자세
+
+    via — 거치대로 내려가기 전에 먼저 들르는 안전 경유 관절 자세(Pose, joints).
+          pick_return 의 via 와 같은 이유인데 **방향이 반대다.** 피크를 가지러
+          갈 때 팔은 직전 동작이 남긴 자리에 있다 — 페그 조절 직후면 헤드스톡
+          쪽 접근점이다. 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다.
+          2026-09-19 충돌 검증은 페그↔페그와 경유지뿐이라 이 경로는 본 적이 없다.
+          관절 자세를 한 번 거쳐 직선 구간을 거치대 근처로 좁힌다 (#34 후속)
 
     holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
               없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
@@ -469,6 +510,8 @@ def pick_up(holder, motion, standby=None):
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
+    if via is not None:
+        _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
     _release()                                          # 열고 간다
     _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
     _movel_base(contact, v_fine, a_fine)                # 내려가서
@@ -512,39 +555,18 @@ def _retract_depth_mm(delta):
     return sum(float(v) ** 2 for v in delta[:3]) ** 0.5
 
 
-def _rejected(ret, what):
-    """
-    이동 반환이 -1(거부)이면 멈춘다. 버리면 안 움직여도 아무도 모른다 (#50).
-
-    래퍼가 정말 0/-1 을 주는지 확인했다 — `DSR_ROBOT2.py` 2941행이
-    `ret = 0 if (result.success == True) else -1` 이고, 그 success 는
-    `dsr_controller2.cpp:448` movel_cb 이 `Drfl->movel()` 반환을 그대로 실은 것이다.
-    `get_tcp` 쪽처럼 true 하드코딩이 아니다 (CLAUDE.md 3.5.1 은 `get_*` 얘기다).
-
-    ⚠️ 다만 같은 함정이 이동에도 하나 있다 — 서비스 호출이 예외로 실패하면
-    `except` 절이 `ret` 을 안 채운 채 `return ret` 을 타서 **-1 이 아니라
-    `UnboundLocalError`** 가 난다(2934~2941행). 여기까지 못 온다.
-    그래서 부르는 쪽은 `MotionError` 만 잡아선 안 된다.
-
-    -1 만 실패로 본다. None 이나 다른 값은 통과시킨다 — 판마다 다르다.
-
-    TODO: PR #41 이 머지되면 같은 일을 하는 `_moved()` 가 들어온다. 그때
-          이 함수를 지우고 `_moved()` 를 부른다. 지금 나누어 둔 건 순전히
-          머지 충돌을 피하려는 것이다.
-    """
-    if ret == -1:
-        raise MotionError(
-            f"{what} 가 거부됐다 (-1). 로봇이 그 자세를 못 만들거나 순응제어가 켜진 채 "
-            "위치 명령을 받았다. 안 움직였는데 다음 동작으로 넘어가면 빈손을 물게 된다")
-    return ret
-
-
 def _movel_base(pos, vel, acc):
-    """직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다."""
+    """
+    직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다.
+
+    반환을 _moved 로 본다 (#50). 거치대로 내려가는 명령이 거부돼도 다음 줄에서
+    그리퍼는 닫힌다 — 빈손을 물고 "집었다" 가 된다. 피크는 놓치면 비전이 없어
+    되찾을 수 없다.
+    """
     api = _require_api()
     from DR_common2 import posx
-    return _rejected(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE),
-                     "movel_base")
+    return _moved(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE),
+                  "movel_base")
 
 
 def _movel_tool_rel(delta, vel, acc, radius=0):
@@ -553,12 +575,15 @@ def _movel_tool_rel(delta, vel, acc, radius=0):
 
     피크 자세를 기준으로 움직이므로 기타가 조금 옮겨져도 방향이 유지된다.
     radius 를 주면 다음 모션과 블렌딩(멈춤 없이 이어짐).
+
+    반환을 _moved 로 본다 (#50). 발현 직후 5mm 후퇴가 이 경로다 — 거부된 걸
+    모르고 넘어가면 진동하는 줄에 피크가 닿은 채로 다음 동작이 이어진다.
     """
     api = _require_api()
     from DR_common2 import posx
-    return _rejected(api.movel(posx(list(delta)), vel=vel, acc=acc,
-                               ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius),
-                     "movel_tool_rel")
+    return _moved(api.movel(posx(list(delta)), vel=vel, acc=acc,
+                            ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius),
+                  "movel_tool_rel")
 
 
 def read_force(ref=None):
@@ -682,17 +707,33 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     fd = [0.0] * 6
     fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
 
-    # 먼 구간은 위치 제어로 빠르게, 페그 앞 짧은 구간만 힘 제어로 더듬는다.
-    # 힘 제어는 **접촉 탐색용**이지 이동용이 아니다 — 3N 으로 100mm 를 가는 건
-    # 느리기만 하고 얻는 게 없다. 손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이다.
-    search_mm = float(handle.get("search_mm", 25.0))
-    approach_mm = float(motion.get("approach_mm", 100.0))
-    if search_mm < approach_mm:
-        _movel(TP.backed_off(pose.task, search_mm), motion)   # 여기까지는 그냥 간다
-
+    # 먼 구간(접근점 ~ search_mm)은 **부르는 쪽이 순응을 켜기 전에** 끝내 놓는다.
+    # 여기서 하면 안 된다 — 순응이 켜진 채 위치 명령을 주면 스프링이 흡수해서
+    # 팔이 그 자리에 선다. 2026-09-21 실기에서 search_mm 을 8 로 줬는데도
+    # 힘 제어가 99.8mm 를 가려 했다. 위치 이동이 통째로 안 먹힌 것이다 (#31).
     target = pose.task[k]
     start = read_posx()[0][k]
     need = abs(target - start)                  # 남은 거리(mm). 힘 제어로 갈 구간
+
+    # ── 기준선을 뺀다 (2026-09-21 실측으로 드러난 것) ────────────────────────
+    # 밀기 전에 이미 힘이 읽힌다. 6번 실기에서 **안 움직였는데 1.2N** 이었다.
+    # 툴 무게·자세·순응제어가 얹히는 몫이라 자세마다 다르다. 절댓값으로 문턱을
+    # 재면 그 몫이 예산을 통째로 먹는다 — 문턱 2.0N 에 여유가 0.8N 밖에 안 남았다.
+    #
+    # 그리고 순응 스프링이 **허공에서도** 반력을 만든다. Y 강성 200 N/m = 0.2 N/mm
+    # 라 2mm 만 밀려도 0.4N 이 붙는다. 닿은 게 아닌데 닿았다고 읽힌다.
+    # 그래서 판정은 **기준선 대비 증가분**으로 하고, 스프링 몫도 빼 준다.
+    base_f = abs(read_force(api.DR_BASE)[k])
+    stx = motion.get("compliance_stx") or []
+    k_n_per_mm = (float(stx[k]) / 1000.0) if len(stx) > k else 0.0   # N/m -> N/mm
+    if logger:
+        logger.info(f"기준선 {'XYZ'[k]} 축 {base_f:.2f}N "
+                    f"(순응 {k_n_per_mm * 1000:.0f} N/m = {k_n_per_mm:.2f} N/mm)")
+        reach = (push_n - base_f) / k_n_per_mm if k_n_per_mm > 0 else float("inf")
+        if reach < need:
+            logger.warn(f"{push_n:.1f}N 으로는 스프링을 이기고 {reach:.0f}mm 까지만 간다 "
+                        f"— {need:.0f}mm 가 필요하다. search_mm 을 줄이거나 "
+                        f"insert_force_n 을 올려라")
 
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     t0 = time.monotonic()
@@ -700,29 +741,77 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     try:
         while True:
             pos = read_posx()[0][k]
-            f = abs(read_force(api.DR_BASE)[k])
+            raw = abs(read_force(api.DR_BASE)[k])
             gone = (pos - start) * (1.0 if axis[k] > 0 else -1.0)
+            # 기준선과 스프링 몫을 뺀 나머지가 "뭔가에 닿아서 생긴 힘" 이다
+            spring = k_n_per_mm * max(0.0, gone)
+            f = max(0.0, raw - base_f - spring)
 
             if logger and time.monotonic() - said > 1.0:
-                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 힘 {f:.1f}N")
+                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 "
+                            f"접촉 {f:.2f}N (읽은값 {raw:.2f} - 기준선 {base_f:.2f} "
+                            f"- 스프링 {spring:.2f})")
                 said = time.monotonic()
 
             if abs(pos - target) <= tol_mm or gone >= need:
                 if logger:
-                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 힘 {f:.1f}N)")
+                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 접촉 {f:.2f}N)")
                 return
             if f >= limit_n:
                 raise MotionError(
-                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 {f:.1f}N, "
-                    f"문턱 {limit_n:.1f}N). 손잡이가 서 있어 그리퍼가 못 들어간다. "
-                    "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
+                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 접촉 "
+                    f"{f:.2f}N, 문턱 {limit_n:.1f}N. 읽은값 {raw:.2f} - 기준선 "
+                    f"{base_f:.2f} - 스프링 {spring:.2f}). 손잡이가 서 있어 그리퍼가 "
+                    "못 들어간다. 그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
             if time.monotonic() - t0 > timeout:
+                reach = ((push_n - base_f) / k_n_per_mm) if k_n_per_mm > 0 else 0.0
                 raise MotionError(
                     f"{pose.name}: {timeout:.0f}초 동안 {gone:+.1f}mm 밖에 못 갔다 "
-                    f"(힘 {f:.1f}N). 미는 힘 {push_n:.1f}N 이 너무 약할 수 있다")
+                    f"(접촉 {f:.2f}N). 미는 힘 {push_n:.1f}N 이 순응 스프링"
+                    f"({k_n_per_mm:.2f} N/mm)을 이기고 갈 수 있는 거리는 "
+                    f"{reach:.0f}mm 다. search_mm 을 줄이거나 insert_force_n 을 올려라")
             time.sleep(0.05)
     finally:
         api.release_force()                     # 힘 제어는 반드시 푼다
+
+
+def _cleanup_register(pose, motion, logger, keep_error):
+    """
+    register_peg 의 뒷정리 — 놓고, 순응을 끄고, 물러난다 (#52).
+
+    **원래 실패 사유를 덮지 않는다.** finally 안에서 새 예외가 나면 파이썬이 원래
+    예외를 그것으로 대체한다. 하필 제일 알고 싶은 때 겹친다 — 순응이 안 풀리는
+    상황과 진입이 실패하는 상황은 원인이 같아서(에러 래치·통신 지연·모드 전환
+    실패) 같이 일어난다. 그래서 진짜 진단인 "빈손이다 (폭 15.1mm)" 가 뒷정리
+    실패인 "movel 가 거부됐다 (-1)" 로 바뀌어 사람을 엉뚱한 곳으로 보낸다.
+
+    keep_error=True   본문이 이미 실패했다. 정리 실패는 경고로만 남긴다
+    keep_error=False  본문이 성공했다. 정리 실패를 그대로 올린다 — 성공이라고 해
+                      놓고 팔이 페그에 붙어 있으면 다음 동작이 거기서 출발한다
+    """
+    def _step(what, fn):
+        try:
+            return fn()
+        except Exception as exc:
+            if not keep_error:
+                raise
+            if logger:
+                logger.warn(f"정리: {what} 실패 — {exc}. 원래 실패 사유를 살린다 (#52)")
+            return None
+
+    _step("그리퍼 열기", lambda: _grip("open"))
+
+    # 순응 끄기는 **반환을 본다.** 안 풀리면 위치 명령이 -1 을 돌려주므로(#31)
+    # 이어서 후퇴를 부르면 그 -1 이 원래 사유를 덮는다. 아예 안 부른다.
+    if _step("순응 끄기", lambda: compliance(motion, on=False)) == -1:
+        msg = ("순응제어가 안 풀렸다 (release_compliance_ctrl -1). 후퇴를 건너뛴다 — "
+               "팔이 페그 앞에 붙은 채 남고 순응이 켜진 상태다. 펜던트에서 확인할 것 (#52)")
+        if not keep_error:
+            raise MotionError(msg)
+        if logger:
+            logger.warn(msg)
+        return
+    _step("후퇴", lambda: _retreat(pose, motion))
 
 
 def register_peg(pose, motion, handle, read_width, logger=None,
@@ -773,8 +862,24 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     from tunio_robot.grip_width import classify
 
     _grip("open")
-    back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
+    approach_mm = float(motion.get("approach_mm", 100.0))
+    back = TP.backed_off(pose.task, approach_mm)
     _movejx(back, motion, sol=getattr(pose, "sol", None))
+
+    # 먼 구간은 **순응을 켜기 전에** 위치 제어로 간다. 순서가 중요하다 —
+    # 순응이 켜진 뒤에 위치 명령을 주면 스프링이 흡수해 팔이 그 자리에 선다.
+    # 2026-09-21 실기에서 search_mm 8 을 줬는데 힘 제어가 99.8mm 를 가려 했고,
+    # 4N 으로 20초에 7.5mm 밖에 못 갔다. 먼 구간은 딱딱할 때 끝내야 한다.
+    search_mm = float(handle.get("search_mm", 25.0))
+    # 힘 제어를 쓰면 search_mm 앞까지만, 안 쓰면 **페그까지** 여기서 간다.
+    # --no-force 도 순응을 켠 뒤에 100mm 를 가려다 그 자리에 서 있었다
+    # (2026-09-21 실기). 순응 아래서는 위치 명령이 안 먹는다
+    stop_mm = search_mm if use_force else 0.0
+    if stop_mm < approach_mm:
+        where = f"앞 {stop_mm:.0f}mm 까지" if stop_mm else "까지"
+        if logger:
+            logger.info(f"페그 {where} 위치 제어로 간다 (순응 켜기 전)")
+        _movel(TP.backed_off(pose.task, stop_mm), motion)
 
     # 순응은 **항상** 켠다. 힘 제어와 다른 것이다 —
     #   힘 제어  "이 힘까지만 민다"      (미검증, use_force 로 끌 수 있다)
@@ -782,6 +887,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     # use_force 의 목적은 미검증 힘 제어를 안 태우는 것이지 안전망을 걷는 게 아니다.
     # 순응만으로도 미는 힘이 강성 × 남은 거리로 묶인다 (PR #37 리뷰, 정동휘)
     compliance(motion, on=True)
+    failed = True                # 뒷정리가 원래 사유를 덮지 않게 갈라 준다 (#52)
     try:
         if use_force:
             _insert_force_controlled(pose, motion, handle, logger=logger)
@@ -789,11 +895,12 @@ def register_peg(pose, motion, handle, read_width, logger=None,
             # 사람이 손잡이를 눕혀 놓고 보고 있는 세션. 그냥 들어간다
             if logger:
                 logger.warn("힘 제어를 건너뛴다 — 손잡이가 눕혀져 있는지 사람이 볼 것")
-            _movel(pose.task, motion)
+                logger.warn("진입은 이미 끝났다(순응 켜기 전). 순응은 파지·후퇴만 지킨다")
         _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
         if assume_grip:
             if logger:
                 logger.warn("폭을 안 읽는다 — 물렸는지 눈으로 확인할 것 (빈손·사점 못 가림)")
+            failed = False
             return 0.0
         width = read_width()
         verdict = classify(width, thresholds)
@@ -813,11 +920,10 @@ def register_peg(pose, motion, handle, read_width, logger=None,
         # 꽉 물면 손잡이가 손가락에 맞춰 정렬되므로, 물렸다는 건 곧 교시 자세와
         # 같아졌다는 뜻이다. 나중에 "왜 늘 0이지" 하고 고치려 들지 말 것.
         # 이후 adjust_peg 가 돌린 만큼이 peg_state 에 누적된다
+        failed = False
         return 0.0
     finally:
-        _grip("open")
-        compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
-        _retreat(pose, motion)
+        _cleanup_register(pose, motion, logger, keep_error=failed)
 
 
 def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):

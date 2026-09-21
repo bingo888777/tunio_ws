@@ -1,0 +1,31 @@
+{
+  "tool": "peg_register",
+  "pegs": [
+    6,
+    5,
+    2,
+    1
+  ],
+  "direction": "loosen",
+  "turn_deg": null,
+  "cycles": 1,
+  "results": {
+    "6": {
+      "attempts": [],
+      "registered_roll_deg": 0.0
+    },
+    "5": {
+      "attempts": [],
+      "registered_roll_deg": 0.0
+    },
+    "2": {
+      "attempts": [],
+      "registered_roll_deg": 0.0
+    },
+    "1": {
+      "attempts": [],
+      "registered_roll_deg": 0.0
+    }
+  },
+  "saved_at": "2026-09-21 19:37:27"
+}
