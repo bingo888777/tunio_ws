@@ -545,6 +545,21 @@ def compliance(motion, on=True):
     return api.task_compliance_ctrl(list(stx))
 
 
+def _cond_met(ret):
+    """
+    조건 검사 반환을 뜻으로 옮긴다 (진릿값으로 쓰면 뒤집힌다).
+
+    두산 래퍼가 `ret = 0 if result.success else -1` 로 돌려준다
+    (DSR_ROBOT2.py 5470·5556행 부근). 즉 **조건 충족이 0, 미충족이 -1** 이다.
+    파이썬에서 0 은 거짓이고 -1 은 참이라, `if check_force_condition(...)` 로 쓰면
+    정확히 반대로 동작한다. 2026-09-21 실물에서 진입이 곧바로 "도달" 로 끝나
+    로봇이 페그로 들어가지도 않고 그리퍼만 여닫았다.
+
+    -1 은 "조건 미충족" 과 "호출 실패" 를 겸한다. 둘을 못 가르므로 미충족으로 본다.
+    """
+    return ret == 0
+
+
 def _insert_force_controlled(pose, motion, handle, logger=None):
     """
     접근점에서 페그까지 **힘 상한을 정해 놓고** 들어간다 (이슈 #31).
@@ -591,12 +606,14 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     t0 = time.monotonic()
     try:
         while True:
-            if api.check_position_condition(dr_axis, min=lo, max=hi,
-                                            ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS):
+            if _cond_met(api.check_position_condition(
+                    dr_axis, min=lo, max=hi,
+                    ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS)):
                 if logger:
                     logger.info(f"{pose.name} 진입 완료 ({'XYZ'[k]} 축 목표 도달)")
                 return
-            if api.check_force_condition(dr_axis, max=limit_n, ref=api.DR_BASE):
+            if _cond_met(api.check_force_condition(
+                    dr_axis, max=limit_n, ref=api.DR_BASE)):
                 raise MotionError(
                     f"{pose.name}: 들어가다 막혔다 ({'XYZ'[k]} 축 {limit_n:.1f}N). "
                     "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "

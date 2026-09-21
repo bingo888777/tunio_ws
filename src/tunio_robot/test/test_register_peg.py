@@ -60,12 +60,14 @@ class _Api:
         self.force.append(("release",))
         return 0
 
+    # **0 이 조건 충족, -1 이 미충족이다.** 두산 래퍼가 그렇게 돌려준다.
+    # 진릿값으로 쓰면 뒤집힌다 — 2026-09-21 실물에서 그래서 진입을 안 했다
     def check_position_condition(self, axis, min=None, max=None,   # noqa: A002
                                  ref=None, mod=None):
-        return not self.blocked         # 안 막혔으면 바로 도달한 것으로 본다
+        return -1 if self.blocked else 0        # 안 막혔으면 도달
 
     def check_force_condition(self, axis, max=None, min=None, ref=None):  # noqa: A002
-        return self.blocked
+        return 0 if self.blocked else -1
 
 
 class _Log(list):
@@ -216,3 +218,16 @@ def test_문턱_경계():
 def test_폭이_없으면_판정_안_한다():
     with pytest.raises(GW.WidthError):
         GW.classify(None, HANDLE["thresholds_mm"])
+
+
+def test_조건_반환은_0이_충족이다():
+    """
+    두산 래퍼가 `0 if success else -1` 로 돌려준다.
+
+    파이썬에서 0 은 거짓, -1 은 참이라 진릿값으로 쓰면 정확히 뒤집힌다.
+    2026-09-21 실물에서 진입이 곧바로 "도달" 로 끝나 로봇이 페그로 들어가지도
+    않고 그리퍼만 여닫았다. 그 회귀를 막는다.
+    """
+    assert MP._cond_met(0) is True
+    assert MP._cond_met(-1) is False
+    assert bool(0) is False and bool(-1) is True     # 진릿값은 반대다
