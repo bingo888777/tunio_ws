@@ -32,7 +32,7 @@ import time
 # 출력 하나만 켰을 때 그리퍼가 이렇게 되어야 한다.
 EXPECTED = {
     1: "15mm 로 끝까지 닫힘",
-    2: "90mm 로 활짝 열림",
+    2: "열기 — 지금 웹로직 설정은 38mm (teach_points.yaml gripper.presets.open)",
     3: "21mm — 페그 잡는 폭. 15mm 보다 눈에 띄게 덜 닫힘",
 }
 

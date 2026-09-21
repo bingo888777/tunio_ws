@@ -217,3 +217,61 @@ def test_폭_읽기는_한_번만_만든다(ros, taught):
         assert node._width_reader() is node._width_reader()
     finally:
         node.destroy_node()
+
+
+# ─────────── 거치대에서 페그로 바로 가지 않는다 (이슈 #34) ───────────
+#
+# 피크를 반환하면 팔이 거치대 위에 남는다. _cross_to 는 "직전에 있던 쪽" 으로
+# 판단하는데 거치대는 좌우 어느 쪽도 아니다. 그 기억을 안 지우면 직전 페그와 같은
+# 쪽일 때 경유지를 건너뛰고 거치대에서 페그 접근점으로 관절 보간으로 바로 간다.
+# 그 경로는 아무도 본 적이 없다 — 충돌 검증(2026-09-19)은 페그↔페그와 경유지뿐이다.
+
+def test_피크를_반환하면_어디_있는지_모르는_상태가_된다(ros, taught):
+    node = _node(taught)
+    try:
+        node._side = "left"
+        node._holding_pick = True
+        node.dry_run = True
+        node._release_pick()
+        assert node._side is None
+    finally:
+        node.destroy_node()
+
+
+def test_쪽을_모르면_무조건_경유지를_탄다(ros, taught, monkeypatch):
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        went = []
+        monkeypatch.setattr(MP, "goto_route", lambda r, m: went.append(r.name))
+        node._side = None
+        node._cross_to("left")
+        assert went, "경유지를 안 탔다"
+    finally:
+        node.destroy_node()
+
+
+def test_같은_쪽이면_경유지를_건너뛴다(ros, taught, monkeypatch):
+    """같은 쪽 페그끼리는 37mm 라 매번 경유하면 사이클 타임만 는다."""
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        went = []
+        monkeypatch.setattr(MP, "goto_route", lambda r, m: went.append(r.name))
+        node._side = "left"
+        node._cross_to("left")
+        assert went == []
+    finally:
+        node.destroy_node()
+
+
+def test_피크를_안_쥐고_있으면_쪽_기억을_안_지운다(ros, taught):
+    """반환할 게 없으면 팔은 그 자리다. 괜히 경유지를 타면 사이클 타임만 는다."""
+    node = _node(taught)
+    try:
+        node._side = "left"
+        node._holding_pick = False
+        node._release_pick()
+        assert node._side == "left"
+    finally:
+        node.destroy_node()

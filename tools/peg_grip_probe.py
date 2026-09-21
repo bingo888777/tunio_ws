@@ -87,7 +87,7 @@ def measure(args, MP, key, label, question, close_it=True):
     else:
         print(f"    폭 {width:.1f}mm   파지신호 {'있음' if grip else '없음'}")
     if MP is not None:
-        MP._grip("open")                    # 바로 다시 연다 (30mm)
+        MP._grip("open")                    # 바로 다시 연다 (open 프리셋)
         time.sleep(args.settle)
     return width
 
@@ -143,7 +143,7 @@ def main():
         MP.connect(points.robot, points.gripper)
 
         back = TP.backed_off(peg.task, motion.get("approach_mm", 100.0))
-        confirm("\n그리퍼를 연다(30mm). 손이 끼지 않게 치워라.")
+        confirm("\n그리퍼를 연다(open 프리셋). 손이 끼지 않게 치워라.")
         MP._grip("open")
         route = points.route()
         if route is not None:
