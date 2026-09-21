@@ -1,65 +1,98 @@
 digraph TUNIO_ARCH {
-  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=30, newrank=true,
-         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="14" COLOR="#5A635E">2026-09-21 · PC 3대 · ROS 2 Jazzy · ROS_DOMAIN_ID 10 · 인터페이스 13개는 docs/TUNIO_INTERFACE_SPEC.md</FONT><BR/> >,
-         bgcolor="#FCFDFB", nodesep=0.42, ranksep=0.62, compound=true, pad=0.35];
-  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=14,
-         margin="0.26,0.16", penwidth=1.5, width=3.1, height=0.62];
-  edge  [fontname="Noto Sans CJK KR", fontsize=11, color="#828C86", penwidth=1.3,
-         arrowsize=0.8, fontcolor="#3F4A45"];
+  graph [rankdir=LR, fontname="Noto Sans CJK KR", labelloc=t, fontsize=30, newrank=true,
+         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="13.5" COLOR="#58625C">2026-09-21 · PC 3대 · Ubuntu 24.04 / ROS 2 Jazzy · ROS_DOMAIN_ID 10 · 인터페이스 기준본 docs/TUNIO_INTERFACE_SPEC.md</FONT><BR/> >,
+         bgcolor="#FCFDFB", nodesep=0.5, ranksep=1.25, pad=0.4, splines=spline];
+  node  [shape=plaintext, fontname="Noto Sans CJK KR", margin=0];
+  edge  [fontname="Noto Sans CJK KR", fontsize=11, color="#6E7973", penwidth=1.6,
+         arrowsize=0.85, fontcolor="#333D38"];
 
-  // ───────────────────────── ① 로봇 제어 PC
-  subgraph cluster_robot {
-    label=<<B>① 로봇 제어 PC</B>   정묵 · 성현<BR/> >;
-    fontsize=17; fontcolor="#8E520B"; color="#C9873A"; style=rounded; penwidth=1.8; bgcolor="#FDF7EE";
-    rc  [label=<<B>robot_controller</B>>, fillcolor="#F2D6AC", color="#A86E1C", fontsize=15];
-    mp  [label=<<B>motion_primitives</B>>, fillcolor="#F9E8D1", color="#C9873A"];
-    drv [label=<<B>두산 드라이버</B>>, fillcolor="#FCF2E4", color="#DCAC70"];
-    rc -> mp -> drv;
-  }
+  // ══════════════ ① 로봇 제어 PC
+  robot [label=<
+  <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0" BGCOLOR="#C9873A" STYLE="ROUNDED">
+   <TR><TD>
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2" CELLPADDING="7">
+     <TR><TD COLSPAN="2" ALIGN="LEFT"><FONT COLOR="#FFFFFF" POINT-SIZE="16"><B> ① 로봇 제어 PC </B></FONT><FONT COLOR="#F6E3C9" POINT-SIZE="12">  정묵 · 성현 </FONT></TD></TR>
 
-  // ───────────────────────── ② 서버 PC
-  subgraph cluster_server {
-    label=<<B>② 서버 PC</B>   정동휘<BR/> >;
-    fontsize=17; fontcolor="#174F7C"; color="#3E7FB8"; style=rounded; penwidth=1.8; bgcolor="#EFF6FD";
-    web [label=<<B>web_node</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
-    tm  [label=<<B>task_manager</B>>, fillcolor="#BCD8F2", color="#20669F", fontsize=15];
-    rs  [label=<<B>result_store</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
-    db  [label=<<B>SQLite</B>>, shape=cylinder, style=filled, fillcolor="#EAF2FB", color="#3E7FB8", height=0.7];
-    web -> tm [dir=both];
-    tm -> rs [dir=both];
-    rs -> db;
-  }
+     <TR><TD PORT="rc" BGCOLOR="#F4D8B0" ALIGN="LEFT" WIDTH="184"><FONT POINT-SIZE="14"><B>robot_controller</B></FONT></TD>
+         <TD BGCOLOR="#F4D8B0" ALIGN="LEFT" WIDTH="272" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#5F4413">Action 서버 3개 · 팔이 하나라 동시 실행은 거부<BR ALIGN="LEFT"/>dry_run 기본값 true — 켜자마자 안 움직인다</FONT></TD></TR>
 
-  // ───────────────────────── ③ 마이크 PC
-  subgraph cluster_mic {
-    label=<<B>③ 마이크 PC</B>   정정인<BR/> >;
-    fontsize=17; fontcolor="#0C6245"; color="#2E9070"; style=rounded; penwidth=1.8; bgcolor="#EEF9F4";
-    usb [label=<<B>USB 외장 마이크</B>>, fillcolor="#DCF1E7", color="#2E9070"];
-    aa  [label=<<B>audio_analyzer</B>>, fillcolor="#B8E5D2", color="#17755A", fontsize=15];
-    usb -> aa;
-  }
+     <TR><TD BGCOLOR="#FAEBD6" ALIGN="LEFT"><FONT POINT-SIZE="14"><B>motion_primitives</B></FONT></TD>
+         <TD BGCOLOR="#FAEBD6" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#5F4413">DSR_ROBOT2 래퍼 · 그리퍼는 디지털 I/O<BR ALIGN="LEFT"/>movejx 로 접근 → movel 로 직선 진입</FONT></TD></TR>
 
-  // ───────────────────────── 바깥
-  brow [label=<<B>브라우저</B>>, fillcolor="#F2F4F5", color="#98A3AB"];
-  hw   [label=<<B>두산 컨트롤러</B>  M0609 + RG2<BR/><FONT POINT-SIZE="11">피크 거치대에서 집었다 반환</FONT>>,
-        fillcolor="#F2F4F5", color="#98A3AB", height=0.72];
+     <TR><TD BGCOLOR="#FAEBD6" ALIGN="LEFT"><FONT POINT-SIZE="13"><B>teach_points.yaml</B></FONT></TD>
+         <TD BGCOLOR="#FAEBD6" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#5F4413">페그 4 · 발현 4 · 경유지 · 대기 자세<BR ALIGN="LEFT"/>좌표는 켜져 있던 TCP 기준이다</FONT></TD></TR>
 
-  brow -> web [dir=both, label=<  HTTP + SSE >];
-  drv  -> hw  [label=<  유선 LAN >];
+     <TR><TD PORT="drv" BGCOLOR="#FDF4E8" ALIGN="LEFT"><FONT POINT-SIZE="13"><B>두산 드라이버</B></FONT></TD>
+         <TD BGCOLOR="#FDF4E8" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#6B5227">m0609_rg2_bringup  mode:=real</FONT></TD></TR>
+    </TABLE>
+   </TD></TR>
+  </TABLE>>];
 
-  // ───────────────────────── 3 PC 사이 (이 그림의 핵심)
-  rc -> tm [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
-            label=<<B>로봇 Action 3</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/robot/play_string<BR ALIGN="LEFT"/>/robot/adjust_peg<BR ALIGN="LEFT"/>/robot/strum_all<BR ALIGN="LEFT"/></FONT>>];
-  tm -> aa [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
-            label=<<B>측정 Action 1</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/audio/measure_pitch<BR ALIGN="LEFT"/></FONT>>];
+  // ══════════════ ② 서버 PC
+  server [label=<
+  <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0" BGCOLOR="#3E7FB8" STYLE="ROUNDED">
+   <TR><TD>
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2" CELLPADDING="7">
+     <TR><TD COLSPAN="2" ALIGN="LEFT"><FONT COLOR="#FFFFFF" POINT-SIZE="16"><B> ② 서버 PC </B></FONT><FONT COLOR="#D6E7F6" POINT-SIZE="12">  정동휘 </FONT></TD></TR>
 
-  note [shape=plaintext, margin=0, label=<
-    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>3 PC 는 서로를 어떻게 찾는가</B>  ·  강의실 Wi-Fi 가 멀티캐스트를 막아, 서버 PC 의 <B>Fast DDS Discovery Server (UDP 11811, systemd)</B> 를 거친다.</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45">클라이언트 IP 는 바뀌어도 되고, 고정이 필요한 것은 서버 PC 하나뿐이다. 새 노드가 서로를 보기까지 약 15초 걸린다.</FONT></TD></TR>
-      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>로봇·기타 없이 돌리는 경로</B>  ·  <B>fake_hardware</B> (서버 PC, sim 전용 — 로봇과 마이크를 모두 대신) / <B>replay_wav</B> (마이크 PC — 녹음 파일 재생)</FONT></TD></TR>
-    </TABLE>>];
-  hw -> note [style=invis];
+     <TR><TD PORT="web" BGCOLOR="#D3E5F6" ALIGN="LEFT" WIDTH="184"><FONT POINT-SIZE="14"><B>web_node</B></FONT></TD>
+         <TD BGCOLOR="#D3E5F6" ALIGN="LEFT" WIDTH="300" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#154C77">관제 웹 · 표준 http.server 를 별도 스레드에서<BR ALIGN="LEFT"/>상태는 SSE 로 밀고 명령은 POST 로 받는다</FONT></TD></TR>
 
-  { rank=same; rc; tm; aa; }
+     <TR><TD PORT="tm" BGCOLOR="#B6D5F1" ALIGN="LEFT"><FONT POINT-SIZE="14"><B>task_manager</B></FONT></TD>
+         <TD BGCOLOR="#B6D5F1" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#0F3F66">줄 순서 6→5→2→1 · 센트 판정 · 재시도<BR ALIGN="LEFT"/>페그 회전량 계산 · 백래시 마무리 결정<BR ALIGN="LEFT"/>설정 보유 노드 (작업 중 변경 거부)</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#D3E5F6" ALIGN="LEFT"><FONT POINT-SIZE="14"><B>result_store</B></FONT></TD>
+         <TD BGCOLOR="#D3E5F6" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#154C77">SQLite — jobs · string_results · settings_snapshot<BR ALIGN="LEFT"/>4줄 완주면 PARTIAL·FAILED 도 저장</FONT></TD></TR>
+
+     <TR><TD PORT="ds" BGCOLOR="#E4EFF9" ALIGN="LEFT"><FONT POINT-SIZE="13"><B>Discovery Server</B></FONT></TD>
+         <TD BGCOLOR="#E4EFF9" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#2B5D87">Fast DDS · UDP 11811 · systemd<BR ALIGN="LEFT"/>Wi-Fi 가 멀티캐스트를 막아 3 PC 가 여길 거친다</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#EDF4FA" ALIGN="LEFT"><FONT POINT-SIZE="12.5" COLOR="#3A6A94"><B>fake_hardware</B></FONT></TD>
+         <TD BGCOLOR="#EDF4FA" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#3A6A94">sim 전용 — 로봇과 마이크를 모두 대신한다</FONT></TD></TR>
+    </TABLE>
+   </TD></TR>
+  </TABLE>>];
+
+  // ══════════════ ③ 마이크 PC
+  mic [label=<
+  <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0" BGCOLOR="#2E9070" STYLE="ROUNDED">
+   <TR><TD>
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="2" CELLPADDING="7">
+     <TR><TD COLSPAN="2" ALIGN="LEFT"><FONT COLOR="#FFFFFF" POINT-SIZE="16"><B> ③ 마이크 PC </B></FONT><FONT COLOR="#D3EEE2" POINT-SIZE="12">  정정인 </FONT></TD></TR>
+
+     <TR><TD PORT="aa" BGCOLOR="#B4E4D0" ALIGN="LEFT" WIDTH="176"><FONT POINT-SIZE="14"><B>audio_analyzer</B></FONT></TD>
+         <TD BGCOLOR="#B4E4D0" ALIGN="LEFT" WIDTH="288" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#0B4E39">Action 서버 · 동시 요청 거부<BR ALIGN="LEFT"/>타임아웃을 onset 검출 시점부터 스스로 센다</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#D6F0E5" ALIGN="LEFT"><FONT POINT-SIZE="14"><B>pitch</B></FONT></TD>
+         <TD BGCOLOR="#D6F0E5" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#0B4E39">FFT 유도 → 협대역 YIN · 탐색 목표 ±2반음<BR ALIGN="LEFT"/>관문 둘: 피크 돌출 20dB · 창 일치 12센트</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#D6F0E5" ALIGN="LEFT"><FONT POINT-SIZE="14"><B>recorder</B></FONT></TD>
+         <TD BGCOLOR="#D6F0E5" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#0B4E39">상시 스트림 · onset 은 느슨하게 후보만 낸다<BR ALIGN="LEFT"/>녹음 길이 저음 2.0초 / 고음 1.5초</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#E9F7F1" ALIGN="LEFT"><FONT POINT-SIZE="13"><B>USB 외장 마이크</B></FONT></TD>
+         <TD BGCOLOR="#E9F7F1" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#256B53">44.1kHz · OS 향상 기능(잡음제거·AGC) 해제</FONT></TD></TR>
+
+     <TR><TD BGCOLOR="#EFF9F4" ALIGN="LEFT"><FONT POINT-SIZE="12.5" COLOR="#3E8B70"><B>replay_wav</B></FONT></TD>
+         <TD BGCOLOR="#EFF9F4" ALIGN="LEFT" BALIGN="LEFT"><FONT POINT-SIZE="11.5" COLOR="#3E8B70">마이크 대신 녹음 재생 — 회차마다 다른 파일</FONT></TD></TR>
+    </TABLE>
+   </TD></TR>
+  </TABLE>>];
+
+  // ══════════════ 바깥 장치
+  brow [shape=box, style="rounded,filled", fillcolor="#F1F3F5", color="#98A3AB",
+        penwidth=1.4, fontsize=13, margin="0.22,0.14",
+        label=<<B>브라우저</B><BR/><FONT POINT-SIZE="11">서버 PC localhost</FONT>>];
+  hw   [shape=box, style="rounded,filled", fillcolor="#F1F3F5", color="#98A3AB",
+        penwidth=1.4, fontsize=13, margin="0.22,0.14",
+        label=<<B>두산 컨트롤러</B>  M0609 + OnRobot RG2<BR/><FONT POINT-SIZE="11">피크는 거치대에서 집었다 반환 — 조절 1회당 왕복</FONT>>];
+
+  // ══════════════ 연결
+  robot -> server [dir=both, label=<<B>로봇 Action 3</B><BR ALIGN="LEFT"/><FONT POINT-SIZE="10.5">/robot/play_string<BR ALIGN="LEFT"/>/robot/adjust_peg<BR ALIGN="LEFT"/>/robot/strum_all<BR ALIGN="LEFT"/></FONT>>];
+  server -> mic   [dir=both, label=<<B>측정 Action 1</B><BR ALIGN="LEFT"/><FONT POINT-SIZE="10.5">/audio/measure_pitch<BR ALIGN="LEFT"/>Feedback = 준비 완료<BR ALIGN="LEFT"/></FONT>>];
+  brow -> server [dir=both, label=<<FONT POINT-SIZE="10.5">HTTP + SSE</FONT>>];
+  robot -> hw    [label=<<FONT POINT-SIZE="10.5">유선 LAN</FONT>>];
+
+
+  { rank=same; brow; robot; }
+  { rank=same; hw; server; }
 }
