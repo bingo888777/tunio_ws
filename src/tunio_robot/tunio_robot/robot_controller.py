@@ -79,9 +79,6 @@ class RobotController(Node):
         # 필요해 발현↔페그 조절 사이마다 반환·집기가 한 번씩 낀다.
         # 노드 시작 시 피크는 거치대에 있다고 가정한다 — Phase 0 은 페그
         # 손잡이 각도만 다루고 피크는 다루지 않는다
-        # 피크를 쥐고 있나 — True(쥠) / False(빈손) / None(모름).
-        # None 은 집기가 도중에 끊겨 손에 있는지 없는지 모르는 상태다. 그때
-        # 함부로 집으러 가면 첫 동작인 그리퍼 열기로 기타 위에 떨어뜨린다 (#34)
         self._holding_pick = False
 
         cb = ReentrantCallbackGroup()
@@ -229,36 +226,20 @@ class RobotController(Node):
         알지, 로봇이 지금 손이 비어 있는지는 모른다. 인터페이스를 안 늘리려면
         로봇이 스스로 판단해야 한다 (CLAUDE.md 2절).
         """
-        if self._holding_pick is True:
+        if self._holding_pick:
             return
-        if self._holding_pick is None:
-            # 직전 집기가 도중에 실패해 손에 있는지 없는지 모른다. 이 상태로
-            # pick_up 을 다시 부르면 **첫 동작이 그리퍼 열기**라, 손에 피크가 있으면
-            # 지금 있는 자리에서 놓아 버린다. 대기 자세면 기타 위다.
-            # 놓친 피크는 비전이 없어 되찾을 수 없다 (CLAUDE.md 2절)
-            raise MP.MotionError(
-                "피크를 쥐고 있는지 모른다 (직전 집기가 도중에 끊겼다). "
-                "손에 있으면 거치대에 돌려놓고, 없으면 거치대에 있는지 확인한 뒤 "
-                "노드를 다시 띄워라. 모르는 채로 집으러 가면 기타 위에 떨어뜨린다 (#34)")
-
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
         standby = self.points.frame("standby")
         if self.dry_run:
             self.get_logger().info(f"[dry_run] 피크 집기 {holder.task}")
-            self._holding_pick = True
-            return
-        # 그리퍼를 닫는 순간부터는 손에 있을 수 있다. 끝까지 못 가면 **모름**으로
-        # 남긴다 — False 로 두면 다음 _ensure_pick 이 열기부터 해서 떨어뜨린다
-        self._holding_pick = None
-        MP.pick_up(holder, self.points.motion, standby=standby)
+        else:
+            MP.pick_up(holder, self.points.motion, standby=standby)
         self._holding_pick = True
 
     def _release_pick(self):
         """페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다."""
-        if self._holding_pick is False:
-            return                                   # 빈손이 확실하면 할 일이 없다
-        # None(모름)이면 **일단 돌려놓는다.** 빈손으로 거치대에 다녀오는 건 손해가
-        # 없지만, 쥔 채로 페그를 잡으러 가면 손가락이 모자라 떨어뜨린다
+        if not self._holding_pick:
+            return
         holder = self.points.pick_holder()
         if self.dry_run:
             self.get_logger().info(f"[dry_run] 피크 반환 {holder.task}")
@@ -334,11 +315,6 @@ class RobotController(Node):
             # Action 이 인터페이스 13개에 없어서 이 Action 이 복귀까지 책임진다
             # (2026-09-19 결정). 정상 완료 경로에만 있다.
             standby = self.points.frame("standby")
-            # ⚠️ 훑기 동작이 아직 없다(strum_all 은 NotImplementedError). 그런데
-            # 피크를 **먼저** 집으면 로봇이 피크를 쥔 채로 예외에 걸려 멈춘다 —
-            # _release_pick() 까지 못 가니 사람이 가서 빼야 한다. 구현 전에는
-            # 집지 않고 먼저 걸린다. 구현되면 이 검사가 저절로 통과한다 (#34)
-            MP.strum_ready()
             # 화음도 발현이라 피크가 필요하다. 작업 마지막이니 훑은 뒤 거치대에
             # 돌려놓고 빈손으로 복귀한다 — 다음 작업 시작도 "거치대에 있다"는
             # 가정(Phase 0)이 그대로 성립해야 한다

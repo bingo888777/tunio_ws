@@ -820,22 +820,6 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
         _retreat(exit_ if turned else entry, motion)
 
 
-def strum_ready():
-    """
-    훑기를 할 수 있는 상태인지 먼저 본다. 아니면 **아무것도 하기 전에** 멈춘다.
-
-    왜 따로 두나
-      strum_all 이 아직 없는데 부르는 쪽이 피크를 먼저 집는다. 그러면 로봇이
-      피크를 쥔 채 예외에 걸려 멈추고, 돌려놓는 데까지 못 가 사람이 가서 빼야
-      한다. 구현 전에 **집기 전에** 걸리게 하려고 분리했다 (#34).
-
-    strum_all 이 구현되면 이 함수도 같이 지우면 된다.
-    """
-    raise MotionError(
-        "화음 훑기가 아직 구현되지 않았다 (성현 담당 — strum.start/end 교시 후). "
-        "피크를 집기 전에 멈춘다 — 집고 나서 걸리면 쥔 채로 서 버린다 (#34)")
-
-
 def strum_all(string_numbers, points):
     """전체 줄을 훑어 화음. 측정 없는 완료 연출."""
     raise NotImplementedError("성현 담당 — 훑기 동작 교시 후 구현")
