@@ -29,13 +29,10 @@ tool 과 TCP 는 connect() 가 **항상 설정하고 읽어서 확인한다** (�
   섞인 채로 움직이면 208mm 어긋난다 (#21).
 
 TODO(정묵·성현):
-  - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
+  - pluck_string: 힘 제어로 타현 (지금은 위치 제어만)
   - strum_all: 전체 줄 훑기
-  - return_home: 대기 자세 복귀 (strum_all 끝에 호출됨. 이동만이라 구현 완료)
   - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
-  - pluck_tcp — 발현·거치대 좌표를 읽은 TCP 이름을 YAML 에 적고,
-    pluck_string / pick_up / pick_return 시작 시 ensure_tcp 로 켠다 (이슈 #21, 성현)
 """
 import time
 
@@ -369,13 +366,15 @@ def pluck_string(pose, motion, standby=None):
               2·1번(고음 쪽)은 빈 공간이 반대라 훑는 방향이 반대다 (2026-09-20 실기 확인).
     motion  — teach_points.yaml 의 motion 절. 아래 pluck_* 키가 없으면 기본값을 쓴다
               (기본값은 pluck_test.py 에서 검증한 값).
-    standby — 기타 위 대기 자세(Pose, joints). 주면 발현 전후에 들른다.
+    standby — 기타 위 대기 자세(Pose, joints 또는 task). 주면 발현 전후에 들른다.
+              joints 면 movej, task(x) 면 Base 직선(movel)으로 간다.
 
-    순서 (성현 2026-09-19):
+    순서 (성현 2026-09-19, 2026-09-21 대기 자세 좌표화):
       대기 자세 → 접촉점 위 pluck_up_mm → 접촉점(느리게) → 옆으로 스트로크
       → 즉시 후퇴(5mm 이상) → 접촉점 위 → 대기 자세
     """
     _require_api()
+    ensure_tcp()                                        # 발현 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     x = getattr(pose, "task", None)
     if not x or len(x) != 6:
         raise MotionError(f"{pose.name}: 발현 자세는 x(Base posx 6개)로 적어야 한다. "
@@ -399,15 +398,23 @@ def pluck_string(pose, motion, standby=None):
     above = list(x)
     above[2] += up_mm                                   # Base +Z
 
-    if standby is not None:
-        _movej(standby.joints, motion)                  # 기타 위 대기
+    _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
     _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
     _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
     _movel_tool_rel(stroke, v_str, a_str, radius=3)     # 옆으로 살짝 → 발현
     _movel_tool_rel(retract, v_str, a_str)              # 즉시 후퇴 (버징 방지)
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
-    if standby is not None:
-        _movej(standby.joints, motion)                  # 기타 위 대기
+    _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
+
+
+def _goto_standby(standby, motion, vel, acc):
+    """Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel)."""
+    if standby is None:
+        return
+    if standby.kind == "joint":
+        _movej(standby.joints, motion)
+    else:
+        _movel_base(standby.task, vel, acc)
 
 
 def _pick_points(holder, motion):
@@ -440,6 +447,7 @@ def pick_up(holder, motion, standby=None):
     motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
     """
     _require_api()
+    ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
     preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
     v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
@@ -456,18 +464,26 @@ def pick_up(holder, motion, standby=None):
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
-def pick_return(holder, motion, home=None):
+def pick_return(holder, motion, via=None, home=None):
     """
     피크를 거치대에 돌려놓는다.
 
-    순서: 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 열기 → 거치대 위
-          → (home 이 있으면) 홈 자세
+    via — 거치대로 내려가기 전에 먼저 들르는 안전 경유 관절 자세(Pose, joints).
+          발현 직후엔 팔이 기타 위 대기 자세(pluck_standby)에 있는데, 거기서
+          거치대 위로 바로 movel 하는 경로는 검증된 적이 없다. frames.standby
+          를 경유해 안전한 관절 자세를 한 번 거친 뒤 내려간다.
+
+    순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
+          → 그리퍼 열기 → 거치대 위 → (home 이 있으면) 홈 자세
     """
     _require_api()
+    ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
     v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
 
+    if via is not None:
+        _movej(via.joints, motion)                      # 경유 자세
     _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _release()                                          # 놓는다

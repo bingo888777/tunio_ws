@@ -76,6 +76,18 @@ def test_sequence_with_standby(fake_api):
     assert kinds[1:-1] == ["movel"] * 5
 
 
+def test_sequence_with_task_standby(fake_api):
+    """기타 위 대기 자세가 작업 좌표(x)면 movej 가 아니라 Base 직선(movel)으로 간다."""
+    standby = Pose("frames.pluck_standby", True,
+                   task=[641.83, -13.17, 192.0, 180.0, -180.0, -90.0])
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=standby)
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movel"] * 7                               # 대기 자세까지 전부 movel
+    assert fake_api.calls[0][1] == standby.task
+    assert fake_api.calls[0][2]["ref"] == "BASE"
+    assert fake_api.calls[-1][1] == standby.task
+
+
 def test_motion_overrides(fake_api):
     motion = {"pluck_up_mm": 25.0, "pluck_stroke_tool": [0, 6, 0, 0, 0, 0],
               "pluck_retract_tool": [0, 0, -10, 0, 0, 0], "pluck_vel_fine": 15}
@@ -171,6 +183,17 @@ def test_pick_return_sequence(fake_api, fake_gripper):
 def test_pick_preset_defaults_to_close(fake_api, fake_gripper):
     MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
     assert fake_gripper.calls == ["open", "close"]
+
+
+def test_pick_return_with_via(fake_api, fake_gripper):
+    """발현 직후(기타 위 대기)에서 거치대로 바로 movel 하지 않고 경유 자세를 먼저 거친다."""
+    holder = Pose("pick.holder", True, task=HOLDER)
+    via = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_return(holder, {}, via=via)
+
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movej", "movel", "movel", "movel"]        # 경유 → 위 → 거치대 → 위
+    assert fake_api.calls[0][1] == [0, 0, 75, 0, 100, 0]
 
 
 def test_pick_rejects_joint_only_holder(fake_api, fake_gripper):
