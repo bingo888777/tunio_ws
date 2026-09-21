@@ -524,6 +524,76 @@ def _rolled(pose, roll_deg):
     return turned
 
 
+def register_peg(pose, motion, handle, read_width, logger=None):
+    """
+    Phase 0 — 손잡이가 어느 각에 있든 물어서 **각을 확정하고 그 각을 돌려준다** (#31).
+
+    로봇은 페그 손잡이가 지금 어느 각으로 서 있는지 모른다. 사람이 마지막으로
+    돌려놓은 상태라 매번 다르다. 그래서 작업 전에 줄마다 한 번씩 잡아보고 각을
+    기록한다. 그 뒤로는 adjust_peg 가 이 각으로 들어가므로 정렬이 다시 안 일어난다.
+
+    pose       — 페그 파지 자세
+    handle     — teach_points 의 peg_handle 절 (문턱·프리셋·재시도 각)
+    read_width — 지금 손가락 폭(mm)을 돌려주는 함수. grip_width.make_reader() 가 만든다
+
+    왜 probe 프리셋(15mm)으로 꽉 무나
+      작업용 peg(21mm)는 손잡이 두께(19.6mm)보다 넓어서 **닿지도 않는다.** 각이
+      안 잡히고, 폭도 물림과 빈손이 똑같이 읽혀 구분이 안 된다. 꽉 물어야 손잡이가
+      손가락과 평행하게 강제되고 그 각이 곧 답이 된다.
+      꽉 문 채 돌리는 것이 위험한 조합인데(옆힘 → 안전모드), 여기서는 **돌리지 않고
+      물기만 한다.** 돌릴 때는 열고 돌린다.
+
+    왜 사점에서 45도나 돌리나
+      카밍은 필요 폭 p(θ) = 길이·sinθ + 두께·cosθ 를 **줄이는 쪽**으로 손잡이를
+      비튼다. 그런데 p 가 최대인 지점(대각선, 약 59도)을 기준으로 방향이 반대다 —
+      59도 아래면 0도로 정렬되고, **위면 90도(사점)로 빨려든다.**
+      그래서 조금 돌리면 다시 사점으로 간다. 분수령을 넘기려면 최소 90-59 = 31도가
+      필요하다. 여유를 봐서 45도를 쓴다.
+
+    돌려주는 값은 **교시 자세 기준 상대 각**이다. peg_state.register 에 그대로 넣는다.
+    """
+    _require_api()
+    ensure_tcp()
+    probe = handle.get("probe_preset", "close")
+    step = float(handle.get("retry_roll_deg", 45.0))
+    tries = int(handle.get("max_attempts", 3))
+    thresholds = handle["thresholds_mm"]
+    joint = int(motion.get("peg_joint", 6))
+
+    from tunio_robot.grip_width import classify
+
+    _grip("open")
+    roll = 0.0
+    _goto_pose(_rolled(pose, roll), motion)
+    try:
+        for n in range(1, tries + 1):
+            _grip(probe)                         # 꽉 문다. 여기서 각이 확정된다
+            width = read_width()
+            verdict = classify(width, thresholds)
+            if logger:
+                logger.info(f"{pose.name} 등록 {n}/{tries}회 — "
+                            f"손목 {roll:+.0f}도, 폭 {width:.1f}mm, {verdict}")
+            if verdict == "hold":
+                return roll                      # 손잡이가 지금 이 각에 맞춰졌다
+            if verdict == "empty":
+                raise MotionError(
+                    f"{pose.name}: 빈손이다 (폭 {width:.1f}mm). 페그를 빗나갔다. "
+                    "기타가 밀렸거나 교시 좌표가 어긋났다 (#31)")
+            # 사점 — 열고 나서 돌린다. 문 채로 돌리면 옆힘으로 안전모드가 걸린다
+            _grip("open")
+            delta = [0.0] * 6
+            delta[joint - 1] = step
+            _movej(delta, turn_motion(motion), relative=True)
+            roll += step
+        raise MotionError(
+            f"{pose.name}: {tries}번 시도했는데 계속 사점이다 (마지막 폭 {width:.1f}mm). "
+            "손잡이가 걸려 있거나 문턱값이 실물과 안 맞는다 — "
+            "tools/peg_grip_probe.py 로 다시 재라 (#31)")
+    finally:
+        _release()                               # 어떻게 끝나든 놓고
+        _retreat(_rolled(pose, roll), motion)    # 지금 자세 그대로 나온다
+
+
 def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     """
     페그 조절. 받은 관절을 받은 각도만큼 돌린다.
