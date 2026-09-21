@@ -347,3 +347,25 @@ def test_막힘_문턱이_미는_힘보다_낮다():
     """상한 이상이면 막혀도 영영 안 걸린다. 그대로 20초를 버티다 타임아웃된다."""
     handle = _data()["peg_handle"]
     assert handle["contact_force_n"] < handle["insert_force_n"]
+
+
+# ------------------------------------------------------------ 거치대 팔 모양 (#56)
+def test_거치대_sol_은_기본이_null_이다():
+    """적기 전까지는 아무것도 안 바뀐다. null 이면 지금 팔 모양을 그대로 쓴다."""
+    points = tp.TeachPoints(_data())
+    assert points.pick_holder().sol_by_side == {"left": None, "right": None}
+
+
+def test_거치대_sol_에_이상한_값은_거부한다():
+    """0~7 정수 아니면 안 받는다. 엉뚱한 값을 주면 팔이 통째로 뒤집힌다."""
+    d = _data()
+    d["pick"]["holder"]["sol_by_side"] = {"left": 9}
+    with pytest.raises(tp.TeachPointsError, match="sol_by_side"):
+        tp.TeachPoints(d)
+
+
+def test_거치대_sol_의_키는_좌우뿐이다():
+    d = _data()
+    d["pick"]["holder"]["sol_by_side"] = {"middle": 2}
+    with pytest.raises(tp.TeachPointsError, match="left/right"):
+        tp.TeachPoints(d)

@@ -91,6 +91,9 @@ class Pose:
         # 이 좌표를 읽을 때 켜져 있던 TCP 이름. 작업 좌표(x)에만 뜻이 있다.
         # None 이면 "안 적어 둬서 모른다" 이고, 그 상태로는 조회가 거부된다.
         self.tcp = tcp
+        # 거치대 파지 자세의 팔 모양(IK 해)을 다음에 갈 페그 쪽별로 (#56).
+        # pick.holder 에만 뜻이 있다. 값이 null 이면 지금 팔 모양을 그대로 쓴다.
+        self.sol_by_side = {"left": None, "right": None}
 
     @property
     def kind(self):
@@ -185,6 +188,22 @@ class TeachPoints:
         holder = d.get("pick", {}).get("holder")
         if holder is not None:
             self._pick = self._grip_pose("pick.holder", holder)
+            # 거치대 파지 자세의 팔 모양. 페그의 sol 과 같은 뜻이다 (#56).
+            #   지금 거치대 접근은 J1 이 오른쪽인 해 하나뿐이라, 피크를 집고
+            #   발현한 뒤 6·5번(왼쪽) 페그로 가려면 경유지를 타야 한다.
+            #   왼쪽 해를 같이 정해 두면 그 경유를 건너뛸 수 있다.
+            # null 이면 지금 팔 모양을 그대로 쓴다 (예전 동작).
+            by_side = holder.get("sol_by_side") or {}
+            _require(isinstance(by_side, dict),
+                     f"pick.holder.sol_by_side 는 매핑이어야 한다 (지금 {by_side!r})")
+            for k in by_side:
+                _require(k in ("left", "right"),
+                         f"pick.holder.sol_by_side 의 키는 left/right 뿐이다 (지금 {k!r})")
+            for k, v in by_side.items():
+                _require(v is None or (isinstance(v, int) and 0 <= v <= 7),
+                         f"pick.holder.sol_by_side.{k} 는 0~7 정수 아니면 null 이어야 한다 "
+                         f"(지금 {v!r})")
+            self._pick.sol_by_side = {k: by_side.get(k) for k in ("left", "right")}
 
     @staticmethod
     def _string_no(section, key):

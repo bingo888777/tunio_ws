@@ -28,6 +28,7 @@
   python3 tools/sol_check.py --peg 1
   python3 tools/sol_check.py --peg 1 --at peg      # 접근점 말고 페그 자체에서
   python3 tools/sol_check.py --peg 1 --approach 60
+  python3 tools/sol_check.py --point pick.holder   # 피크 거치대 (#56)
 """
 import argparse
 import os
@@ -63,7 +64,9 @@ def fmt(vals, w=7, d=1):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--peg", type=int, required=True, choices=[1, 2, 5, 6])
+    ap.add_argument("--peg", type=int, choices=[1, 2, 5, 6])
+    ap.add_argument("--point", choices=["pick.holder"],
+                    help="페그 말고 다른 교시점에서 본다. 거치대 팔 모양(#56)용")
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--at", choices=["approach", "peg"], default="approach",
                     help="접근점에서 볼지 페그 자체에서 볼지")
@@ -73,23 +76,43 @@ def main():
     ap.add_argument("--model", default="m0609")
     args = ap.parse_args()
 
+    if (args.peg is None) == (args.point is None):
+        ap.error("--peg 나 --point 중 하나만 준다")
+
     from tunio_robot import teach_points as TP
     from tunio_robot.kinematics import fk
     points = TP.load(os.path.abspath(args.yaml))
-    peg = points.peg(args.peg)
     back = args.approach if args.approach is not None \
         else points.motion.get("approach_mm", 100.0)
-    target = list(peg.task) if args.at == "peg" else TP.backed_off(peg.task, back)
+
+    if args.point == "pick.holder":
+        # 거치대는 **위에서 수직으로** 내려간다. 그래서 볼 자리는 페그처럼
+        # "뒤로 물러난 점" 이 아니라 "위로 올라간 점" 이다 (pick_up_mm).
+        holder = points.pick_holder()
+        up = points.motion.get("pick_up_mm", 50.0)
+        target = list(holder.task)
+        target[2] += up
+        title = f"피크 거치대 위 {up:.0f}mm 대기점"
+        sub = f"  (거치대 {fmt(holder.task, 8, 2)} 에서 Base +Z {up:.0f}mm)"
+        now = holder.sol_by_side
+        cur = (f"left={now.get('left')} right={now.get('right')}"
+               if any(v is not None for v in now.values()) else "둘 다 null — 미지정")
+        cur = f"지금 적힌 sol_by_side: {cur}"
+    else:
+        peg = points.peg(args.peg)
+        target = list(peg.task) if args.at == "peg" else TP.backed_off(peg.task, back)
+        title = f"{args.peg}번 페그 {'접근점' if args.at == 'approach' else '파지점'}"
+        sub = f"  (페그에서 {back:.0f}mm 뒤)" if args.at == "approach" else ""
+        cur = f"지금 적힌 sol: {peg.sol if peg.sol is not None else 'null — 미지정'}"
 
     print()
     print("=" * 70)
-    print(f"{args.peg}번 페그 {'접근점' if args.at == 'approach' else '파지점'} "
-          f"팔 자세 비교")
+    print(f"{title} 팔 자세 비교")
     print("=" * 70)
     print(f"  손끝 좌표 {fmt(target, 8, 2)}")
-    if args.at == "approach":
-        print(f"  (페그에서 {back:.0f}mm 뒤)")
-    print(f"  지금 적힌 sol: {peg.sol if peg.sol is not None else 'null — 미지정'}")
+    if sub:
+        print(sub)
+    print(f"  {cur}")
     print("  로봇을 움직이지 않는다. 물어보기만 한다.\n")
 
     import rclpy
@@ -162,6 +185,8 @@ def main():
                        f"돌아야 한다 — 가는 길이 길다")
         tag = "  <- 지금 자세" if same else ""
         print(f"sol {sol}   {fmt(j, 7, 2)}{tag}")
+        print(f"        J1 {j[0]:+7.2f}도 — {'왼쪽' if j[0] < 0 else '오른쪽'}"
+              f"  (6·5번은 왼쪽, 2·1번은 오른쪽)")
         print(f"        {'손목 뒤집힘(J5<0)' if j[4] < 0 else '손목 안 뒤집힘(J5>0)'}"
               f"    케이싱 {fmt(r['wrist_casing'])}")
         print(f"        어깨팔꿈치 {fmt(r['origins'][2])}   "
@@ -190,6 +215,15 @@ def main():
             print(f"  케이싱을 가장 많이 옮기는 건 sol {far[0]} 이다 "
                   f"(X {d[0]:+.0f}, Y {d[1]:+.0f}, Z {d[2]:+.0f} mm).")
     print("  케이싱이 기타에서 먼 쪽(X 작고 Z 낮은 쪽)인 해를 고른다.")
+    if args.point == "pick.holder":
+        print("  거치대는 **J1 부호**로 고른다 — 다음에 갈 페그 쪽과 같아야")
+        print("  좌우 전환 경유지를 건너뛴다 (#56).")
+        print("    J1 음수 -> sol_by_side.left  (6·5번 쪽)")
+        print("    J1 양수 -> sol_by_side.right (2·1번 쪽)")
+        print("  적은 뒤 dry_run 으로 순서를 보고, 실기는 천천히 한 번 —")
+        print("    ros2 run tunio_robot robot_controller --ros-args -p dry_run:=true")
+        print("    teach_points.yaml 의 pick.holder.sol_by_side 에 적는다")
+        return 0
     print("  실제로 가보고 확인한 뒤에 적는다 —")
     print(f"    python3 tools/transit_check.py --from 6 --to {args.peg} "
           f"--dst-sol <번호> --speed 30")

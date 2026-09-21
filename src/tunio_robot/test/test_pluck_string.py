@@ -41,6 +41,9 @@ class FakeApi:
     def movel(self, pos, **kw):
         return self._record("movel", pos, kw)
 
+    def movejx(self, pos, **kw):
+        return self._record("movejx", pos, kw)
+
 
 @pytest.fixture
 def fake_api(monkeypatch):
@@ -413,3 +416,34 @@ def test_standby_skip_can_be_turned_off(monkeypatch, fake_api):
 
     MP.pluck_string(_pose_x(CONTACT), {"standby_skip_mm": 0.0}, standby=_standby_j())
     assert [c[0] for c in api.calls][0] == "movej"
+
+
+# ---------------------------------------------------------- 거치대 팔 모양 (#56)
+def test_pick_up_with_sol_uses_joint_interpolation(fake_api, fake_gripper):
+    """
+    Sol 을 주면 거치대 위 대기점까지 movejx 로 간다.
+
+    movel 은 지금 팔 모양을 유지하므로 IK 해의 갈래를 못 바꾼다. 거치대 접근이
+    J1 오른쪽 해 하나뿐이라 6·5번(왼쪽) 페그로 갈 때마다 경유지를 타던 것이
+    이 갈래 전환으로 없어진다 (2026-09-21 실기 지적).
+    """
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=3)
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movejx", "movel", "movel"]        # 위(관절보간) → 거치대 → 위
+    assert fake_api.calls[0][2]["sol"] == 3
+    assert fake_api.calls[1][2]["ref"] == "BASE"        # 하강은 직선 그대로
+    assert fake_api.calls[2][1] == fake_api.calls[0][1]  # 수직으로 올라온다
+
+
+def test_pick_return_with_sol_uses_joint_interpolation(fake_api, fake_gripper):
+    """반환 쪽이 더 중요하다 — 끝나면 바로 페그를 잡으러 간다."""
+    MP.pick_return(Pose("pick.holder", True, task=HOLDER), {}, sol=6)
+    kinds = [c[0] for c in fake_api.calls]
+    assert kinds == ["movejx", "movel", "movel"]
+    assert fake_api.calls[0][2]["sol"] == 6
+
+
+def test_pick_without_sol_keeps_the_straight_approach(fake_api, fake_gripper):
+    """안 주면 예전 그대로 직선이다. 값이 null 인 동안 아무것도 안 바뀐다."""
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {})
+    assert [c[0] for c in fake_api.calls] == ["movel"] * 3

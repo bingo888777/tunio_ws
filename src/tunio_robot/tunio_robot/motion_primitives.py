@@ -586,7 +586,7 @@ def _pick_points(holder, motion):
     return contact, above
 
 
-def pick_up(holder, motion, standby=None, via=None):
+def pick_up(holder, motion, standby=None, via=None, sol=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -606,6 +606,16 @@ def pick_up(holder, motion, standby=None, via=None):
               폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
     파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
 
+    sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
+          같은 뜻이다 (#56). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
+          movel 은 지금 팔 모양을 유지하므로 갈래를 못 바꾼다.
+          지금 거치대 접근은 J1 이 오른쪽인 해 하나뿐이라, 피크를 집고 발현한 뒤
+          6·5번(왼쪽) 페그로 가려면 경유지를 타야 했다. 왼쪽 해로 집어 두면 그
+          경유가 없어진다. None 이면 지금 팔 모양을 그대로 쓴다 (예전 동작).
+
+          내려가기·들어 올리기는 sol 과 무관하게 **직선**이다. 거치대·스토퍼를
+          수직으로 빠져나와야 하고, 직선은 팔 모양을 안 바꾼다.
+
     RG2.select() 의 settle_sec(기본 0.3초)만으로는 부족해 집자마자 들어 올리는 동작이
     물리적으로 안 끝난 그리퍼를 밀고 올라갔다 (2026-09-20 실기). 그래서 집은 뒤
     motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
@@ -622,7 +632,10 @@ def pick_up(holder, motion, standby=None, via=None):
     if via is not None:
         _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
     _release()                                          # 열고 간다
-    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    if sol is None:
+        _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
+    else:
+        _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
@@ -631,7 +644,7 @@ def pick_up(holder, motion, standby=None, via=None):
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
-def pick_return(holder, motion, via=None, home=None):
+def pick_return(holder, motion, via=None, home=None, sol=None):
     """
     피크를 거치대에 돌려놓는다.
 
@@ -640,8 +653,13 @@ def pick_return(holder, motion, via=None, home=None):
           거치대 위로 바로 movel 하는 경로는 검증된 적이 없다. frames.standby
           를 경유해 안전한 관절 자세를 한 번 거친 뒤 내려간다.
 
+    sol — 거치대 위 대기점에 설 팔 모양(IK 해 0~7). pick_up 의 sol 과 같다 (#56).
+          **반환 쪽이 더 중요하다** — 반환이 끝나면 바로 페그를 잡으러 가기
+          때문이다. 다음에 갈 페그 쪽의 해로 서 있으면 좌우 전환 경유지를
+          건너뛸 수 있다. None 이면 지금 팔 모양을 그대로 쓴다.
+
     순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
-          → 그리퍼 열기 → 거치대 위 → (home 이 있으면) 홈 자세
+          → 그리퍼 열기 → 거치대 위(sol 을 주면 그 팔 모양으로) → (home 이 있으면) 홈 자세
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
@@ -652,10 +670,13 @@ def pick_return(holder, motion, via=None, home=None):
 
     if via is not None:
         _movej(via.joints, motion)                      # 경유 자세
-    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    if sol is None:
+        _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
+    else:
+        _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _release()                                          # 놓는다
-    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다
+    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다 (수직)
     if home is not None:
         _movej(home.joints, motion)                     # 홈
 
