@@ -401,8 +401,23 @@ def pluck_string(pose, motion, standby=None):
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
     _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
     _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
-    _movel_tool_rel(stroke, v_str, a_str, radius=3)     # 옆으로 살짝 → 발현
-    _movel_tool_rel(retract, v_str, a_str)              # 즉시 후퇴 (버징 방지)
+
+    # 스트로크·후퇴는 **피크가 줄에 닿아 있는 유일한 구간**이다. 이제 이동 거부를
+    # 예외로 올리니까(#50), 여기서 그냥 빠져나가면 진동하는 줄에 피크를 얹은 채
+    # 멈춘다 — 버징이 나고 그 줄 측정이 통째로 망가진다 (CLAUDE.md 3.4).
+    # 그래서 실패해도 **일단 줄에서 떼고** 나서 예외를 다시 올린다.
+    # MotionError 만 잡으면 안 된다 — 래퍼가 UnboundLocalError 를 던지는 판이
+    # 있다 (_rejected 의 주석). 줄에서 떼는 건 어느 예외에서든 해야 한다.
+    try:
+        _movel_tool_rel(stroke, v_str, a_str, radius=3)  # 옆으로 살짝 → 발현
+        _movel_tool_rel(retract, v_str, a_str)           # 즉시 후퇴 (버징 방지)
+    except Exception:
+        try:
+            _movel_base(above, v_app, a_app)             # 무슨 일이 있어도 줄에서 뗀다
+        except Exception:
+            pass                                         # 이것마저 안 되면 원래 예외가 먼저다
+        raise
+
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 
@@ -497,11 +512,39 @@ def _retract_depth_mm(delta):
     return sum(float(v) ** 2 for v in delta[:3]) ** 0.5
 
 
+def _rejected(ret, what):
+    """
+    이동 반환이 -1(거부)이면 멈춘다. 버리면 안 움직여도 아무도 모른다 (#50).
+
+    래퍼가 정말 0/-1 을 주는지 확인했다 — `DSR_ROBOT2.py` 2941행이
+    `ret = 0 if (result.success == True) else -1` 이고, 그 success 는
+    `dsr_controller2.cpp:448` movel_cb 이 `Drfl->movel()` 반환을 그대로 실은 것이다.
+    `get_tcp` 쪽처럼 true 하드코딩이 아니다 (CLAUDE.md 3.5.1 은 `get_*` 얘기다).
+
+    ⚠️ 다만 같은 함정이 이동에도 하나 있다 — 서비스 호출이 예외로 실패하면
+    `except` 절이 `ret` 을 안 채운 채 `return ret` 을 타서 **-1 이 아니라
+    `UnboundLocalError`** 가 난다(2934~2941행). 여기까지 못 온다.
+    그래서 부르는 쪽은 `MotionError` 만 잡아선 안 된다.
+
+    -1 만 실패로 본다. None 이나 다른 값은 통과시킨다 — 판마다 다르다.
+
+    TODO: PR #41 이 머지되면 같은 일을 하는 `_moved()` 가 들어온다. 그때
+          이 함수를 지우고 `_moved()` 를 부른다. 지금 나누어 둔 건 순전히
+          머지 충돌을 피하려는 것이다.
+    """
+    if ret == -1:
+        raise MotionError(
+            f"{what} 가 거부됐다 (-1). 로봇이 그 자세를 못 만들거나 순응제어가 켜진 채 "
+            "위치 명령을 받았다. 안 움직였는데 다음 동작으로 넘어가면 빈손을 물게 된다")
+    return ret
+
+
 def _movel_base(pos, vel, acc):
     """직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다."""
     api = _require_api()
     from DR_common2 import posx
-    return api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE)
+    return _rejected(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE),
+                     "movel_base")
 
 
 def _movel_tool_rel(delta, vel, acc, radius=0):
@@ -513,8 +556,9 @@ def _movel_tool_rel(delta, vel, acc, radius=0):
     """
     api = _require_api()
     from DR_common2 import posx
-    return api.movel(posx(list(delta)), vel=vel, acc=acc,
-                     ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius)
+    return _rejected(api.movel(posx(list(delta)), vel=vel, acc=acc,
+                               ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius),
+                     "movel_tool_rel")
 
 
 def read_force(ref=None):
