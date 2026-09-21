@@ -41,6 +41,9 @@
   db:=<경로>      SQLite 파일 위치
   save_on_error_exit:=true
                   중간에 끊긴 작업(PHASE_ERROR)도 DB 에 저장한다. 기본 false.
+                  **true/false 로 적는다. 1/0 은 안 된다** — launch 가 INTEGER 로
+                  추론해서 노드가 InvalidParameterTypeException 으로 죽는다.
+                  true/True/yes 는 되고 1 만 안 된다.
                   실측 회차에서 원인을 보려고 켜는 것이다. 시연에서는 켜지 말 것 —
                   '중간에 끊긴 작업은 저장하지 않는다'가 확정 사항이다 (CLAUDE.md 13절).
                   켜면 처리 못 한 줄이 RESULT_PENDING 이라 전체 판정이
