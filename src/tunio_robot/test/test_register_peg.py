@@ -109,6 +109,32 @@ def _widths(*seq):
     return lambda: next(it)
 
 
+def test_먼_구간은_순응을_켜기_전에_간다(monkeypatch):
+    """
+    순응을 켠 뒤에 위치 명령을 주면 안 간다 (2026-09-21 실기 회귀).
+
+    스프링이 흡수해서 팔이 그 자리에 선다. search_mm 8 을 줬는데 힘 제어가
+    99.8mm 를 가려 했고, 4N 으로 20초에 7.5mm 밖에 못 갔다. 먼 구간은
+    딱딱할 때 끝내야 한다. 순서가 뒤집히면 여기서 걸린다.
+    """
+    order = []
+    monkeypatch.setattr(MP, "_api", _Api())
+    monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(MP, "_grip", lambda n: order.append(f"grip:{n}"))
+    monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: order.append("movejx"))
+    monkeypatch.setattr(MP, "_movel", lambda t, m: order.append("movel"))
+    monkeypatch.setattr(MP, "_retreat", lambda p, m: order.append("retreat"))
+    monkeypatch.setattr(MP, "compliance",
+                        lambda m, on=True: order.append(f"compliance:{'on' if on else 'off'}"))
+    monkeypatch.setattr(MP, "_insert_force_controlled",
+                        lambda *a, **k: order.append("force"))
+
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+
+    assert order.index("movel") < order.index("compliance:on"), order
+    assert order.index("compliance:on") < order.index("force"), order
+
+
 # ------------------------------------------------------------ 힘 판정
 def test_순응_스프링_반력만으로는_막혔다고_하지_않는다(monkeypatch):
     """

@@ -648,14 +648,10 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     fd = [0.0] * 6
     fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
 
-    # 먼 구간은 위치 제어로 빠르게, 페그 앞 짧은 구간만 힘 제어로 더듬는다.
-    # 힘 제어는 **접촉 탐색용**이지 이동용이 아니다 — 3N 으로 100mm 를 가는 건
-    # 느리기만 하고 얻는 게 없다. 손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이다.
-    search_mm = float(handle.get("search_mm", 25.0))
-    approach_mm = float(motion.get("approach_mm", 100.0))
-    if search_mm < approach_mm:
-        _movel(TP.backed_off(pose.task, search_mm), motion)   # 여기까지는 그냥 간다
-
+    # 먼 구간(접근점 ~ search_mm)은 **부르는 쪽이 순응을 켜기 전에** 끝내 놓는다.
+    # 여기서 하면 안 된다 — 순응이 켜진 채 위치 명령을 주면 스프링이 흡수해서
+    # 팔이 그 자리에 선다. 2026-09-21 실기에서 search_mm 을 8 로 줬는데도
+    # 힘 제어가 99.8mm 를 가려 했다. 위치 이동이 통째로 안 먹힌 것이다 (#31).
     target = pose.task[k]
     start = read_posx()[0][k]
     need = abs(target - start)                  # 남은 거리(mm). 힘 제어로 갈 구간
@@ -768,8 +764,20 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     from tunio_robot.grip_width import classify
 
     _grip("open")
-    back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
+    approach_mm = float(motion.get("approach_mm", 100.0))
+    back = TP.backed_off(pose.task, approach_mm)
     _movejx(back, motion, sol=getattr(pose, "sol", None))
+
+    # 먼 구간은 **순응을 켜기 전에** 위치 제어로 간다. 순서가 중요하다 —
+    # 순응이 켜진 뒤에 위치 명령을 주면 스프링이 흡수해 팔이 그 자리에 선다.
+    # 2026-09-21 실기에서 search_mm 8 을 줬는데 힘 제어가 99.8mm 를 가려 했고,
+    # 4N 으로 20초에 7.5mm 밖에 못 갔다. 먼 구간은 딱딱할 때 끝내야 한다.
+    search_mm = float(handle.get("search_mm", 25.0))
+    if use_force and search_mm < approach_mm:
+        if logger:
+            logger.info(f"페그 앞 {search_mm:.0f}mm 까지 위치 제어로 간다 "
+                        f"(순응 켜기 전)")
+        _movel(TP.backed_off(pose.task, search_mm), motion)
 
     # 순응은 **항상** 켠다. 힘 제어와 다른 것이다 —
     #   힘 제어  "이 힘까지만 민다"      (미검증, use_force 로 끌 수 있다)
