@@ -660,32 +660,61 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     start = read_posx()[0][k]
     need = abs(target - start)                  # 남은 거리(mm). 힘 제어로 갈 구간
 
+    # ── 기준선을 뺀다 (2026-09-21 실측으로 드러난 것) ────────────────────────
+    # 밀기 전에 이미 힘이 읽힌다. 6번 실기에서 **안 움직였는데 1.2N** 이었다.
+    # 툴 무게·자세·순응제어가 얹히는 몫이라 자세마다 다르다. 절댓값으로 문턱을
+    # 재면 그 몫이 예산을 통째로 먹는다 — 문턱 2.0N 에 여유가 0.8N 밖에 안 남았다.
+    #
+    # 그리고 순응 스프링이 **허공에서도** 반력을 만든다. Y 강성 200 N/m = 0.2 N/mm
+    # 라 2mm 만 밀려도 0.4N 이 붙는다. 닿은 게 아닌데 닿았다고 읽힌다.
+    # 그래서 판정은 **기준선 대비 증가분**으로 하고, 스프링 몫도 빼 준다.
+    base_f = abs(read_force(api.DR_BASE)[k])
+    stx = motion.get("compliance_stx") or []
+    k_n_per_mm = (float(stx[k]) / 1000.0) if len(stx) > k else 0.0   # N/m -> N/mm
+    if logger:
+        logger.info(f"기준선 {'XYZ'[k]} 축 {base_f:.2f}N "
+                    f"(순응 {k_n_per_mm * 1000:.0f} N/m = {k_n_per_mm:.2f} N/mm)")
+        reach = (push_n - base_f) / k_n_per_mm if k_n_per_mm > 0 else float("inf")
+        if reach < need:
+            logger.warn(f"{push_n:.1f}N 으로는 스프링을 이기고 {reach:.0f}mm 까지만 간다 "
+                        f"— {need:.0f}mm 가 필요하다. search_mm 을 줄이거나 "
+                        f"insert_force_n 을 올려라")
+
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     t0 = time.monotonic()
     said = 0.0
     try:
         while True:
             pos = read_posx()[0][k]
-            f = abs(read_force(api.DR_BASE)[k])
+            raw = abs(read_force(api.DR_BASE)[k])
             gone = (pos - start) * (1.0 if axis[k] > 0 else -1.0)
+            # 기준선과 스프링 몫을 뺀 나머지가 "뭔가에 닿아서 생긴 힘" 이다
+            spring = k_n_per_mm * max(0.0, gone)
+            f = max(0.0, raw - base_f - spring)
 
             if logger and time.monotonic() - said > 1.0:
-                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 힘 {f:.1f}N")
+                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 "
+                            f"접촉 {f:.2f}N (읽은값 {raw:.2f} - 기준선 {base_f:.2f} "
+                            f"- 스프링 {spring:.2f})")
                 said = time.monotonic()
 
             if abs(pos - target) <= tol_mm or gone >= need:
                 if logger:
-                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 힘 {f:.1f}N)")
+                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 접촉 {f:.2f}N)")
                 return
             if f >= limit_n:
                 raise MotionError(
-                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 {f:.1f}N, "
-                    f"문턱 {limit_n:.1f}N). 손잡이가 서 있어 그리퍼가 못 들어간다. "
-                    "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
+                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 접촉 "
+                    f"{f:.2f}N, 문턱 {limit_n:.1f}N. 읽은값 {raw:.2f} - 기준선 "
+                    f"{base_f:.2f} - 스프링 {spring:.2f}). 손잡이가 서 있어 그리퍼가 "
+                    "못 들어간다. 그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
             if time.monotonic() - t0 > timeout:
+                reach = ((push_n - base_f) / k_n_per_mm) if k_n_per_mm > 0 else 0.0
                 raise MotionError(
                     f"{pose.name}: {timeout:.0f}초 동안 {gone:+.1f}mm 밖에 못 갔다 "
-                    f"(힘 {f:.1f}N). 미는 힘 {push_n:.1f}N 이 너무 약할 수 있다")
+                    f"(접촉 {f:.2f}N). 미는 힘 {push_n:.1f}N 이 순응 스프링"
+                    f"({k_n_per_mm:.2f} N/mm)을 이기고 갈 수 있는 거리는 "
+                    f"{reach:.0f}mm 다. search_mm 을 줄이거나 insert_force_n 을 올려라")
             time.sleep(0.05)
     finally:
         api.release_force()                     # 힘 제어는 반드시 푼다

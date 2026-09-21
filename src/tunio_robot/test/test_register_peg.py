@@ -48,6 +48,7 @@ class _Api:
         self.compliance = []
         self.force = []
         self.blocked = blocked          # True 면 막혀서 못 들어간다
+        self.pushing = False            # set_desired_force 가 걸려 있나
 
     def task_compliance_ctrl(self, stx):
         self.compliance.append(("on", list(stx)))
@@ -60,10 +61,12 @@ class _Api:
     # 두산 시그니처를 그대로 흉내 낸다. 이름이 내장함수와 겹치는 건 원본 탓이다
     def set_desired_force(self, fd, dir, mod=None):        # noqa: A002
         self.force.append(("push", list(fd), list(dir)))
+        self.pushing = True
         return 0
 
     def release_force(self, time=0):
         self.force.append(("release",))
+        self.pushing = False
         return 0
 
 
@@ -82,7 +85,18 @@ def spy(monkeypatch):
         return ([PEG6[0], y, PEG6[2], 0, 0, 0], 7)
 
     def force(ref=None):
-        return [0.0, 3.0 if api.blocked else 0.2, 0.0, 0, 0, 0]
+        """
+        실기와 같은 모양으로 낸다 (2026-09-21 6번 실측).
+
+        전에는 막히면 **처음부터** 3.0N 을 냈다. 그러면 기준선을 읽는 첫 호출이
+        이미 3.0 이라, 증가분으로 판정하는 코드가 영영 0 을 본다.
+        실물은 이렇다 — 밀기 전에도 툴 무게 몫으로 1.2N 쯤 읽히고, 막혀서
+        버티기 시작하면 그 위에 접촉력이 얹힌다.
+        """
+        base = 1.2                              # 안 밀어도 읽히는 몫
+        if not api.pushing:
+            return [0.0, base, 0.0, 0, 0, 0]
+        return [0.0, base + (3.0 if api.blocked else 0.2), 0.0, 0, 0, 0]
 
     monkeypatch.setattr(MP, "read_posx", posx)
     monkeypatch.setattr(MP, "read_force", force)
@@ -93,6 +107,45 @@ def spy(monkeypatch):
 def _widths(*seq):
     it = iter(seq)
     return lambda: next(it)
+
+
+# ------------------------------------------------------------ 힘 판정
+def test_순응_스프링_반력만으로는_막혔다고_하지_않는다(monkeypatch):
+    """
+    2026-09-21 실기에서 **허공인데 2mm 만에 "막혔다"** 고 했다. 그 회귀 테스트다.
+
+    순응제어 Y 강성이 200 N/m = 0.2 N/mm 다. 밀고 들어가면 스프링이 밀어내므로
+    닿지 않아도 힘이 오른다 — 25mm 면 5N 이라 문턱 2N 을 한참 넘는다.
+    거기에 밀기 전에도 읽히는 기준선(실기 1.2N)까지 얹히면 예산이 통째로 없어진다.
+
+    그래서 판정은 **읽은값 - 기준선 - 스프링 몫**, 즉 순수 접촉력으로 한다.
+    """
+    log, api = _Log(), _Api()
+    monkeypatch.setattr(MP, "_api", api)
+    monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
+    monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
+    monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: None)
+    monkeypatch.setattr(MP, "_movel", lambda t, m: None)
+
+    state = {"y": PEG6[1] - HANDLE["search_mm"]}          # 페그 앞 25mm 에서 출발
+
+    def posx(ref=None):
+        if api.pushing:                                    # 밀면 5mm 씩 들어간다
+            state["y"] = min(PEG6[1], state["y"] + 5.0)
+        return ([PEG6[0], state["y"], PEG6[2], 0, 0, 0], 7)
+
+    def force(ref=None):
+        base = 1.2
+        gone = state["y"] - (PEG6[1] - HANDLE["search_mm"])
+        spring = 0.2 * gone if api.pushing else 0.0        # 닿지 않아도 오른다
+        return [0.0, base + spring, 0.0, 0, 0, 0]
+
+    monkeypatch.setattr(MP, "read_posx", posx)
+    monkeypatch.setattr(MP, "read_force", force)
+
+    # 스프링 반력이 문턱(2.0N)을 넘는데도 끝까지 들어가야 한다
+    assert 0.2 * HANDLE["search_mm"] > HANDLE["contact_force_n"]
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
 
 
 # ------------------------------------------------------------ 정상
