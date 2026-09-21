@@ -171,6 +171,9 @@ class TeachPoints:
             self._routes[name] = Route(f"routes.{name}", joints,
                                        item.get("taught", False))
 
+        # 페그 손잡이 실측. 없으면 Phase 0 를 못 돈다 (조회할 때 걸린다)
+        self._handle = d.get("peg_handle")
+
         # 피크 거치대. 없는 YAML 도 로드는 되고, 조회할 때 걸린다
         holder = d.get("pick", {}).get("holder")
         if holder is not None:
@@ -241,6 +244,25 @@ class TeachPoints:
         """
         r = self._routes.get(name)
         return r if (r is not None and r.taught) else None
+
+    def peg_handle(self):
+        """
+        페그 손잡이 실측값. Phase 0 가 폭으로 물림·사점·빈손을 가를 때 쓴다 (#31).
+
+        실측 전이면 거부한다. 추정값으로 판정하면 빈손을 물림으로 읽어 조용히 틀린다.
+        tools/peg_grip_probe.py 로 잰다.
+        """
+        h = self._handle
+        _require(h is not None, "교시점 파일에 peg_handle 이 없다. "
+                                "tools/peg_grip_probe.py 로 먼저 재라 (#31)")
+        _require(h.get("measured"), "peg_handle.measured 가 false 다. 실측값이 아니다")
+        t = h.get("thresholds_mm") or {}
+        for key in ("empty_below", "dead_above"):
+            _require(isinstance(t.get(key), (int, float)),
+                     f"peg_handle.thresholds_mm.{key} 가 없다")
+        _require(t["empty_below"] < t["dead_above"],
+                 "peg_handle 문턱이 뒤집혀 있다 (empty_below 가 dead_above 보다 크다)")
+        return h
 
     def pick_holder(self):
         """피크 거치대 자세. 피크를 집고 반환하는 자리다."""

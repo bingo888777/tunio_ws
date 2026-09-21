@@ -504,13 +504,216 @@ def read_posx():
     return api.get_current_posx(api.DR_BASE)
 
 
-def adjust_peg(pose, joint, delta_deg, motion):
+def _rolled(pose, roll_deg):
+    """
+    손잡이 각만큼 손목을 돌린 파지 자세를 만든다 (이슈 #31).
+
+    툴 Z 둘레 회전이라 손끝 위치도 접근축도 안 바뀐다. 손가락 방향만 돈다.
+    관절각(j)으로 적힌 자세에는 쓸 수 없다 — 페그는 전부 작업 좌표(x)다.
+    """
+    if not roll_deg:
+        return pose
+    if pose.kind != "task":
+        raise MotionError(
+            f"{pose.name} 이 관절각으로 적혀 있어 손잡이 각을 못 반영한다. "
+            "페그 자세는 작업 좌표(x)여야 한다 (#31)")
+    from tunio_robot.kinematics import roll_about_tool_z
+    turned = TP.Pose(pose.name, pose.taught,
+                     task=roll_about_tool_z(pose.task, roll_deg), tcp=pose.tcp)
+    turned.sol = getattr(pose, "sol", None)
+    return turned
+
+
+def compliance(motion, on=True):
+    """
+    순응제어를 켜고 끈다 (이슈 #31).
+
+    **각도 정렬용이 아니다.** 손목이 페그보다 1400배 뻣뻣해서 정렬에는 기여하지
+    못한다 — 닿으면 페그가 돌지 손목이 지지 않는다. 용도는 **삽입축 밀림 방지**다.
+    네 페그의 접근축이 전부 base ±Y 라, Y 를 무르게 두면 걸렸을 때 로봇이 물러나
+    기타를 안 민다.
+
+    stx 는 [X, Y, Z, Rx, Ry, Rz] 강성이고 기준계는 BASE 다
+    (DSR_ROBOT2 의 ref = _g_coord, 기본값 DR_BASE).
+    """
+    api = _require_api()
+    if not on:
+        return api.release_compliance_ctrl()
+    stx = motion.get("compliance_stx")
+    if not stx:
+        return None
+    return api.task_compliance_ctrl(list(stx))
+
+
+def _cond_met(ret):
+    """
+    조건 검사 반환을 뜻으로 옮긴다 (진릿값으로 쓰면 뒤집힌다).
+
+    두산 래퍼가 `ret = 0 if result.success else -1` 로 돌려준다
+    (DSR_ROBOT2.py 5470·5556행 부근). 즉 **조건 충족이 0, 미충족이 -1** 이다.
+    파이썬에서 0 은 거짓이고 -1 은 참이라, `if check_force_condition(...)` 로 쓰면
+    정확히 반대로 동작한다. 2026-09-21 실물에서 진입이 곧바로 "도달" 로 끝나
+    로봇이 페그로 들어가지도 않고 그리퍼만 여닫았다.
+
+    -1 은 "조건 미충족" 과 "호출 실패" 를 겸한다. 둘을 못 가르므로 미충족으로 본다.
+    """
+    return ret == 0
+
+
+def _insert_force_controlled(pose, motion, handle, logger=None):
+    """
+    접근점에서 페그까지 **힘 상한을 정해 놓고** 들어간다 (이슈 #31).
+
+    왜 위치 제어로 나눠 들어가면 안 되나
+      위치를 명령하면 로봇은 그 자리까지 **어떻게든 간다.** 막혀 있으면 밀어버린다.
+      걸음을 잘게 쪼개고 힘을 확인해도 "밀고 나서 확인"이라 이미 늦다.
+      2026-09-21 실물에서 기타가 밀렸다. 순응 강성 0.2 N/mm 에 걸음 12.5mm 라
+      한 걸음에 2.5N 밖에 안 쌓여 8N 문턱에 영영 못 닿았고, 그대로 밀고 들어갔다.
+      강성을 더 낮추는 건 답이 아니다 — 낮출수록 힘이 늦게 쌓여 감지가 더 늦어진다.
+
+    그래서 힘을 명령한다
+      set_desired_force 로 접근축 방향에 상한을 걸면 로봇이 **그 힘까지만 민다.**
+      감지가 아니라 제어다. 기타가 몇 N 에서 밀리는지 몰라도 상한을 낮게 잡으면
+      그보다 세게 미는 일이 없다. 나사로 고정된 게 아니라 마찰이 매번 다른
+      상황에 맞는 방식이다.
+
+    끝나는 조건은 둘
+      · 목표 깊이 도달 — 손잡이를 무사히 지났다. 물면 된다
+      · 힘이 상한 — 뭔가에 막혔다. 이미 안 밀고 버티는 중이라 기타는 안 밀린다
+    """
+    api = _require_api()
+    axis = TP.approach_axis(pose.task)          # 접근축(툴 Z)의 BASE 단위벡터
+    push_n = float(handle.get("insert_force_n", 3.0))
+    limit_n = float(handle.get("contact_force_n", 2.0))
+    tol_mm = float(handle.get("arrive_tol_mm", 2.0))
+    timeout = float(handle.get("insert_timeout_sec", 20.0))
+
+    # 네 페그 모두 접근축이 base ±Y 다(실측 |Y| >= 0.998). 지배축을 골라 쓴다
+    k = max(range(3), key=lambda i: abs(axis[i]))
+    dir_vec = [0.0] * 6
+    dir_vec[k] = 1.0
+    fd = [0.0] * 6
+    fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
+
+    target = pose.task[k]
+    dr_axis = (api.DR_AXIS_X, api.DR_AXIS_Y, api.DR_AXIS_Z)[k]
+    if axis[k] > 0:                             # 좌표가 커지는 쪽으로 간다
+        lo, hi = target - tol_mm, api.DR_COND_NONE
+    else:
+        lo, hi = api.DR_COND_NONE, target + tol_mm
+
+    api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
+    t0 = time.monotonic()
+    try:
+        while True:
+            if _cond_met(api.check_position_condition(
+                    dr_axis, min=lo, max=hi,
+                    ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS)):
+                if logger:
+                    logger.info(f"{pose.name} 진입 완료 ({'XYZ'[k]} 축 목표 도달)")
+                return
+            if _cond_met(api.check_force_condition(
+                    dr_axis, max=limit_n, ref=api.DR_BASE)):
+                raise MotionError(
+                    f"{pose.name}: 들어가다 막혔다 ({'XYZ'[k]} 축 {limit_n:.1f}N). "
+                    "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "
+                    "다시 시도하라 (#31)")
+            if time.monotonic() - t0 > timeout:
+                raise MotionError(
+                    f"{pose.name}: {timeout:.0f}초 안에 목표에도 못 닿고 막히지도 "
+                    f"않았다. 미는 힘 {push_n:.1f}N 이 너무 약해 못 가고 있을 수 있다")
+            time.sleep(0.05)
+    finally:
+        api.release_force()                     # 힘 제어는 반드시 푼다
+
+
+def register_peg(pose, motion, handle, read_width, logger=None):
+    """
+    Phase 0 — 페그를 물어서 손잡이 각을 확정하고 그 각을 돌려준다 (#31).
+
+    로봇은 손잡이가 지금 어느 각으로 서 있는지 모른다. 사람이 마지막으로 돌려놓은
+    상태라 매번 다르다. 작업 전에 줄마다 한 번씩 잡아보고 각을 기록한다. 그 뒤로는
+    adjust_peg 가 이 각으로 들어가므로 물리면서 되돌려지는 일이 없다.
+
+    pose       — 페그 파지 자세
+    handle     — teach_points 의 peg_handle 절
+    read_width — 지금 손가락 폭(mm)을 돌려주는 함수 (grip_width.make_reader)
+
+    ## 왜 꽉 무나 (probe 프리셋, 15mm)
+
+    작업용 peg(21mm)는 손잡이 두께(19.6mm)보다 넓어 **닿지도 않는다.** 각이 안
+    잡히고, 폭도 물림과 빈손이 똑같이 읽혀 구분이 안 된다. 꽉 물어야 손잡이가
+    손가락과 평행하게 강제되고 그 각이 곧 답이 된다. 여기서는 돌리지 않으므로
+    꽉 물어도 안전모드 조건이 아니다.
+
+    ## 진입은 힘 제어로 한다
+
+    위치를 명령하면 막혀 있어도 밀고 들어간다. 2026-09-21 실물에서 기타가 밀렸다.
+    `set_desired_force` 로 상한을 걸면 **그 힘까지만 민다.** 감지가 아니라 제어라,
+    기타가 몇 N 에서 밀리는지 몰라도 낮게 잡으면 그보다 세게 미는 일이 없다.
+
+    ## 왜 사점에서 돌려 빠져나오지 않나
+
+    **그럴 공간이 없다.** 열기 폭이 38mm 인데 손잡이가 59도쯤 서면 38.2mm 가
+    필요하다. 폭을 키우면 옆 페그를 친다(41·42·45 전부 쳤다). 창이 겹치지 않는다.
+
+    그래서 사람이 작업 전에 세로로 선 손잡이를 눕혀 둔다. 조율 전이라 음이
+    틀어져도 상관없다. 빠뜨리면 여기서 접촉으로 알아채고 **어느 줄인지 알리며
+    멈춘다.** 사람이 네 줄을 검사하는 게 아니라 로봇이 짚어 준다.
+    """
+    _require_api()
+    ensure_tcp()
+    probe = handle.get("probe_preset", "close")
+    thresholds = handle["thresholds_mm"]
+    from tunio_robot.grip_width import classify
+
+    _grip("open")
+    back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
+    _movejx(back, motion, sol=getattr(pose, "sol", None))
+
+    compliance(motion, on=True)                  # 걸리면 물러나게. 기타를 밀지 않는다
+    try:
+        _insert_force_controlled(pose, motion, handle, logger=logger)
+        _grip(probe)                             # 꽉 문다. 여기서 각이 확정된다
+        width = read_width()
+        verdict = classify(width, thresholds)
+        if logger:
+            logger.info(f"{pose.name} 등록 — 폭 {width:.1f}mm, {verdict}")
+        if verdict == "empty":
+            raise MotionError(
+                f"{pose.name}: 빈손이다 (폭 {width:.1f}mm). 페그를 빗나갔다. "
+                "기타가 밀렸거나 교시 좌표가 어긋났다 (#31)")
+        if verdict == "dead":
+            raise MotionError(
+                f"{pose.name}: 손잡이가 서 있어 못 물었다 (폭 {width:.1f}mm). "
+                "돌려서 빠져나올 공간이 없다 — 열기 폭 38mm 로는 59도쯤 선 손잡이를 "
+                "지날 수 없고, 폭을 키우면 옆 페그를 친다. "
+                "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
+        # **항상 0 이다.** 이 함수는 각을 '재는' 게 아니라 '맞추는' 것이다 —
+        # 꽉 물면 손잡이가 손가락에 맞춰 정렬되므로, 물렸다는 건 곧 교시 자세와
+        # 같아졌다는 뜻이다. 나중에 "왜 늘 0이지" 하고 고치려 들지 말 것.
+        # 이후 adjust_peg 가 돌린 만큼이 peg_state 에 누적된다
+        return 0.0
+    finally:
+        _grip("open")
+        compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
+        _retreat(pose, motion)
+
+
+def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     """
     페그 조절. 받은 관절을 받은 각도만큼 돌린다.
 
     pose      — 페그 파지 자세 (teach_points.Pose)
     joint     — 돌릴 관절 번호 1~6
     delta_deg — 부호 붙은 회전량. 부호 변환은 teach_points.joint_delta 가 이미 했다
+    roll_deg  — 손잡이가 교시 자세에서 얼마나 돌아가 있는지(도). 그만큼 손목을
+                더 돌려서 들어간다. 부르는 쪽이 peg_state 에서 꺼내 준다 (#31).
+                0 이면 교시 자세 그대로다
+
+    **끝나고 나면 손잡이가 delta_deg 만큼 더 돌아가 있다.** 그 누적은 여기서
+    안 한다 — 동작이 중간에 실패하면 얼마나 돌았는지 모르기 때문이다.
+    성공을 확인한 쪽(robot_controller)이 peg_state.add_turn 으로 적는다.
 
     백래시 대응(목표보다 높으면 풀었다 조여 올리기)은 task_manager 가 결정한다
     (명세 9.1 확정). 여기서 조이는 방향 마무리를 덧붙이면 서버가 계산한 각도와
@@ -518,16 +721,43 @@ def adjust_peg(pose, joint, delta_deg, motion):
     """
     _require_api()
     ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
-    _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
+
+    # 손잡이 각 추적은 **peg_joint == 6 을 전제로 한다.** J6 만 툴 Z 둘레 회전이라
+    # 관절 회전량이 곧 posx 의 C 변화량이다. 다른 관절이면 그 대응이 깨지는데,
+    # YAML 은 아직 1~6 을 다 받고(peg_joint 가 "실물 확인 후 확정"이다) 부르는 쪽은
+    # 관절 번호를 안 본다. 조용히 틀린 각을 누적하느니 여기서 멈춘다 (#31).
+    if roll_deg and joint != 6:
+        raise MotionError(
+            f"손잡이 각 추적은 peg_joint == 6 을 전제로 한다 (지금 J{joint}). "
+            "J6 만 툴 Z 둘레 회전이라 관절 회전량이 곧 C 변화량이다. "
+            "다른 관절로 돌리려면 각 추적을 끄고(roll_deg=0) 써라 (#31)")
+
+    entry = _rolled(pose, roll_deg)                 # 손잡이가 돌아가 있으면 맞춰 들어간다 (#31)
+    # 돌리고 나면 손목이 그만큼 더 돌아가 있다. 나올 때 원래 자세로 되돌리면
+    # 손목이 역회전하면서 아직 손가락 사이에 있는 페그를 다시 돌려 버린다.
+    # J6 이 아니면 C 가 안 바뀌므로 들어온 자세 그대로 나간다
+    c_delta = delta_deg if joint == 6 else 0.0
+    exit_ = _rolled(pose, roll_deg + c_delta)
+
+    # 들어가기 전에 반드시 연다. 직전 동작이 피크를 물고 있었으면 15mm 인 채로
+    # 들어가 손잡이를 정면으로 들이받는다. 나올 때는 _release() 가 같은 폭으로 연다.
+    # 폭은 gripper.presets.open 이 정한다(지금 38mm). 더 벌리면 옆 페그 손잡이를
+    # 치고, 줄이면 눕힌 손잡이도 못 지난다. 창이 5mm 도 안 된다 (#31)
+    _grip("open")
+    _goto_pose(entry, motion)                       # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
+    turned = False
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
         # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
         _movej(delta, turn_motion(motion), relative=True)
+        turned = True
     finally:
         _release()                                  # 실패해도 페그는 놓는다
-        _retreat(pose, motion)                      # 들어온 직선 그대로 나온다
+        # 다 돌았으면 돌아간 자세로, 도중에 멈췄으면 들어온 자세로 나온다.
+        # 어느 쪽이든 직선 경로 자체는 같다 — 자세만 다르다
+        _retreat(exit_ if turned else entry, motion)
 
 
 def strum_all(string_numbers, points):

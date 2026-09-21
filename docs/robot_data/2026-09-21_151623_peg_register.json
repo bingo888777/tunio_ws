@@ -1,0 +1,16 @@
+{
+  "tool": "peg_register",
+  "pegs": [
+    6
+  ],
+  "direction": "loosen",
+  "turn_deg": null,
+  "cycles": 1,
+  "results": {
+    "6": {
+      "attempts": [],
+      "error": "pegs.6: 빈손이다 (폭 15.1mm). 페그를 빗나갔다. 기타가 밀렸거나 교시 좌표가 어긋났다 (#31)"
+    }
+  },
+  "saved_at": "2026-09-21 15:16:23"
+}
