@@ -530,10 +530,17 @@ def _retract_depth_mm(delta):
 
 
 def _movel_base(pos, vel, acc):
-    """직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다."""
+    """
+    직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다.
+
+    반환을 _moved 로 본다 (#50). 거치대로 내려가는 명령이 거부돼도 다음 줄에서
+    그리퍼는 닫힌다 — 빈손을 물고 "집었다" 가 된다. 피크는 놓치면 비전이 없어
+    되찾을 수 없다.
+    """
     api = _require_api()
     from DR_common2 import posx
-    return api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE)
+    return _moved(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE),
+                  "movel_base")
 
 
 def _movel_tool_rel(delta, vel, acc, radius=0):
@@ -542,11 +549,15 @@ def _movel_tool_rel(delta, vel, acc, radius=0):
 
     피크 자세를 기준으로 움직이므로 기타가 조금 옮겨져도 방향이 유지된다.
     radius 를 주면 다음 모션과 블렌딩(멈춤 없이 이어짐).
+
+    반환을 _moved 로 본다 (#50). 발현 직후 5mm 후퇴가 이 경로다 — 거부된 걸
+    모르고 넘어가면 진동하는 줄에 피크가 닿은 채로 다음 동작이 이어진다.
     """
     api = _require_api()
     from DR_common2 import posx
-    return api.movel(posx(list(delta)), vel=vel, acc=acc,
-                     ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius)
+    return _moved(api.movel(posx(list(delta)), vel=vel, acc=acc,
+                            ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius),
+                  "movel_tool_rel")
 
 
 def read_force(ref=None):
@@ -738,6 +749,45 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
         api.release_force()                     # 힘 제어는 반드시 푼다
 
 
+def _cleanup_register(pose, motion, logger, keep_error):
+    """
+    register_peg 의 뒷정리 — 놓고, 순응을 끄고, 물러난다 (#52).
+
+    **원래 실패 사유를 덮지 않는다.** finally 안에서 새 예외가 나면 파이썬이 원래
+    예외를 그것으로 대체한다. 하필 제일 알고 싶은 때 겹친다 — 순응이 안 풀리는
+    상황과 진입이 실패하는 상황은 원인이 같아서(에러 래치·통신 지연·모드 전환
+    실패) 같이 일어난다. 그래서 진짜 진단인 "빈손이다 (폭 15.1mm)" 가 뒷정리
+    실패인 "movel 가 거부됐다 (-1)" 로 바뀌어 사람을 엉뚱한 곳으로 보낸다.
+
+    keep_error=True   본문이 이미 실패했다. 정리 실패는 경고로만 남긴다
+    keep_error=False  본문이 성공했다. 정리 실패를 그대로 올린다 — 성공이라고 해
+                      놓고 팔이 페그에 붙어 있으면 다음 동작이 거기서 출발한다
+    """
+    def _step(what, fn):
+        try:
+            return fn()
+        except Exception as exc:
+            if not keep_error:
+                raise
+            if logger:
+                logger.warn(f"정리: {what} 실패 — {exc}. 원래 실패 사유를 살린다 (#52)")
+            return None
+
+    _step("그리퍼 열기", lambda: _grip("open"))
+
+    # 순응 끄기는 **반환을 본다.** 안 풀리면 위치 명령이 -1 을 돌려주므로(#31)
+    # 이어서 후퇴를 부르면 그 -1 이 원래 사유를 덮는다. 아예 안 부른다.
+    if _step("순응 끄기", lambda: compliance(motion, on=False)) == -1:
+        msg = ("순응제어가 안 풀렸다 (release_compliance_ctrl -1). 후퇴를 건너뛴다 — "
+               "팔이 페그 앞에 붙은 채 남고 순응이 켜진 상태다. 펜던트에서 확인할 것 (#52)")
+        if not keep_error:
+            raise MotionError(msg)
+        if logger:
+            logger.warn(msg)
+        return
+    _step("후퇴", lambda: _retreat(pose, motion))
+
+
 def register_peg(pose, motion, handle, read_width, logger=None,
                  use_force=True, assume_grip=False):
     """
@@ -811,6 +861,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     # use_force 의 목적은 미검증 힘 제어를 안 태우는 것이지 안전망을 걷는 게 아니다.
     # 순응만으로도 미는 힘이 강성 × 남은 거리로 묶인다 (PR #37 리뷰, 정동휘)
     compliance(motion, on=True)
+    failed = True                # 뒷정리가 원래 사유를 덮지 않게 갈라 준다 (#52)
     try:
         if use_force:
             _insert_force_controlled(pose, motion, handle, logger=logger)
@@ -823,6 +874,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
         if assume_grip:
             if logger:
                 logger.warn("폭을 안 읽는다 — 물렸는지 눈으로 확인할 것 (빈손·사점 못 가림)")
+            failed = False
             return 0.0
         width = read_width()
         verdict = classify(width, thresholds)
@@ -842,11 +894,10 @@ def register_peg(pose, motion, handle, read_width, logger=None,
         # 꽉 물면 손잡이가 손가락에 맞춰 정렬되므로, 물렸다는 건 곧 교시 자세와
         # 같아졌다는 뜻이다. 나중에 "왜 늘 0이지" 하고 고치려 들지 말 것.
         # 이후 adjust_peg 가 돌린 만큼이 peg_state 에 누적된다
+        failed = False
         return 0.0
     finally:
-        _grip("open")
-        compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
-        _retreat(pose, motion)
+        _cleanup_register(pose, motion, logger, keep_error=failed)
 
 
 def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):

@@ -262,6 +262,52 @@ def test_실패해도_놓고_순응을_끈다(spy):
     assert spy.api.compliance[-1] == ("off",)
 
 
+# ------------------------------------------------------------ 뒷정리가 사유를 덮지 않는다 (#52)
+def test_후퇴가_실패해도_원래_사유가_남는다(spy, monkeypatch):
+    """
+    뒷정리에서 터진 예외가 원래 예외를 대체한다.
+
+    하필 제일 알고 싶은 때 겹친다 — 순응이 안 풀리는 상황과 진입이 실패하는
+    상황은 원인이 같아서 같이 일어난다. 진단이 "빈손이다" 에서 "movel 가
+    거부됐다" 로 뒤바뀌면 사람이 엉뚱한 데를 본다.
+    """
+    def 거부(pose, motion):
+        raise MP.MotionError("movel 가 거부됐다 (-1)")
+
+    monkeypatch.setattr(MP, "_retreat", 거부)
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+
+
+def test_성공했는데_후퇴가_실패하면_그건_올린다(spy, monkeypatch):
+    """덮을 원래 사유가 없다. 팔이 페그에 붙은 채인데 성공이라고 하면 안 된다."""
+    def 거부(pose, motion):
+        raise MP.MotionError("movel 가 거부됐다 (-1)")
+
+    monkeypatch.setattr(MP, "_retreat", 거부)
+    with pytest.raises(MP.MotionError, match="거부"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+
+
+def test_순응이_안_풀리면_후퇴를_안_한다(spy):
+    """
+    순응이 켜진 채로는 위치 명령이 -1 을 돌려준다 (#31).
+
+    그 상태로 후퇴를 부르면 그 -1 이 원래 사유를 덮는다. 아예 안 부르고 알린다.
+    """
+    spy.api.release_compliance_ctrl = lambda: -1
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+    assert not [m for m in spy if m[0] == "movel" and abs(m[1][1] - PEG6[1]) > 50.0]
+
+
+def test_순응이_안_풀린_채_성공으로_끝내지_않는다(spy):
+    """팔이 페그에 붙어 있고 순응이 켜진 상태다. 다음 동작이 거기서 출발한다."""
+    spy.api.release_compliance_ctrl = lambda: -1
+    with pytest.raises(MP.MotionError, match="순응제어가 안 풀렸다"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+
+
 # ------------------------------------------------------------ 순응제어
 def test_순응을_켜고_끈다(spy):
     MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
