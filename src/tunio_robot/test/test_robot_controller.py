@@ -275,3 +275,124 @@ def test_피크를_안_쥐고_있으면_쪽_기억을_안_지운다(ros, taught)
         assert node._side == "left"
     finally:
         node.destroy_node()
+
+
+# ─────────── 피크를 언제 집고 언제 놓나 (이슈 #34 ④) ───────────
+#
+# 이 순서가 코드에만 있고 아무도 안 지키고 있었다. 깨져도 조용히 넘어간다.
+# 놓친 피크는 비전이 없어 되찾을 수 없으므로(CLAUDE.md 2절) 여기서 고정한다.
+
+def test_두_번_튕겨도_집기는_한_번이다(ros, taught):
+    """매번 집었다 놨다 하면 사이클 타임이 그만큼 는다."""
+    node = _node(taught)
+    try:
+        node.dry_run = True
+        node._ensure_pick()
+        assert node._holding_pick is True
+        node._ensure_pick()          # 두 번째는 아무 일도 안 해야 한다
+        assert node._holding_pick is True
+    finally:
+        node.destroy_node()
+
+
+def test_페그를_잡기_전에_피크를_놓는다(ros, taught):
+    """페그를 물려면 손가락이 필요하다. 쥔 채로 가면 떨어뜨린다."""
+    node = _node(taught)
+    try:
+        node.dry_run = True
+        node._ensure_pick()
+        node._release_pick()
+        assert node._holding_pick is False
+    finally:
+        node.destroy_node()
+
+
+def test_놓은_뒤에_또_튕기면_다시_집는다(ros, taught):
+    node = _node(taught)
+    try:
+        node.dry_run = True
+        node._ensure_pick()
+        node._release_pick()
+        node._ensure_pick()
+        assert node._holding_pick is True
+    finally:
+        node.destroy_node()
+
+
+# ─────────── 집기가 끊기면 "모름" 이다 (이슈 #34 ①) ───────────
+#
+# pick_up 은 **그리퍼를 닫은 뒤** 들어 올린다. 그 사이에 끊기면 피크는 손에 있는데
+# 기록은 없다. 예전에는 False(빈손)로 남아서, 다음 _ensure_pick 이 pick_up 을 다시
+# 부르고 그 **첫 동작이 그리퍼 열기**라 있는 자리에서 놓아 버렸다. 대기 자세면 기타 위다.
+
+def test_집기가_끊기면_모름으로_남는다(ros, taught, monkeypatch):
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.dry_run = False
+
+        def boom(*a, **k):
+            raise MP.MotionError("들어 올리다 멈췄다")
+        monkeypatch.setattr(MP, "pick_up", boom)
+        with pytest.raises(MP.MotionError):
+            node._ensure_pick()
+        assert node._holding_pick is None, "False 면 다음에 기타 위에서 손을 편다"
+    finally:
+        node.destroy_node()
+
+
+def test_모르면_집으러_가지_않는다(ros, taught, monkeypatch):
+    """모르는 채로 pick_up 을 부르면 첫 동작인 열기로 떨어뜨린다."""
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.dry_run = False
+        node._holding_pick = None
+        called = []
+        monkeypatch.setattr(MP, "pick_up", lambda *a, **k: called.append(1))
+        with pytest.raises(MP.MotionError, match="모른다"):
+            node._ensure_pick()
+        assert called == [], "모르는데 집으러 갔다"
+    finally:
+        node.destroy_node()
+
+
+def test_모르면_일단_돌려놓는다(ros, taught, monkeypatch):
+    """
+    빈손으로 거치대에 다녀오는 건 손해가 없다.
+
+    쥔 채로 페그를 잡으러 가면 손가락이 모자라 떨어뜨린다. 한쪽만 회복 가능하다.
+    """
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.dry_run = False
+        node._holding_pick = None
+        went = []
+        monkeypatch.setattr(MP, "pick_return", lambda *a, **k: went.append(1))
+        node._release_pick()
+        assert went == [1]
+        assert node._holding_pick is False
+    finally:
+        node.destroy_node()
+
+
+# ─────────── 화음은 피크를 집기 전에 걸린다 (이슈 #34 ③) ───────────
+
+def test_화음은_피크를_집기_전에_걸린다(ros, taught, monkeypatch):
+    """
+    훑기가 아직 없는데 피크를 먼저 집으면 쥔 채로 멈춰 선다.
+
+    _release_pick() 까지 못 가니 사람이 가서 빼야 한다. 구현 전에는 집기 전에 걸린다.
+    """
+    from tunio_robot import motion_primitives as MP
+    node = _node(taught)
+    try:
+        node.dry_run = False
+        picked = []
+        monkeypatch.setattr(MP, "pick_up", lambda *a, **k: picked.append(1))
+        with pytest.raises(MP.MotionError, match="구현"):
+            MP.strum_ready()
+        assert picked == []
+    finally:
+        node.destroy_node()
