@@ -62,7 +62,7 @@ class RobotController(Node):
         self.declare_parameter("peg_register_force", False)
         # 이동 속도 배율. 0 이면 teach_points.yaml 의 motion.speed_scale 을 그대로 쓴다.
         # 실기에서 값을 바꿔 가며 보려고 런치 인자로 뺐다 — 빌드 없이 바꾼다 (#56).
-        #   ros2 run ... --ros-args -p speed_scale:=4.0
+        #   ros2 run ... --ros-args -p speed_scale:=1.0   (1.0 이면 예전 속도)
         # **이동·접근에만 걸린다.** 페그 회전·발현 스트로크·접촉 직전 구간은
         # 배율을 안 탄다 (motion_primitives._fast 의 주석).
         self.declare_parameter("speed_scale", 0.0)
