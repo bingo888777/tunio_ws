@@ -53,8 +53,12 @@ class RobotController(Node):
         #   날아간다. 값(search_mm · insert_force_n · insert_timeout_sec)은 계산이
         #   맞게 고쳐 뒀으므로 통합이 끝나면 이 기본값만 다시 올리면 된다.
         #
-        #   대신 **순응제어는 이 값과 무관하게 항상 켠다.** 끄면 로봇이 뻣뻣해져
-        #   오히려 더 세게 민다 (PR #37 리뷰). 미는 힘이 강성 × 남은 거리로 묶인다.
+        #   순응제어는 이 값과 무관하게 켜지지만 **진입이 끝난 뒤다.** 기본값이면
+        #   stop_mm 이 0 이라 페그까지 위치 제어로 가고, 순응은 파지·후퇴만 지킨다
+        #   (motion_primitives.register_peg). PR #37 리뷰의 "미는 힘이 강성 × 남은
+        #   거리로 묶인다" 는 **진입 구간에는 해당하지 않는다** — 그때는 순응을 켠 채
+        #   들어가는 구조였다. 지금 진입의 안전망은 사람의 사전 정렬(CLAUDE.md 5절)과
+        #   로봇 보호정지뿐이고, 보호정지 문턱은 아직 확인 안 됐다 (이슈 #53).
         self.declare_parameter("peg_register_force", False)
         self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
