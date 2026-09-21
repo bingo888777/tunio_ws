@@ -672,7 +672,11 @@ def register_peg(pose, motion, handle, read_width, logger=None):
                 "돌려서 빠져나올 공간이 없다 — 열기 폭 38mm 로는 59도쯤 선 손잡이를 "
                 "지날 수 없고, 폭을 키우면 옆 페그를 친다. "
                 "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
-        return 0.0                               # 교시 자세 그대로 물렸다
+        # **항상 0 이다.** 이 함수는 각을 '재는' 게 아니라 '맞추는' 것이다 —
+        # 꽉 물면 손잡이가 손가락에 맞춰 정렬되므로, 물렸다는 건 곧 교시 자세와
+        # 같아졌다는 뜻이다. 나중에 "왜 늘 0이지" 하고 고치려 들지 말 것.
+        # 이후 adjust_peg 가 돌린 만큼이 peg_state 에 누적된다
+        return 0.0
     finally:
         _grip("open")
         compliance(motion, on=False)             # 이동은 뻣뻣하게. 순응을 켠 채 다니지 않는다
@@ -701,16 +705,27 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     _require_api()
     ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
 
+    # 손잡이 각 추적은 **peg_joint == 6 을 전제로 한다.** J6 만 툴 Z 둘레 회전이라
+    # 관절 회전량이 곧 posx 의 C 변화량이다. 다른 관절이면 그 대응이 깨지는데,
+    # YAML 은 아직 1~6 을 다 받고(peg_joint 가 "실물 확인 후 확정"이다) 부르는 쪽은
+    # 관절 번호를 안 본다. 조용히 틀린 각을 누적하느니 여기서 멈춘다 (#31).
+    if roll_deg and joint != 6:
+        raise MotionError(
+            f"손잡이 각 추적은 peg_joint == 6 을 전제로 한다 (지금 J{joint}). "
+            "J6 만 툴 Z 둘레 회전이라 관절 회전량이 곧 C 변화량이다. "
+            "다른 관절로 돌리려면 각 추적을 끄고(roll_deg=0) 써라 (#31)")
+
     entry = _rolled(pose, roll_deg)                 # 손잡이가 돌아가 있으면 맞춰 들어간다 (#31)
     # 돌리고 나면 손목이 그만큼 더 돌아가 있다. 나올 때 원래 자세로 되돌리면
     # 손목이 역회전하면서 아직 손가락 사이에 있는 페그를 다시 돌려 버린다.
-    # peg_joint 는 툴 Z 둘레 회전(손목 롤)이라 관절 회전량이 곧 C 변화량이다
-    exit_ = _rolled(pose, roll_deg + delta_deg) if joint == 6 else entry
+    # J6 이 아니면 C 가 안 바뀌므로 들어온 자세 그대로 나간다
+    c_delta = delta_deg if joint == 6 else 0.0
+    exit_ = _rolled(pose, roll_deg + c_delta)
 
     # 들어가기 전에 반드시 연다. 직전 동작이 피크를 물고 있었으면 15mm 인 채로
     # 들어가 손잡이를 정면으로 들이받는다. 나올 때는 _release() 가 같은 폭으로 연다.
-    # **완전 개방이 아니라 30mm 다** — 더 벌리면 일정 각에서 옆 페그(간격 38mm)를
-    # 친다. 30mm 는 손잡이에 안 닿는 폭이라 진입·후퇴 중 간섭이 없다 (#31)
+    # 폭은 gripper.presets.open 이 정한다(지금 38mm). 더 벌리면 옆 페그 손잡이를
+    # 치고, 줄이면 눕힌 손잡이도 못 지난다. 창이 5mm 도 안 된다 (#31)
     _grip("open")
     _goto_pose(entry, motion)                       # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지

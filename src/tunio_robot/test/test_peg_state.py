@@ -302,3 +302,38 @@ def test_나갈_때도_30mm_로_연다(spy):
     MP, log = spy
     MP.adjust_peg(_Peg(PEG6), 6, -10.0, {}, roll_deg=0.0)
     assert ("release",) in log
+
+
+# ───────────── 각 추적은 J6 전용이다 (PR #36 리뷰, 정동휘) ─────────────
+#
+# peg_joint 는 아직 "실물 확인 후 확정" 이라 YAML 검증이 1~6 을 다 받는다.
+# J6 만 툴 Z 둘레 회전이라 관절 회전량이 곧 posx 의 C 변화량이다. 다른 관절이면
+# 그 대응이 깨지는데, 예전에는 exit_ 만 조용히 옛 동작으로 떨어졌다 —
+# 파지에 성공하고 성공으로 보고하면서 틀리는, #31 그 자체였다.
+
+def test_J6_아니면_각_추적을_거부한다(spy):
+    MP, _ = spy
+    with pytest.raises(MP.MotionError, match="peg_joint"):
+        MP.adjust_peg(_Peg(PEG6), 5, -30.0, {}, roll_deg=40.0)
+
+
+def test_J6_아니어도_각_없이는_돈다(spy):
+    """각 추적을 안 쓰면 다른 관절로 돌리는 것 자체는 막을 이유가 없다."""
+    MP, log = spy
+    MP.adjust_peg(_Peg(PEG6), 5, -30.0, {}, roll_deg=0.0)
+    assert any(e[0] == "movej" and e[2] for e in log)
+
+
+def test_J6_아니면_나갈_때_자세를_안_바꾼다(spy):
+    """J5 를 돌려도 C 는 그대로다. C 에 더하면 손목이 엉뚱하게 돈다."""
+    MP, log = spy
+    MP.adjust_peg(_Peg(PEG6), 5, -30.0, {}, roll_deg=0.0)
+    retreat = [e for e in log if e[0] == "movel"][-1]
+    assert retreat[1][5] == pytest.approx(TAUGHT_C)
+
+
+def test_거부되면_움직이지_않는다(spy):
+    MP, log = spy
+    with pytest.raises(MP.MotionError):
+        MP.adjust_peg(_Peg(PEG6), 5, -30.0, {}, roll_deg=40.0)
+    assert not [e for e in log if e[0] in ("movejx", "movel", "movej")]

@@ -238,9 +238,15 @@ class RobotController(Node):
             MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll or 0.0)
             # 돌린 만큼 손잡이도 돌아갔다. **성공한 뒤에만** 적는다 —
             # 중간에 실패하면 얼마나 돌았는지 모르므로 누적하면 더 틀어진다
-            if roll is not None:
+            # J6 일 때만 누적한다. 관절 회전량이 곧 손목 롤(posx 의 C)인 건 J6 뿐이라,
+            # 다른 관절 값을 각으로 쌓으면 다음 진입이 틀린 방향으로 돈다 (#31)
+            if roll is not None and joint == 6:
                 self.pegs.add_turn(r.string_number, delta)
                 self.pegs.save()
+            elif roll is not None:
+                self.get_logger().warn(
+                    f"peg_joint 가 J{joint} 라 손잡이 각을 누적하지 않는다. "
+                    "각 추적은 J6 전용이다 (#31)")
             self._side = side
 
         return self._run("adjust_peg", goal, AdjustPeg.Result, work)
