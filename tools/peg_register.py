@@ -43,6 +43,18 @@ DEFAULT_YAML = os.path.join(os.path.dirname(__file__), "..",
 LOG_DIR = os.path.join(os.path.dirname(__file__), "..", "docs", "robot_data")
 
 
+class _Say:
+    """register_peg 이 진행 상황을 찍게 한다. 어디서 멈췄는지 보이려는 것."""
+
+    @staticmethod
+    def info(msg):
+        print(f"    · {msg}")
+
+    @staticmethod
+    def warn(msg):
+        print(f"    ⚠ {msg}")
+
+
 def confirm(msg):
     print(msg)
     if input("    >>> 엔터 = 진행 / n = 중단: ").strip().lower() == "n":
@@ -140,7 +152,7 @@ def main():
                 "    꽉 물어 각을 확정한다. 손잡이가 서 있으면 막혀서 멈춘다.\n"
                 "    ⚠️ 힘 제어 첫 실행이면 기타에서 떨어진 자리에서 한 번 보라.")
         try:
-            roll = MP.register_peg(peg, motion, handle, read_width)
+            roll = MP.register_peg(peg, motion, handle, read_width, logger=_Say())
         except MP.MotionError as e:
             print(f"    ✗ 등록 실패 — {e}")
             rec["error"] = str(e)

@@ -110,6 +110,15 @@ _WAIT_SERVICES = [
     ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
     ("MoveJoint", "dsr_controller2/motion/move_joint"),
     ("MoveLine", "dsr_controller2/motion/move_line"),
+    # 힘 제어 계열 (Phase 0 진입이 쓴다). 접두사가 force/ 라 위와 다르다.
+    # 안 기다리면 task_compliance_ctrl 첫 호출에서 **영원히 멈춘다** —
+    # spin_until_future_complete 에 타임아웃이 없다 (#31)
+    ("TaskComplianceCtrl", "dsr_controller2/force/task_compliance_ctrl"),
+    ("ReleaseComplianceCtrl", "dsr_controller2/force/release_compliance_ctrl"),
+    ("SetDesiredForce", "dsr_controller2/force/set_desired_force"),
+    ("ReleaseForce", "dsr_controller2/force/release_force"),
+    ("CheckPositionCondition", "dsr_controller2/force/check_position_condition"),
+    ("CheckForceCondition", "dsr_controller2/force/check_force_condition"),
 ]
 
 

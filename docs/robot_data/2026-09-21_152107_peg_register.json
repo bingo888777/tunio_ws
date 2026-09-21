@@ -1,0 +1,16 @@
+{
+  "tool": "peg_register",
+  "pegs": [
+    6
+  ],
+  "direction": "loosen",
+  "turn_deg": null,
+  "cycles": 1,
+  "results": {
+    "6": {
+      "attempts": [],
+      "error": "pegs.6: 들어가다 막혔다 (Y 축 2.0N). 손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)"
+    }
+  },
+  "saved_at": "2026-09-21 15:21:07"
+}
