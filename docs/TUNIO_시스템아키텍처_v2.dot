@@ -1,0 +1,65 @@
+digraph TUNIO_ARCH {
+  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=30, newrank=true,
+         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="14" COLOR="#5A635E">2026-09-21 · PC 3대 · ROS 2 Jazzy · ROS_DOMAIN_ID 10 · 인터페이스 13개는 docs/TUNIO_INTERFACE_SPEC.md</FONT><BR/> >,
+         bgcolor="#FCFDFB", nodesep=0.42, ranksep=0.62, compound=true, pad=0.35];
+  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=14,
+         margin="0.26,0.16", penwidth=1.5, width=3.1, height=0.62];
+  edge  [fontname="Noto Sans CJK KR", fontsize=11, color="#828C86", penwidth=1.3,
+         arrowsize=0.8, fontcolor="#3F4A45"];
+
+  // ───────────────────────── ① 로봇 제어 PC
+  subgraph cluster_robot {
+    label=<<B>① 로봇 제어 PC</B>   정묵 · 성현<BR/> >;
+    fontsize=17; fontcolor="#8E520B"; color="#C9873A"; style=rounded; penwidth=1.8; bgcolor="#FDF7EE";
+    rc  [label=<<B>robot_controller</B>>, fillcolor="#F2D6AC", color="#A86E1C", fontsize=15];
+    mp  [label=<<B>motion_primitives</B>>, fillcolor="#F9E8D1", color="#C9873A"];
+    drv [label=<<B>두산 드라이버</B>>, fillcolor="#FCF2E4", color="#DCAC70"];
+    rc -> mp -> drv;
+  }
+
+  // ───────────────────────── ② 서버 PC
+  subgraph cluster_server {
+    label=<<B>② 서버 PC</B>   정동휘<BR/> >;
+    fontsize=17; fontcolor="#174F7C"; color="#3E7FB8"; style=rounded; penwidth=1.8; bgcolor="#EFF6FD";
+    web [label=<<B>web_node</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
+    tm  [label=<<B>task_manager</B>>, fillcolor="#BCD8F2", color="#20669F", fontsize=15];
+    rs  [label=<<B>result_store</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
+    db  [label=<<B>SQLite</B>>, shape=cylinder, style=filled, fillcolor="#EAF2FB", color="#3E7FB8", height=0.7];
+    web -> tm [dir=both];
+    tm -> rs [dir=both];
+    rs -> db;
+  }
+
+  // ───────────────────────── ③ 마이크 PC
+  subgraph cluster_mic {
+    label=<<B>③ 마이크 PC</B>   정정인<BR/> >;
+    fontsize=17; fontcolor="#0C6245"; color="#2E9070"; style=rounded; penwidth=1.8; bgcolor="#EEF9F4";
+    usb [label=<<B>USB 외장 마이크</B>>, fillcolor="#DCF1E7", color="#2E9070"];
+    aa  [label=<<B>audio_analyzer</B>>, fillcolor="#B8E5D2", color="#17755A", fontsize=15];
+    usb -> aa;
+  }
+
+  // ───────────────────────── 바깥
+  brow [label=<<B>브라우저</B>>, fillcolor="#F2F4F5", color="#98A3AB"];
+  hw   [label=<<B>두산 컨트롤러</B>  M0609 + RG2<BR/><FONT POINT-SIZE="11">피크 거치대에서 집었다 반환</FONT>>,
+        fillcolor="#F2F4F5", color="#98A3AB", height=0.72];
+
+  brow -> web [dir=both, label=<  HTTP + SSE >];
+  drv  -> hw  [label=<  유선 LAN >];
+
+  // ───────────────────────── 3 PC 사이 (이 그림의 핵심)
+  rc -> tm [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
+            label=<<B>로봇 Action 3</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/robot/play_string<BR ALIGN="LEFT"/>/robot/adjust_peg<BR ALIGN="LEFT"/>/robot/strum_all<BR ALIGN="LEFT"/></FONT>>];
+  tm -> aa [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
+            label=<<B>측정 Action 1</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/audio/measure_pitch<BR ALIGN="LEFT"/></FONT>>];
+
+  note [shape=plaintext, margin=0, label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>3 PC 는 서로를 어떻게 찾는가</B>  ·  강의실 Wi-Fi 가 멀티캐스트를 막아, 서버 PC 의 <B>Fast DDS Discovery Server (UDP 11811, systemd)</B> 를 거친다.</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45">클라이언트 IP 는 바뀌어도 되고, 고정이 필요한 것은 서버 PC 하나뿐이다. 새 노드가 서로를 보기까지 약 15초 걸린다.</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>로봇·기타 없이 돌리는 경로</B>  ·  <B>fake_hardware</B> (서버 PC, sim 전용 — 로봇과 마이크를 모두 대신) / <B>replay_wav</B> (마이크 PC — 녹음 파일 재생)</FONT></TD></TR>
+    </TABLE>>];
+  hw -> note [style=invis];
+
+  { rank=same; rc; tm; aa; }
+}

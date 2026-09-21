@@ -160,3 +160,77 @@ def test_real_recordings_if_present():
         assert len(errs) >= len(files) - 2, f"{pattern} 통과 {len(errs)}/{len(files)}"
         assert np.std(errs, ddof=1) <= max_sd, \
             f"{pattern} 표준편차 {np.std(errs, ddof=1):.2f}센트"
+
+
+# ---------------------------------------------------------------
+# replay_wav 파일 회전 — audio_analyzer._resolve_replay
+#
+# 이 함수는 깨져도 조용하다. 회전이 망가져 같은 파일만 반복해도 sim 은 그대로
+# 돌고 측정도 성공한다. 에러가 안 나고 흩어짐만 사라진다. 그래서 고정해 둔다.
+#
+# 노드를 띄우지 않는다. 이 함수가 self 에서 쓰는 것은 _replay_turn 하나뿐이라
+# 그것만 가진 대역 객체로 부를 수 있다 (ROS 도 오디오도 필요 없다).
+# ---------------------------------------------------------------
+def _resolver():
+    from types import SimpleNamespace
+
+    from tunio_audio.audio_analyzer import AudioAnalyzer
+    fake = SimpleNamespace(_replay_turn={})
+    return lambda pattern, n: AudioAnalyzer._resolve_replay(fake, pattern, n)
+
+
+def _make_wavs(d, names):
+    for n in names:
+        open(os.path.join(d, n), 'wb').close()
+    return os.path.join(d, 'g{string_number}_*.wav')
+
+
+def test_replay_rotates_through_matching_files(tmp_path):
+    """회차마다 다음 파일을 쓴다. 같은 파일이 연속으로 나오면 안 된다."""
+    pat = _make_wavs(str(tmp_path), ['g6_e2_1.wav', 'g6_e2_2.wav', 'g6_e2_3.wav'])
+    r = _resolver()
+    got = [os.path.basename(r(pat, 6)) for _ in range(3)]
+    assert got == ['g6_e2_1.wav', 'g6_e2_2.wav', 'g6_e2_3.wav']
+
+
+def test_replay_wraps_around_after_last_file(tmp_path):
+    """파일 수를 넘기면 처음으로 돌아온다. 나머지 연산을 빼면 여기서 IndexError 가 난다."""
+    pat = _make_wavs(str(tmp_path), ['g6_e2_1.wav', 'g6_e2_2.wav'])
+    r = _resolver()
+    got = [os.path.basename(r(pat, 6)) for _ in range(5)]
+    assert got == ['g6_e2_1.wav', 'g6_e2_2.wav'] * 2 + ['g6_e2_1.wav']
+
+
+def test_replay_counter_is_per_string_not_shared(tmp_path):
+    """
+    줄마다 카운터가 따로 돈다.
+
+    키를 원본 패턴으로 잡으면 4줄이 카운터 하나를 공유해, 줄을 옮길 때마다
+    회차가 건너뛰어진다. 그때 이 테스트가 깨진다.
+    """
+    pat = _make_wavs(str(tmp_path), ['g6_e2_1.wav', 'g6_e2_2.wav',
+                                     'g5_a2_1.wav', 'g5_a2_2.wav'])
+    r = _resolver()
+    assert os.path.basename(r(pat, 6)) == 'g6_e2_1.wav'
+    assert os.path.basename(r(pat, 5)) == 'g5_a2_1.wav'   # 6번이 먼저 돌았어도 1번째
+    assert os.path.basename(r(pat, 6)) == 'g6_e2_2.wav'
+    assert os.path.basename(r(pat, 5)) == 'g5_a2_2.wav'
+
+
+def test_replay_without_wildcard_is_returned_as_is(tmp_path):
+    """와일드카드가 없으면 glob 하지 않는다. 파일이 없어도 그대로 돌려준다."""
+    r = _resolver()
+    plain = str(tmp_path / 'g{string_number}_only.wav')
+    assert r(plain, 2) == str(tmp_path / 'g2_only.wav')
+
+
+def test_replay_raises_when_pattern_matches_nothing(tmp_path):
+    """
+    맞는 파일이 없으면 던진다.
+
+    조용히 빈 값을 돌려주면 read_wav 가 엉뚱한 예외를 내고, 로그에 원인이 안 남는다.
+    """
+    import pytest
+    r = _resolver()
+    with pytest.raises(FileNotFoundError):
+        r(str(tmp_path / 'g{string_number}_*.wav'), 6)
