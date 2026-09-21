@@ -357,8 +357,12 @@ class RobotController(Node):
         # 팔은 직전 동작이 남긴 자리에 있고, 페그 조절 직후면 헤드스톡 쪽이다.
         # 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다. pick_return 이
         # 반대 방향에 같은 경유를 쓴다(성현, PR #38) — 이쪽만 비어 있었다 (#34 후속)
-        MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol)
+        MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol,
+                   route=self.points.route(), logger=self.get_logger())
         self._holding_pick = True
+        # 경유지를 지나며 팔 모양을 그 쪽으로 맞췄다면 거기 서 있는 셈이다
+        if sol is not None:
+            self._side = side
 
     def _release_pick(self, side=None):
         """
@@ -388,7 +392,8 @@ class RobotController(Node):
                 f"[dry_run] 피크 반환 {holder.task}"
                 + (f" (팔 모양 sol {sol} — 경유지 생략)" if sol is not None else ""))
         else:
-            MP.pick_return(holder, self.points.motion, via=via, sol=sol)
+            MP.pick_return(holder, self.points.motion, via=via, sol=sol,
+                           route=self.points.route(), logger=self.get_logger())
         self._holding_pick = False
         # 그 쪽 해로 서서 반환했으면 손목을 뒤집을 일이 없다. 경유지를 안 탄다 (#56)
         self._side = side if sol is not None else None

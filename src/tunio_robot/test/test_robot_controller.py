@@ -17,6 +17,7 @@ from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
 from tunio_robot import motion_primitives as MP
 from tunio_robot.robot_controller import RobotController
 from tunio_robot.teach_points import Pose
+from tunio_robot.teach_points import Route as TPRoute
 import yaml
 
 CONFIG = os.path.join(os.path.dirname(__file__), "..", "config", "teach_points.yaml")
@@ -201,9 +202,12 @@ def test_페그_조절_전에_피크를_반환하고_발현하면_다시_집는�
 def _fake_node(holding, dry_run=False, side="left"):
     holder = Pose("pick.holder", True, task=[1.0, 2.0, 3.0, 0.0, 0.0, 0.0], tcp="GripperDA_v1")
     standby = Pose("frames.standby", True, joints=[0.0] * 6)
+    # 거치대 팔 모양을 바꿀 때 지나는 J1=90 경유지 (#58). 실물과 같은 값이다
+    route = TPRoute("routes.transit", [90.0, 0.0, 0.0, 0.0, 0.0, None], True)
     points = SimpleNamespace(
         pick_holder=lambda: holder,
         frame=lambda name: standby,
+        route=lambda: route,
         motion={},
     )
     return SimpleNamespace(
