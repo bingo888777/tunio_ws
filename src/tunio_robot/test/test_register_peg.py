@@ -16,7 +16,7 @@ HANDLE = {
     "measured": True, "requires_prealign": True,
     "thickness_mm": 19.6, "length_mm": 32.8, "empty_mm": 13.0,
     "probe_preset": "close", "insert_force_n": 3.0, "contact_force_n": 2.0,
-    "arrive_tol_mm": 2.0, "insert_timeout_sec": 5.0,
+    "arrive_tol_mm": 2.0, "insert_timeout_sec": 5.0, "search_mm": 25.0,
     "thresholds_mm": {"empty_below": 16.3, "dead_above": 26.2},
 }
 MOTION = {"peg_joint": 6, "approach_mm": 100.0,
@@ -240,3 +240,22 @@ def test_허공에서는_막혔다고_하지_않는다(spy):
     """이게 2026-09-21 실물 증상이다. 안 움직인 채로 '막혔다' 고 했다."""
     spy.api.blocked = False
     MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))       # 예외가 안 난다
+
+
+def test_먼_구간은_위치_제어로_간다(spy):
+    """
+    힘 제어는 접촉 탐색용이다. 3N 으로 100mm 를 가면 느리기만 하고 얻는 게 없다.
+
+    손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이라, 거기까지는 그냥 간다.
+    """
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    moves = [e for e in spy if e[0] == "movel"]
+    assert moves, "위치 제어 구간이 없다"
+    # 첫 movel 이 페그에서 search_mm 만큼 뒤여야 한다 (접근점 100mm 가 아니라)
+    y = moves[0][1][1]
+    assert abs(abs(y - PEG6[1]) - HANDLE["search_mm"]) < 1.0
+
+
+def test_탐색_구간이_접근_거리보다_짧다():
+    """같거나 길면 위치 제어 구간이 없어져 처음부터 힘 제어로 기어간다."""
+    assert HANDLE["search_mm"] < MOTION["approach_mm"]

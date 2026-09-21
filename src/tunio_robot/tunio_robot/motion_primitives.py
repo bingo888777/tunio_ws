@@ -576,7 +576,11 @@ def _cond_met(ret):
 
 def _insert_force_controlled(pose, motion, handle, logger=None):
     """
-    접근점에서 페그까지 **힘 상한을 정해 놓고** 들어간다 (이슈 #31).
+    페그 앞 짧은 구간을 **힘 상한을 정해 놓고** 더듬어 들어간다 (이슈 #31).
+
+    먼 구간(접근점 ~ search_mm)은 위치 제어로 빠르게 간다. 힘 제어는 접촉
+    탐색용이지 이동용이 아니다 — 3N 으로 100mm 를 가면 느리기만 하고, 손잡이와
+    부딪힐 수 있는 건 페그 바로 앞뿐이다.
 
     왜 위치 제어로 나눠 들어가면 안 되나
       위치를 명령하면 로봇은 그 자리까지 **어떻게든 간다.** 막혀 있으면 밀어버린다.
@@ -618,9 +622,17 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     fd = [0.0] * 6
     fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
 
+    # 먼 구간은 위치 제어로 빠르게, 페그 앞 짧은 구간만 힘 제어로 더듬는다.
+    # 힘 제어는 **접촉 탐색용**이지 이동용이 아니다 — 3N 으로 100mm 를 가는 건
+    # 느리기만 하고 얻는 게 없다. 손잡이와 부딪힐 수 있는 건 페그 바로 앞뿐이다.
+    search_mm = float(handle.get("search_mm", 25.0))
+    approach_mm = float(motion.get("approach_mm", 100.0))
+    if search_mm < approach_mm:
+        _movel(TP.backed_off(pose.task, search_mm), motion)   # 여기까지는 그냥 간다
+
     target = pose.task[k]
     start = read_posx()[0][k]
-    need = abs(target - start)                  # 들어가야 할 거리(mm)
+    need = abs(target - start)                  # 남은 거리(mm). 힘 제어로 갈 구간
 
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     t0 = time.monotonic()

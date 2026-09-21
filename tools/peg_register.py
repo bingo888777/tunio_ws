@@ -106,7 +106,8 @@ def main():
     print(f"  열기           open ({points.gripper['presets']['open'].get('width_mm')}mm)")
     print(f"  문턱           빈손 < {handle['thresholds_mm']['empty_below']} "
           f"< 물림 < {handle['thresholds_mm']['dead_above']} < 사점  (mm)")
-    print(f"  진입           힘 제어 — 미는 힘 {handle['insert_force_n']:.1f}N 상한, "
+    print(f"  진입           접근점 → 페그 앞 {handle['search_mm']:.0f}mm 는 위치 제어,\n"
+          f"                 거기서부터 힘 제어 — 미는 힘 {handle['insert_force_n']:.1f}N 상한, "
           f"{handle['contact_force_n']:.1f}N 에 막힘 판정")
     if handle.get("requires_prealign"):
         print("  ⚠️ 세로로 선 손잡이는 미리 손으로 눕혀 둘 것 (열기 38mm 로는 못 지난다)")
