@@ -579,12 +579,18 @@ def register_peg(pose, motion, handle, read_width, logger=None):
                 raise MotionError(
                     f"{pose.name}: 빈손이다 (폭 {width:.1f}mm). 페그를 빗나갔다. "
                     "기타가 밀렸거나 교시 좌표가 어긋났다 (#31)")
-            # 사점 — 열고 나서 돌린다. 문 채로 돌리면 옆힘으로 안전모드가 걸린다
+            # 사점 — 열고, **물러나서** 돌리고, 다시 들어간다.
+            #   · 문 채로 돌리면 옆힘으로 안전모드가 걸린다
+            #   · 페그 앞에서 돌리면 벌어진 손가락이 옆 페그 손잡이를 휘두르며 친다.
+            #     간격이 38mm 인데 이웃 손잡이가 16.4mm 뻗어와 실효 21.6mm 뿐이다.
+            #     접근점(100mm 뒤)까지 빠지면 그 자리는 비어 있다
             _grip("open")
+            _retreat(_rolled(pose, roll), motion)
             delta = [0.0] * 6
             delta[joint - 1] = step
             _movej(delta, turn_motion(motion), relative=True)
             roll += step
+            _movel(_rolled(pose, roll).task, motion)     # 돌린 자세로 다시 들어간다
         raise MotionError(
             f"{pose.name}: {tries}번 시도했는데 계속 사점이다 (마지막 폭 {width:.1f}mm). "
             "손잡이가 걸려 있거나 문턱값이 실물과 안 맞는다 — "

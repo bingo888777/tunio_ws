@@ -137,3 +137,28 @@ def test_문턱_경계():
 def test_폭이_없으면_판정_안_한다():
     with pytest.raises(GW.WidthError):
         GW.classify(None, HANDLE["thresholds_mm"])
+
+
+def test_돌리기_전에_물러난다(spy):
+    """
+    페그 앞에서 돌리면 벌어진 손가락이 옆 페그 손잡이를 휘두르며 친다.
+
+    간격이 38mm 인데 이웃 손잡이가 16.4mm 뻗어와 실효 21.6mm 뿐이다.
+    접근점까지 빠져서 돌고 다시 들어간다.
+    """
+    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
+    turn = next(i for i, e in enumerate(spy) if e[0] == "movej" and e[2])
+    moves = [e for e in spy[:turn] if e[0] == "movel"]
+    # 회전 직전 이동이 페그(Y -75.38)가 아니라 물러난 지점이어야 한다
+    assert abs(moves[-1][1][1] - PEG6[1]) > 50.0
+    # 회전 뒤에는 다시 들어간다
+    after = [e for e in spy[turn:] if e[0] == "movel"]
+    assert abs(after[0][1][1] - PEG6[1]) < 1e-6
+
+
+def test_다시_들어갈_때_돌린_자세다(spy):
+    """돌려놓고 원래 자세로 들어가면 돌린 의미가 없다."""
+    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
+    turn = next(i for i, e in enumerate(spy) if e[0] == "movej" and e[2])
+    entry = next(e for e in spy[turn:] if e[0] == "movel")
+    assert entry[1][5] == pytest.approx(PEG6[5] + HANDLE["retry_roll_deg"])
