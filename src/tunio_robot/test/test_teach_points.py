@@ -319,3 +319,31 @@ def test_스트로크_방향이_없으면_1로_본다():
     d = _taught()
     del d["pluck"][6]["stroke_sign"]
     assert tp.TeachPoints(d).pluck(6).stroke_sign == 1
+
+
+# ---------------------------------------------------------- 진입 파라미터 (#51)
+# 2026-09-21 6번 실기. 밀기 전에도 툴 무게·자세 몫으로 이만큼 읽힌다
+INSERT_BASELINE_N = 1.2
+
+
+def test_미는_힘이_탐색_거리를_감당한다():
+    """
+    갈 수 있는 거리보다 멀리 가라고 하면 **항상 타임아웃**이다. 첫 페그에서 멈춘다.
+
+    순응 스프링이 밀린 만큼 되민다. 미는 힘은 상한이 걸려 있으므로, 스프링 반력이
+    그 상한에 닿는 지점에서 팔이 선다. 그 거리가 reach 다. 전에 search_mm 25.0 에
+    insert_force_n 3.0 이라 9mm 밖에 못 가면서 25mm 를 가라고 하고 있었다.
+    """
+    d = _data()
+    handle, motion = d["peg_handle"], d["motion"]
+    k = motion["compliance_stx"][1] / 1000.0        # 삽입축(Y) N/m -> N/mm
+    reach = (handle["insert_force_n"] - INSERT_BASELINE_N) / k
+    assert reach >= handle["search_mm"], (
+        f"{handle['insert_force_n']}N 으로는 {reach:.0f}mm 까지만 간다 — "
+        f"search_mm {handle['search_mm']} 를 못 채운다 (#51)")
+
+
+def test_막힘_문턱이_미는_힘보다_낮다():
+    """상한 이상이면 막혀도 영영 안 걸린다. 그대로 20초를 버티다 타임아웃된다."""
+    handle = _data()["peg_handle"]
+    assert handle["contact_force_n"] < handle["insert_force_n"]
