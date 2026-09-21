@@ -10,7 +10,12 @@
     sample_rate: 44100          # 장치가 안 받으면 기본값 -> 48000 -> 44100 순으로 재시도
     skip_head_sec: 0.3          # onset 직후 과도음 제외
     min_db: -50.0               # 소리 부족 판정 (이것만으로는 방 소음을 못 거른다)
-    min_prominence_db: 16.0     # 유효 측정 판정. 실측 근거는 pitch.py 주석
+    min_prominence_db: 20.0     # 유효 측정 판정. 2026-09-19 로봇 구동음 실측으로
+                                # 16 -> 20 으로 올렸다 (CLAUDE.md 8절). 16 에서는
+                                # 발현이 없는데도 구동음 1194구간 중 35개(2.9%)가
+                                # 유효 측정으로 통과했고, 그 값이 목표에서
+                                # -133 ~ +92센트 벗어나 있었다. 근거는
+                                # docs/로봇구동음_측정결과.md 와 pitch.py 주석
     max_agreement_cents: 12.0   # 안정화 판정. 겹친 창들이 이 폭 안으로 모여야 채택
     search_semitones: 2.0       # 목표 +-2반음 (옥타브 오인 차단, CLAUDE.md 3.3)
     record_sec_high: 1.5        # 고음현 녹음 길이. 실측 스윕 근거는 audio_analyzer.py 주석
