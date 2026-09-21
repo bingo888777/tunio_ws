@@ -37,7 +37,6 @@ TODO(정묵·성현):
   - pluck_tcp — 발현·거치대 좌표를 읽은 TCP 이름을 YAML 에 적고,
     pluck_string / pick_up / pick_return 시작 시 ensure_tcp 로 켠다 (이슈 #21, 성현)
 """
-
 import time
 
 from tunio_robot import teach_points as TP
@@ -88,8 +87,11 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
         _gripper = RG2(api, parse_presets(gripper_cfg.get("presets")),
                        settle_sec=gripper_cfg.get("settle_sec", 0.3))
 
-    # 첫 호출 전에 서비스가 보이기를 기다린다. 안 기다리면 첫 호출이 영원히 멈춘다
-    _wait_services(_node, robot_cfg["id"], logger=logger)
+    # 첫 호출 전에 서비스가 보이기를 기다린다. 안 기다리면 첫 호출이 영원히 멈춘다.
+    # 디스커버리가 불안정해(#23) 기본값을 넉넉히 둔다. robot_cfg 로 덮을 수 있다
+    _wait_services(_node, robot_cfg["id"],
+                   timeout_sec=float(robot_cfg.get("service_wait_sec", 30.0)),
+                   logger=logger)
 
     # 배포용이라 펜던트 설정에 기대지 않는다. 항상 설정하고, 읽어서 확인한다.
     # 순서는 tool 먼저다 — 무게 설정이 먼저 들어가야 TCP 보정이 제 값을 쓴다
@@ -111,9 +113,9 @@ _WAIT_SERVICES = [
 ]
 
 
-def _wait_services(node, robot_id, timeout_sec=10.0, logger=None):
+def _wait_services(node, robot_id, timeout_sec=30.0, logger=None, report=print):
     """
-    DSR_ROBOT2 의 첫 호출 전에 서비스 디스커버리를 기다린다 (이슈 #21).
+    DSR_ROBOT2 의 첫 호출 전에 서비스 디스커버리를 기다린다 (이슈 #21·#23).
 
     DSR_ROBOT2 는 기다리지 않고 바로 부른다. 브링업 직후처럼 아직 디스커버리가
     안 끝난 시점에 부르면 spin_until_future_complete 에 타임아웃이 없어 **영원히
@@ -121,17 +123,38 @@ def _wait_services(node, robot_id, timeout_sec=10.0, logger=None):
 
     반드시 **DSR 이 쓰는 그 노드**로 기다려야 한다. 다른 노드로 기다리면 그 노드만
     디스커버리가 끝나고 DSR 노드는 아직이라 똑같이 멈춘다.
+
+    디스커버리가 불안정해서(#23) 조용히 수십 초 막혀 있으면 멈춘 건지 기다리는
+    중인지 구분이 안 된다. 5초마다 지금 몇 개가 보이는지 알려준다.
     """
     import dsr_msgs2.srv as srv
-    for type_name, name in _WAIT_SERVICES:
-        cli = node.create_client(getattr(srv, type_name), name)
-        try:
-            if not cli.wait_for_service(timeout_sec=timeout_sec):
-                raise MotionError(
-                    f"서비스 없음: /{robot_id}/{name} ({timeout_sec}초). "
-                    "브링업이 떠 있는지, ROS_DOMAIN_ID 가 같은지 확인하라 (이슈 #21)")
-        finally:
-            node.destroy_client(cli)
+    pending = [(getattr(srv, t), n) for t, n in _WAIT_SERVICES]
+    t0 = time.monotonic()
+    while pending:
+        still = []
+        for srv_type, name in pending:
+            cli = node.create_client(srv_type, name)
+            try:
+                if not cli.wait_for_service(timeout_sec=0.5):
+                    still.append((srv_type, name))
+            finally:
+                node.destroy_client(cli)
+        pending = still
+        if not pending:
+            break
+        elapsed = time.monotonic() - t0
+        if elapsed >= timeout_sec:
+            raise MotionError(
+                f"서비스가 안 보인다 ({timeout_sec:.0f}초): "
+                + ", ".join(f"/{robot_id}/{n}" for _, n in pending)
+                + ". 브링업이 떠 있는지, ROS_DOMAIN_ID·RMW·ROS_DISCOVERY_SERVER 가"
+                " 브링업 터미널과 같은지 확인하라. 디스커버리 자체가 불안정할 수도"
+                " 있다 — tools/tcp_diag.py 로 더 길게 볼 수 있다 (이슈 #21, #23)")
+        if report and int(elapsed) % 5 < 1:
+            report(f"  서비스 대기 {elapsed:.0f}/{timeout_sec:.0f}초 — "
+                   f"{len(_WAIT_SERVICES) - len(pending)}/{len(_WAIT_SERVICES)}개 보임, "
+                   f"전체 {len(node.get_service_names_and_types())}개")
+        time.sleep(1.0)
     if logger:
         logger.info(f"서비스 디스커버리 확인 ({len(_WAIT_SERVICES)}개)")
     time.sleep(1.0)   # DSR_ROBOT2 가 자기 클라이언트를 만들 여유
@@ -333,6 +356,8 @@ def pluck_string(pose, motion, standby=None):
     pose    — 발현 접촉 자세. 작업 좌표(**pose.task**, YAML 의 x: Base 절대 [X,Y,Z,A,B,C],
               교시 TCP 기준)여야 한다. 접촉점 하나만 교시하고 위 대기점은 여기서 계산한다.
               관절각(j)만 있으면 "위에서 접근"을 만들 수 없어 거부한다.
+              pose.stroke_sign (+1/-1, 없으면 +1) — 이 줄의 스트로크 방향. 6·5번(저음 쪽)과
+              2·1번(고음 쪽)은 빈 공간이 반대라 훑는 방향이 반대다 (2026-09-20 실기 확인).
     motion  — teach_points.yaml 의 motion 절. 아래 pluck_* 키가 없으면 기본값을 쓴다
               (기본값은 pluck_test.py 에서 검증한 값).
     standby — 기타 위 대기 자세(Pose, joints). 주면 발현 전후에 들른다.
@@ -349,6 +374,10 @@ def pluck_string(pose, motion, standby=None):
 
     up_mm = float(motion.get("pluck_up_mm", 20.0))
     stroke = list(motion.get("pluck_stroke_tool", [-8.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    sign = getattr(pose, "stroke_sign", 1) or 1
+    if sign not in (1, -1):
+        raise MotionError(f"{pose.name}: stroke_sign 은 +1 또는 -1 이어야 한다 (지금 {sign!r})")
+    stroke = [float(v) * sign for v in stroke[:3]] + [float(v) for v in stroke[3:]]
     retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
     v_app, a_app = motion.get("pluck_vel_approach", 100), motion.get("pluck_acc_approach", 100)
     v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
@@ -370,6 +399,72 @@ def pluck_string(pose, motion, standby=None):
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
     if standby is not None:
         _movej(standby.joints, motion)                  # 기타 위 대기
+
+
+def _pick_points(holder, motion):
+    """거치대 접촉점과 그 위 대기점(Base +Z pick_up_mm). holder 는 작업 좌표(x)여야 한다."""
+    x = getattr(holder, "task", None)
+    if not x or len(x) != 6:
+        raise MotionError(f"{holder.name}: 거치대 자세는 x(Base posx 6개)로 적어야 한다. "
+                          "위에서 내려가려면 작업 좌표가 필요하다")
+    up_mm = float(motion.get("pick_up_mm", 50.0))
+    contact = list(x)
+    above = list(x)
+    above[2] += up_mm
+    return contact, above
+
+
+def pick_up(holder, motion, standby=None):
+    """
+    거치대에서 피크를 집는다 (성현 2026-09-20).
+
+    순서: 그리퍼 열기 → 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 닫기(프리셋)
+          → 거치대 위 → (standby 가 있으면) 기타 위 대기 자세
+
+    holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
+              없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
+              폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
+    파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
+
+    RG2.select() 의 settle_sec(기본 0.3초)만으로는 부족해 집자마자 들어 올리는 동작이
+    물리적으로 안 끝난 그리퍼를 밀고 올라갔다 (2026-09-20 실기). 그래서 집은 뒤
+    motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
+    """
+    _require_api()
+    contact, above = _pick_points(holder, motion)
+    preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
+    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
+    settle_sec = float(motion.get("pick_settle_sec", 1.0))
+
+    _release()                                          # 열고 간다
+    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    _movel_base(contact, v_fine, a_fine)                # 내려가서
+    _grip(preset)                                       # 집는다
+    time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
+    _movel_base(above, v_app, a_app)                    # 들어 올린다
+    if standby is not None:
+        _movej(standby.joints, motion)                  # 기타 위 대기
+
+
+def pick_return(holder, motion, home=None):
+    """
+    피크를 거치대에 돌려놓는다.
+
+    순서: 거치대 위 pick_up_mm → 거치대(느리게) → 그리퍼 열기 → 거치대 위
+          → (home 이 있으면) 홈 자세
+    """
+    _require_api()
+    contact, above = _pick_points(holder, motion)
+    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
+
+    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    _movel_base(contact, v_fine, a_fine)                # 내려가서
+    _release()                                          # 놓는다
+    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다
+    if home is not None:
+        _movej(home.joints, motion)                     # 홈
 
 
 def _retract_depth_mm(delta):
