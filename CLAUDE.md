@@ -405,7 +405,15 @@ ros2 launch tunio_bringup real_all.launch.py dry_run:=false gripper:=rg2
 성능의 근거가 되지 않는다.** 3 은 그 파일을 지정하지 않으므로 실측 전에는
 조절 단계에서 PHASE_ERROR 로 멈춘다.
 
-`colcon test` 로 돌린다. 5개 패키지 전부 pytest 로 수집된다.
+`colcon test` 로 돌린다. **테스트가 있는 패키지는 셋이다** — `tunio_server`(4개 파일)
+`tunio_robot`(10개) `tunio_audio`(2개). 합쳐서 231개가 돈다.
+
+- ⚠️ **`tunio_bringup` 은 `1 package failed` 로 빨갛게 찍힌다. 깨진 게 아니다.**
+  `test/` 디렉터리가 없어서 pytest 가 `Ran 0 tests` 로 끝내고 exit code 5 를 낸다.
+  `tunio_interfaces` 도 `test/` 가 없지만 이쪽은 조용히 넘어간다.
+  **231 tests, 0 failures 가 나왔으면 통과한 것이다.** 아래 tunio_server 사건이
+  "테스트 0개가 통과처럼 보인" 경우라면, 이건 그 반대로 **통과가 실패처럼 보이는**
+  경우다. 처음 돌리는 사람이 여기서 멈추지 않게 적어 둔다.
 
 ```bash
 colcon test --packages-select tunio_server && colcon test-result --all
