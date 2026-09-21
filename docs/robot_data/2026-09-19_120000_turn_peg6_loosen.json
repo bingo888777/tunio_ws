@@ -1,0 +1,106 @@
+{
+  "tool": "peg_turn_check",
+  "peg": 6,
+  "side": "left",
+  "direction": "loosen",
+  "gripped": true,
+  "preset": "peg",
+  "angle_deg": 30.0,
+  "step_deg": 2.5,
+  "joint": 6,
+  "turn_sign": -1,
+  "sol": 7,
+  "turn_vel": 2.0,
+  "travel_vel": 5.0,
+  "approach_mm": 100.0,
+  "before": {
+    "joints": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      26.48
+    ],
+    "torque": [
+      null,
+      null,
+      null,
+      null,
+      null,
+      0.07
+    ]
+  },
+  "steps": [
+    {
+      "commanded_deg": 2.5,
+      "moved_deg": 2.5,
+      "torque": -0.3
+    },
+    {
+      "commanded_deg": 5.0,
+      "moved_deg": 5.0,
+      "torque": -0.35
+    },
+    {
+      "commanded_deg": 7.5,
+      "moved_deg": 7.51,
+      "torque": -0.36
+    },
+    {
+      "commanded_deg": 10.0,
+      "moved_deg": 10.0,
+      "torque": -0.4
+    },
+    {
+      "commanded_deg": 12.5,
+      "moved_deg": 12.51,
+      "torque": -0.36
+    },
+    {
+      "commanded_deg": 15.0,
+      "moved_deg": 15.0,
+      "torque": -0.4
+    },
+    {
+      "commanded_deg": 17.5,
+      "moved_deg": 17.5,
+      "torque": -0.41
+    },
+    {
+      "commanded_deg": 20.0,
+      "moved_deg": 20.01,
+      "torque": -0.38
+    },
+    {
+      "commanded_deg": 22.5,
+      "moved_deg": 22.51,
+      "torque": -0.36
+    },
+    {
+      "commanded_deg": 25.0,
+      "moved_deg": 25.0,
+      "torque": -0.35
+    },
+    {
+      "commanded_deg": 27.5,
+      "moved_deg": 27.51,
+      "torque": -0.36
+    },
+    {
+      "commanded_deg": 30.0,
+      "moved_deg": 30.01,
+      "torque": -0.38
+    }
+  ],
+  "heard": "되돌리는(조이는) 구간에서 음이 올라갔다 — turn_sign -1 확인",
+  "summary": {
+    "mean": -0.3675,
+    "spread": 0.10999999999999999,
+    "step_from_rest": -0.4375,
+    "slope": 0.010000000000000009
+  },
+  "saved_at": "2026-09-19 (터미널 출력에서 손으로 옮김)",
+  "transcribed_by_hand": true,
+  "note": "도구가 로그를 남기기 전 회차. 관절값·전체 토크 6축은 화면에 안 떠서 없다"
+}
