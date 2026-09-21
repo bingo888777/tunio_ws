@@ -501,10 +501,15 @@ def _movel_tool_rel(delta, vel, acc, radius=0):
                      ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius)
 
 
-def read_force():
-    """툴에 걸리는 외력 [Fx,Fy,Fz,Mx,My,Mz] (Tool 기준). 로그·힘 제어 파라미터 산정용."""
+def read_force(ref=None):
+    """
+    툴에 걸리는 외력 [Fx,Fy,Fz,Mx,My,Mz]. ref 를 안 주면 Tool 기준.
+
+    페그 진입 감시는 BASE 기준으로 본다 — 접근축이 base ±Y 라 그 축 성분만
+    보면 되기 때문이다.
+    """
     api = _require_api()
-    return api.get_tool_force(api.DR_TOOL)
+    return api.get_tool_force(api.DR_TOOL if ref is None else ref)
 
 
 def read_posx():
@@ -589,6 +594,15 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     끝나는 조건은 둘
       · 목표 깊이 도달 — 손잡이를 무사히 지났다. 물면 된다
       · 힘이 상한 — 뭔가에 막혔다. 이미 안 밀고 버티는 중이라 기타는 안 밀린다
+
+    왜 check_*_condition 을 안 쓰나
+      이 드라이버의 조건 검사에 두 번 속았다 (2026-09-21).
+        1. 반환이 `0 if success else -1` 이라 **진릿값으로 쓰면 뒤집힌다**
+        2. `check_force_condition(max=2.0)` 은 "2N 을 넘었다" 가 아니라
+           **"힘이 2N 이하다"** 는 뜻이다. 허공에서 늘 참이라, 로봇이 가만히
+           서 있는 채로 "막혔다" 고 보고했다
+      그래서 위치와 힘을 **직접 읽어 우리가 판단한다.** 줄 수는 비슷하고 무슨
+      일이 일어나는지가 화면에 보인다. logger 를 주면 1초마다 진행과 힘을 찍는다.
     """
     api = _require_api()
     axis = TP.approach_axis(pose.task)          # 접근축(툴 Z)의 BASE 단위벡터
@@ -605,32 +619,35 @@ def _insert_force_controlled(pose, motion, handle, logger=None):
     fd[k] = push_n * (1.0 if axis[k] > 0 else -1.0)
 
     target = pose.task[k]
-    dr_axis = (api.DR_AXIS_X, api.DR_AXIS_Y, api.DR_AXIS_Z)[k]
-    if axis[k] > 0:                             # 좌표가 커지는 쪽으로 간다
-        lo, hi = target - tol_mm, api.DR_COND_NONE
-    else:
-        lo, hi = api.DR_COND_NONE, target + tol_mm
+    start = read_posx()[0][k]
+    need = abs(target - start)                  # 들어가야 할 거리(mm)
 
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     t0 = time.monotonic()
+    said = 0.0
     try:
         while True:
-            if _cond_met(api.check_position_condition(
-                    dr_axis, min=lo, max=hi,
-                    ref=api.DR_BASE, mod=api.DR_MV_MOD_ABS)):
+            pos = read_posx()[0][k]
+            f = abs(read_force(api.DR_BASE)[k])
+            gone = (pos - start) * (1.0 if axis[k] > 0 else -1.0)
+
+            if logger and time.monotonic() - said > 1.0:
+                logger.info(f"진입 {gone:+.1f}/{need:.1f}mm, {'XYZ'[k]} 축 힘 {f:.1f}N")
+                said = time.monotonic()
+
+            if abs(pos - target) <= tol_mm or gone >= need:
                 if logger:
-                    logger.info(f"{pose.name} 진입 완료 ({'XYZ'[k]} 축 목표 도달)")
+                    logger.info(f"{pose.name} 진입 완료 ({gone:+.1f}mm, 힘 {f:.1f}N)")
                 return
-            if _cond_met(api.check_force_condition(
-                    dr_axis, max=limit_n, ref=api.DR_BASE)):
+            if f >= limit_n:
                 raise MotionError(
-                    f"{pose.name}: 들어가다 막혔다 ({'XYZ'[k]} 축 {limit_n:.1f}N). "
-                    "손잡이가 서 있어 그리퍼가 못 들어간다. 그 페그를 손으로 눕힌 뒤 "
-                    "다시 시도하라 (#31)")
+                    f"{pose.name}: {gone:+.1f}mm 들어가다 막혔다 ({'XYZ'[k]} 축 {f:.1f}N, "
+                    f"문턱 {limit_n:.1f}N). 손잡이가 서 있어 그리퍼가 못 들어간다. "
+                    "그 페그를 손으로 눕힌 뒤 다시 시도하라 (#31)")
             if time.monotonic() - t0 > timeout:
                 raise MotionError(
-                    f"{pose.name}: {timeout:.0f}초 안에 목표에도 못 닿고 막히지도 "
-                    f"않았다. 미는 힘 {push_n:.1f}N 이 너무 약해 못 가고 있을 수 있다")
+                    f"{pose.name}: {timeout:.0f}초 동안 {gone:+.1f}mm 밖에 못 갔다 "
+                    f"(힘 {f:.1f}N). 미는 힘 {push_n:.1f}N 이 너무 약할 수 있다")
             time.sleep(0.05)
     finally:
         api.release_force()                     # 힘 제어는 반드시 푼다

@@ -31,6 +31,12 @@ class _Peg:
         self.task = list(PEG6)
 
 
+class _Log(list):
+    """호출 기록 + 가짜 API 를 같이 들고 다닌다 (list 에는 속성을 못 붙인다)."""
+
+    api = None
+
+
 class _Api:
     """순응제어·힘 제어 호출을 기록하는 가짜 두산 API."""
 
@@ -41,7 +47,7 @@ class _Api:
     def __init__(self, blocked=False):
         self.compliance = []
         self.force = []
-        self.blocked = blocked          # True 면 막혀서 목표에 영영 못 닿는다
+        self.blocked = blocked          # True 면 막혀서 못 들어간다
 
     def task_compliance_ctrl(self, stx):
         self.compliance.append(("on", list(stx)))
@@ -60,21 +66,6 @@ class _Api:
         self.force.append(("release",))
         return 0
 
-    # **0 이 조건 충족, -1 이 미충족이다.** 두산 래퍼가 그렇게 돌려준다.
-    # 진릿값으로 쓰면 뒤집힌다 — 2026-09-21 실물에서 그래서 진입을 안 했다
-    def check_position_condition(self, axis, min=None, max=None,   # noqa: A002
-                                 ref=None, mod=None):
-        return -1 if self.blocked else 0        # 안 막혔으면 도달
-
-    def check_force_condition(self, axis, max=None, min=None, ref=None):  # noqa: A002
-        return 0 if self.blocked else -1
-
-
-class _Log(list):
-    """호출 기록 + 가짜 API 를 같이 들고 다닌다 (list 에는 속성을 못 붙인다)."""
-
-    api = None
-
 
 @pytest.fixture
 def spy(monkeypatch):
@@ -84,6 +75,17 @@ def spy(monkeypatch):
     monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
     monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: log.append(("movejx", list(t))))
     monkeypatch.setattr(MP, "_movel", lambda t, m: log.append(("movel", list(t))))
+
+    # 막혔으면 물러난 자리에 머무르고 힘이 오른다. 아니면 목표까지 들어간다
+    def posx(ref=None):
+        y = PEG6[1] - 100.0 if api.blocked else PEG6[1]
+        return ([PEG6[0], y, PEG6[2], 0, 0, 0], 7)
+
+    def force(ref=None):
+        return [0.0, 3.0 if api.blocked else 0.2, 0.0, 0, 0, 0]
+
+    monkeypatch.setattr(MP, "read_posx", posx)
+    monkeypatch.setattr(MP, "read_force", force)
     log.api = api
     return log
 
@@ -220,14 +222,21 @@ def test_폭이_없으면_판정_안_한다():
         GW.classify(None, HANDLE["thresholds_mm"])
 
 
-def test_조건_반환은_0이_충족이다():
+def test_힘_판정은_값을_직접_읽는다(spy):
     """
-    두산 래퍼가 `0 if success else -1` 로 돌려준다.
+    check_force_condition 을 안 쓴다. 두 번 속았다 (2026-09-21).
 
-    파이썬에서 0 은 거짓, -1 은 참이라 진릿값으로 쓰면 정확히 뒤집힌다.
-    2026-09-21 실물에서 진입이 곧바로 "도달" 로 끝나 로봇이 페그로 들어가지도
-    않고 그리퍼만 여닫았다. 그 회귀를 막는다.
+      1. 반환이 `0 if success else -1` 이라 진릿값으로 쓰면 뒤집힌다
+      2. `max=2.0` 은 "2N 을 넘었다" 가 아니라 **"힘이 2N 이하다"** 는 뜻이다.
+         허공에서 늘 참이라, 로봇이 가만히 서 있는 채로 "막혔다" 고 보고했다
+
+    그래서 get_tool_force 값을 직접 읽어 문턱과 견준다.
     """
-    assert MP._cond_met(0) is True
-    assert MP._cond_met(-1) is False
-    assert bool(0) is False and bool(-1) is True     # 진릿값은 반대다
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))       # 힘 0.2N -> 통과
+    assert not hasattr(spy.api, "condition_calls")
+
+
+def test_허공에서는_막혔다고_하지_않는다(spy):
+    """이게 2026-09-21 실물 증상이다. 안 움직인 채로 '막혔다' 고 했다."""
+    spy.api.blocked = False
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))       # 예외가 안 난다
