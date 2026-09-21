@@ -64,6 +64,9 @@ def main():
                     help="깊이를 바꿔 시험한다. 접근축 좌표를 이 값으로 덮어쓴다")
     ap.add_argument("--sol", type=int, default=None, help="팔 자세(역기구학 해)")
     ap.add_argument("--preset", default="peg", help="쓸 그리퍼 프리셋 이름")
+    ap.add_argument("--roll", type=float, default=0.0,
+                    help="손목을 툴 Z 둘레로 이만큼 더 돌려서 간다(도). "
+                         "옆 페그 간섭을 최악 각도로 보려면 90 을 준다 (#31)")
     ap.add_argument("--jog", action="store_true",
                     help="경유지를 안 쓰고 접근점까지 사람이 조그로 옮긴다")
     ap.add_argument("--dry-run", action="store_true", help="좌표만 계산하고 안 움직인다")
@@ -80,6 +83,12 @@ def main():
     if args.approach is None:
         args.approach = points.motion.get("approach_mm", 100.0)
     target = list(peg.task)
+    if args.roll:
+        # 툴 Z 둘레 회전이라 손끝 위치도 접근축도 안 바뀐다. 손가락 방향만 돈다.
+        # 벌어진 손가락이 옆 페그(간격 38mm)를 치는지 보려면 이걸 돌려 봐야 한다
+        from tunio_robot.kinematics import roll_about_tool_z
+        target = roll_about_tool_z(target, args.roll)
+        print(f"손목을 {args.roll:+.0f}도 돌려서 간다 (C {peg.task[5]:.2f} -> {target[5]:.2f})")
     if args.depth is not None:
         k = depth_axis(TP, target)
         print(f"깊이 축은 {'XYZ'[k]} 다. {target[k]:.2f} → {args.depth:.2f} 로 바꾼다")
@@ -103,6 +112,7 @@ def main():
     print(f"  팔 자세(sol)  {sol if sol is not None else '미지정 — 현재 자세 유지'}")
     print(f"  프리셋        {args.preset} "
           f"({points.gripper['presets'][args.preset].get('width_mm')}mm)")
+    print(f"  손목 회전     {args.roll:+.0f}도")
 
     if args.dry_run:
         print("\n--dry-run 이라 여기서 멈춘다")
