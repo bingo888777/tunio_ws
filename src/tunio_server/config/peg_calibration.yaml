@@ -24,6 +24,11 @@
       measured_at: ''       # 실측 날짜 'YYYY-MM-DD'. 줄을 갈면 다시 재야 한다
                             # cents_per_deg 는 2026-09-19 실측(정정인). 나머지 3칸이
                             # 차면 이 날짜를 채우고 measured 를 true 로 올린다
+                            #
+                            # 2026-09-21 현재 — 6번은 네 칸이 다 찼다. 5·2·1 은
+                            # min_effective_deg·backlash_release_cents 가 남았고
+                            # 이슈 #44(sol) 로 측정이 막혀 있었다가 PR #41 로 풀렸다.
+                            # 세 줄이 차면 measured 를 올린다 (이슈 #8).
 
       # 줄별 실측값. 넷 다 0 이 아니어야 measured: true 로 올릴 수 있다.
       #
@@ -32,6 +37,21 @@
       # 그 구간에서만 돌기 때문이고, peg_angle() 이 |오차| / cents_per_deg 이라
       # 작게 잡으면 각도를 크게 계산해 과조정한다. 애매하면 큰 쪽으로 잡는다.
       # 나머지 세 칸은 페그 교시가 끝나야 잴 수 있다 (이슈 #8, #10).
+      #
+      # ⚠️ backlash_release_cents 를 6번의 30 에서 베끼지 말 것.
+      #   백래시는 센트가 아니라 **각도**로 생긴다 — 그리퍼를 꽉 물지 않아 생기는
+      #   기하학적 여유다(CLAUDE.md 3.6). 각도가 줄마다 같다면 센트는 cents_per_deg
+      #   에 비례해 달라진다. 6번 10.4도를 환산하면 6번 23.1 / 2번 11.1 / 5번 9.0 /
+      #   1번 5.2센트다. 1번에 30 을 쓰면 5.2센트짜리 유격을 6배 가까이 과회전한다.
+      #   → 줄마다 각도를 재고 그 줄의 cents_per_deg 로 환산해서 넣는다.
+      #   이 '각도 기준' 자체가 아직 가설이다. 5·2·1 이 10.4도 근처로 나오는지가
+      #   확인 지점이다 (PR #43 코멘트).
+      #
+      # ⚠️ max_angle_deg 60 은 실측이 아니라 안전 상한 합의다 (2026-09-21, 이슈 #8).
+      #   30 이면 1번 E4 의 한 회차 처리 오차가 8.3센트로 허용 센트 10보다 작아
+      #   음이 높을 때 항상 잘린다. 60 이면 23.3센트다. 로봇 쪽 하드 리밋
+      #   (teach_points.yaml 의 motion.max_angle_deg: 90) 안에도 들어간다.
+      #   실기에서 좁으면 그 자리에서 올린다.
       #   cents_per_deg          페그 1도당 음정 변화량(센트). 회전량 = |오차| / 이 값
       #   min_effective_deg      이보다 작게 돌리면 페그가 실제로 안 움직이는 각도.
       #                          없으면 오차가 작을 때 0에 가까운 각도를 반복 전송하며
@@ -43,21 +63,22 @@
       #                          백래시 양보다 넉넉해야 한다
       s6:   # 6번 E2 82.4069Hz
         cents_per_deg: 2.219
-        min_effective_deg: 0.0
-        max_angle_deg: 0.0
-        backlash_release_cents: 0.0
+        min_effective_deg: 2.3        # 2026-09-21 실측 (PR #43). 잡음 한계 기준 —
+                                      # 로봇 발현으로 바꾸면 내려간다
+        max_angle_deg: 60.0           # 안전 상한. 2026-09-21 정동휘 결정, 임시값
+        backlash_release_cents: 30.0  # 실측 유격 23.4센트 + 여유 (PR #43)
       s5:   # 5번 A2 110.0000Hz
         cents_per_deg: 0.865
         min_effective_deg: 0.0
-        max_angle_deg: 0.0
-        backlash_release_cents: 0.0
+        max_angle_deg: 60.0           # 2026-09-21 정동휘 결정, 임시값
+        backlash_release_cents: 0.0   # 미측정 — 6번의 30 을 베끼지 말 것 (아래 주석)
       s2:   # 2번 B3 246.9417Hz
         cents_per_deg: 1.065
         min_effective_deg: 0.0
-        max_angle_deg: 0.0
-        backlash_release_cents: 0.0
+        max_angle_deg: 60.0           # 2026-09-21 정동휘 결정, 임시값
+        backlash_release_cents: 0.0   # 미측정 — 6번의 30 을 베끼지 말 것 (아래 주석)
       s1:   # 1번 E4 329.6276Hz
         cents_per_deg: 0.502
         min_effective_deg: 0.0
-        max_angle_deg: 0.0
-        backlash_release_cents: 0.0
+        max_angle_deg: 60.0           # 2026-09-21 정동휘 결정, 임시값
+        backlash_release_cents: 0.0   # 미측정 — 6번의 30 을 베끼지 말 것 (아래 주석)
