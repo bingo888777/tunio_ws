@@ -17,6 +17,7 @@ TODO(정묵·성현):
 """
 import os
 import threading
+import time
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -28,7 +29,28 @@ from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
 from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
+from tunio_robot import runlog as RL
 from tunio_robot import teach_points as TP
+
+
+def _plain(msg):
+    """
+    ROS 메시지를 json 이 삼킬 수 있는 형태로 바꾼다.
+
+    string_numbers 같은 칸이 array.array 로 와서 그대로 넣으면 json.dump 가
+    TypeError 를 낸다. runlog.write 는 OSError 만 잡으므로 여기서 걸러야 한다.
+    """
+    out = {}
+    for f in getattr(msg, "get_fields_and_field_types", lambda: {})():
+        v = getattr(msg, f, None)
+        if isinstance(v, (bool, int, float, str)) or v is None:
+            out[f] = v
+        else:
+            try:
+                out[f] = [float(x) for x in v]
+            except (TypeError, ValueError):
+                out[f] = repr(v)
+    return out
 
 
 class RobotController(Node):
@@ -66,6 +88,19 @@ class RobotController(Node):
         # **이동·접근에만 걸린다.** 페그 회전·발현 스트로크·접촉 직전 구간은
         # 배율을 안 탄다 (motion_primitives._fast 의 주석).
         self.declare_parameter("speed_scale", 0.0)
+        # 실행 기록. 도구(peg_register 등)는 docs/robot_data/ 에 원자료를 남기는데
+        # **노드 경로는 아무것도 안 남겼다.** 2026-09-21 통합 실기가 끝난 뒤 볼 수
+        # 있는 게 peg_state.json 의 각도 두 줄뿐이었다 — goal 이 몇 초 걸렸는지,
+        # 어디서 실패했는지가 통째로 없다. 서버 타임아웃을 정하려면 그 시간이 필요하다.
+        # 빈 문자열이면 안 남긴다.
+        #
+        # 기본값이 **홈 밑**이다. 도구들은 저장소의 docs/robot_data/ 에 남기지만
+        # 그건 사람이 저장소 안에서 부르는 도구라 그렇다. 노드는 런치가 어디서
+        # 뜨는지 모르고, cwd 기준으로 잡으면 실행한 자리마다 docs/ 가 생긴다
+        # (실제로 테스트를 돌린 디렉터리에 하나 생겼다). peg_state 와 같은 자리를 쓴다.
+        # 남길 만한 회차는 사람이 docs/robot_data/ 로 옮긴다.
+        self.declare_parameter(
+            "runlog_dir", os.path.expanduser("~/.tunio/robot_data"))
         self.declare_parameter("gripper_host", GW.DEFAULT_HOST)
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
         self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
@@ -77,6 +112,12 @@ class RobotController(Node):
         self._read_width = None
         self.points = TP.load(path)
         self.get_logger().info(f"교시점 로드: {path}")
+
+        log_dir = str(self.get_parameter("runlog_dir").value or "")
+        self._runlog_path = RL.session_path("node_session", log_dir) if log_dir else None
+        self._runlog = {"tool": "robot_controller", "dry_run": self.dry_run, "goals": []}
+        if self._runlog_path:
+            self.get_logger().info(f"실행 기록: {self._runlog_path}")
 
         override = float(self.get_parameter("speed_scale").value or 0.0)
         if override > 0:
@@ -183,6 +224,7 @@ class RobotController(Node):
             self._running = name
 
         res = result_type()
+        t0 = time.time()
         try:
             work()
             res.success = True
@@ -196,7 +238,29 @@ class RobotController(Node):
         finally:
             with self._lock:
                 self._running = None
+        took = time.time() - t0
+        # 걸린 시간을 **항상** 남긴다. 서버의 play/adjust 타임아웃이 전부 임시값이고,
+        # 특히 줄마다 첫 adjust_peg 는 안에서 Phase 0 를 돌아 훨씬 오래 걸린다.
+        # 그 시간을 아무도 재 본 적이 없다 (CLAUDE.md 13절)
+        self.get_logger().info(
+            f"{name} {'성공' if res.success else '실패'} — {took:.1f}초")
+        self._record(name, goal, res, took)
         return res
+
+    def _record(self, name, goal, res, took):
+        """Goal 하나를 실행 기록에 남기고 파일을 덮어쓴다. 실패해도 조용히 넘어간다."""
+        if self._runlog_path is None:
+            return
+        req = goal.request
+        self._runlog["goals"].append({
+            "action": name,
+            "at": time.strftime("%H:%M:%S"),
+            "elapsed_sec": round(took, 2),
+            "success": bool(res.success),
+            "message": res.message,
+            "request": _plain(req),
+        })
+        RL.write(self._runlog_path, self._runlog)
 
     def _cross_to(self, side):
         """
@@ -409,7 +473,19 @@ class RobotController(Node):
             # 피크를 반환하려면 여기서 먼저 해야 한다 — 미구현 상태라 앞에 둬도
             # 잃는 게 없다.
             self._release_pick()
-            MP.strum_all(numbers, self.points)
+            # strum_all() 은 아직 NotImplementedError 를 던진다. 그대로 두면 **복귀가
+            # 통째로 안 돈다** — 바로 다음 줄인데 예외가 여기서 함수를 끝내기 때문이다.
+            # 서버는 화음 실패를 "연출이라 결과에 영향 없다" 며 경고로만 넘기므로
+            # 화면에는 '조율 완료' 가 뜨는데, 실물은 팔이 마지막 페그 앞에 남는다.
+            # 아무도 그 사실을 모른다.
+            #
+            # 복귀는 화음과 달리 연출이 아니다. 무슨 일이 있어도 돌아가야 한다.
+            try:
+                MP.strum_all(numbers, self.points)
+            except Exception as exc:               # noqa: B902 — 복귀가 먼저다
+                self.get_logger().warn(f"화음 훑기 실패 — {exc}. 복귀는 그대로 한다")
+                MP.return_home(standby, self.points.motion)
+                raise
             MP.return_home(standby, self.points.motion)
 
         return self._run("strum_all", goal, StrumAll.Result, work)

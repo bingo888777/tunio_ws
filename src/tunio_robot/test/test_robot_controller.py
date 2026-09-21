@@ -498,3 +498,76 @@ def test_힘_제어는_기본으로_꺼져_있다(ros):
         assert node.get_parameter("peg_register_force").value is False
     finally:
         node.destroy_node()
+
+
+# ------------------------------------------------------------ 복귀 보장 (#58)
+def test_화음이_실패해도_복귀는_한다(ros, taught, monkeypatch):
+    """
+    Strum_all 이 예외를 던져도 return_home 은 돈다.
+
+    전에는 바로 다음 줄인데도 안 돌았다 — 예외가 거기서 함수를 끝냈기 때문이다.
+    서버는 화음 실패를 "연출이라 결과에 영향 없다" 며 경고로만 넘기므로 화면에는
+    '조율 완료' 가 뜨는데, 실물은 팔이 마지막 페그 앞에 남았다. 아무도 모른다.
+    """
+    seen = []
+
+    def 터진다(*a, **k):
+        raise NotImplementedError("성현 담당 — 훑기 동작 교시 후 구현")
+
+    monkeypatch.setattr(MP, "strum_all", 터진다)
+    monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
+
+    h = Harness(taught)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = False
+        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal())
+        assert seen == ["home"]                     # 복귀했다
+        assert handle.result.success is False       # 그러면서 실패는 실패로 보고한다
+        assert "NotImplementedError" in handle.result.message
+    finally:
+        h.shutdown()
+
+
+def test_화음이_되면_복귀도_그대로_한다(ros, taught, monkeypatch):
+    """구현이 들어온 뒤에도 순서는 같다 — 화음 다음 복귀."""
+    seen = []
+    monkeypatch.setattr(MP, "strum_all", lambda *a, **k: seen.append("strum"))
+    monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
+
+    h = Harness(taught)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = False
+        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal())
+        assert seen == ["strum", "home"]
+        assert handle.result.success is True
+    finally:
+        h.shutdown()
+
+
+def test_goal_마다_실행_기록이_쌓인다(ros, taught, tmp_path):
+    """
+    노드 경로가 아무 자료도 안 남기고 있었다 (#58).
+
+    9/21 통합 실기가 끝난 뒤 볼 수 있는 게 peg_state.json 의 각도 두 줄뿐이었다.
+    goal 이 몇 초 걸렸는지가 없어서 서버 타임아웃을 정할 근거가 안 나온다.
+    """
+    h = Harness(taught)
+    try:
+        h.node._runlog_path = str(tmp_path / "session.json")
+        h.node._runlog = {"tool": "robot_controller", "goals": []}
+        goal = AdjustPeg.Goal(string_number=6, direction=1, angle_deg=30.0)
+        h.send(AdjustPeg, "/robot/adjust_peg", goal)
+
+        import json
+        with open(h.node._runlog_path, encoding="utf-8") as f:
+            saved = json.load(f)
+        assert len(saved["goals"]) == 1
+        g = saved["goals"][0]
+        assert g["action"] == "adjust_peg"
+        assert g["success"] is True
+        assert g["elapsed_sec"] >= 0.0
+        assert g["request"]["string_number"] == 6      # 요청이 그대로 남는다
+    finally:
+        h.shutdown()
