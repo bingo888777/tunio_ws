@@ -16,15 +16,24 @@
 그리퍼는 OnRobot RG2 이고, Compute Box 의 WebLogic 을 디지털 I/O 로 부른다
 (2026-09-19 확정). 폭·힘은 웹에서 정하고 코드는 프리셋만 고른다. gripper.py 참조.
 
+TCP 는 동작 그룹마다 자기 것을 켜고 들어간다 (2026-09-20, 이슈 #21)
+  교시 좌표는 **읽을 때 켜져 있던 TCP 와 짝**이다. 페그 4개는 GripperDA_v1
+  (툴 Z 208mm) 기준이고, 발현·거치대는 그와 다른 TCP 로 읽었다. 지금 한 파일에
+  섞여 있으므로, 좌표를 쓰는 쪽이 움직이기 직전에 자기 기준을 켠다.
+  adjust_peg 는 robot.tcp 를 켠다. 발현·피크 쪽은 ensure_tcp(pluck_tcp) 를
+  같은 방식으로 부르면 된다 (성현 몫, 이슈 #21).
+
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
   - strum_all: 전체 줄 훑기
   - return_home: 대기 자세 복귀 (strum_all 끝에 호출됨. 이동만이라 구현 완료)
   - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
-  - set_tcp — 피크를 든 상태와 페그를 잡은 상태의 TCP 가 다르다.
-    티칭 펜던트에 각각 등록해야 한다
+  - pluck_tcp — 발현·거치대 좌표를 읽은 TCP 이름을 YAML 에 적고,
+    pluck_string / pick_up / pick_return 시작 시 ensure_tcp 로 켠다 (이슈 #21, 성현)
 """
+
+import time
 
 from tunio_robot import teach_points as TP
 
@@ -32,6 +41,7 @@ from tunio_robot import teach_points as TP
 _api = None
 _node = None
 _gripper = None
+_robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
 class MotionError(Exception):
@@ -46,9 +56,10 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
     gripper_cfg — 같은 파일의 gripper 절 (presets, settle_sec)
     executor 에 넣지 않은 전용 노드를 만들어 DR_init 에 물린다.
     """
-    global _api, _node, _gripper
+    global _api, _node, _gripper, _robot_cfg
     if _api is not None:
         return _api
+    _robot_cfg = dict(robot_cfg)
 
     import rclpy
 
@@ -72,13 +83,100 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
         _gripper = RG2(api, parse_presets(gripper_cfg.get("presets")),
                        settle_sec=gripper_cfg.get("settle_sec", 0.3))
 
-    if robot_cfg.get("tool"):
-        api.set_tool(robot_cfg["tool"])
-    if robot_cfg.get("tcp"):
-        api.set_tcp(robot_cfg["tcp"])
+    # 첫 호출 전에 서비스가 보이기를 기다린다. 안 기다리면 첫 호출이 영원히 멈춘다
+    _wait_services(_node, robot_cfg["id"], logger=logger)
+
+    _ensure_named("tool", robot_cfg.get("tool"), logger=logger)
+    _ensure_named("tcp", robot_cfg.get("tcp"), logger=logger)
     if logger:
-        logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']}")
+        logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']} "
+                    f"tool='{api.get_tool()}' tcp='{api.get_tcp()}'")
     return _api
+
+
+# connect() 가 기다릴 서비스. DSR_ROBOT2 가 실제로 쓰는 것들 중 대표만 고른다
+_WAIT_SERVICES = [
+    ("GetCurrentTool", "dsr_controller2/tool/get_current_tool"),
+    ("GetCurrentTcp", "dsr_controller2/tcp/get_current_tcp"),
+    ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
+    ("MoveJoint", "dsr_controller2/motion/move_joint"),
+    ("MoveLine", "dsr_controller2/motion/move_line"),
+]
+
+
+def _wait_services(node, robot_id, timeout_sec=10.0, logger=None):
+    """
+    DSR_ROBOT2 의 첫 호출 전에 서비스 디스커버리를 기다린다 (이슈 #21).
+
+    DSR_ROBOT2 는 기다리지 않고 바로 부른다. 브링업 직후처럼 아직 디스커버리가
+    안 끝난 시점에 부르면 spin_until_future_complete 에 타임아웃이 없어 **영원히
+    멈춘다.** 2026-09-20 로봇 PC 에서 실제로 겪었다.
+
+    반드시 **DSR 이 쓰는 그 노드**로 기다려야 한다. 다른 노드로 기다리면 그 노드만
+    디스커버리가 끝나고 DSR 노드는 아직이라 똑같이 멈춘다.
+    """
+    import dsr_msgs2.srv as srv
+    for type_name, name in _WAIT_SERVICES:
+        cli = node.create_client(getattr(srv, type_name), name)
+        try:
+            if not cli.wait_for_service(timeout_sec=timeout_sec):
+                raise MotionError(
+                    f"서비스 없음: /{robot_id}/{name} ({timeout_sec}초). "
+                    "브링업이 떠 있는지, ROS_DOMAIN_ID 가 같은지 확인하라 (이슈 #21)")
+        finally:
+            node.destroy_client(cli)
+    if logger:
+        logger.info(f"서비스 디스커버리 확인 ({len(_WAIT_SERVICES)}개)")
+    time.sleep(1.0)   # DSR_ROBOT2 가 자기 클라이언트를 만들 여유
+
+
+def _ensure_named(kind, want, logger=None):
+    """
+    활성 tool/tcp 를 want 로 맞춘다. 못 맞추면 **멈춘다** (이슈 #26).
+
+    예전에는 set_tool/set_tcp 의 반환값을 버렸다. 두산 API 는 실패를 예외가 아니라
+    -1 로 돌려주므로, 거부돼도 "연결됨"이 찍히고 그대로 움직였다. 페그 좌표가
+    GripperDA_v1(툴 Z 208mm) 기준이라 TCP 가 안 켜지면 **208mm 어긋난 곳으로
+    직선 진입한다.** 헤드스톡 쪽이다.
+
+    set 이 거부돼도 **이미 켜져 있으면 통과시킨다.** 펜던트에서 직접 켜 둔 경우가
+    그렇고, 2026-09-20 시점에 set 계열이 전부 -1 로 거부됐으므로(이슈 #23)
+    이 경로가 실질적인 진행 방법이다. 판단 기준은 "set 이 성공했나"가 아니라
+    "지금 켜져 있는 것이 우리가 쓸 것인가"다.
+    """
+    if not want:
+        return
+    api = _require_api()
+    getter, setter = getattr(api, f"get_{kind}"), getattr(api, f"set_{kind}")
+
+    if getter() == want:
+        if logger:
+            logger.info(f"{kind}='{want}' 이미 켜져 있다")
+        return
+
+    ret = setter(want)
+    now = getter()
+    if now == want:
+        if logger:
+            logger.info(f"{kind}='{want}' 설정 (반환 {ret})")
+        return
+    raise MotionError(
+        f"set_{kind}('{want}') 이 먹지 않았다 (반환 {ret}, 현재 '{now}'). "
+        f"펜던트에서 {kind} 를 '{want}' 로 직접 켜라. 교시 좌표가 그 기준이라 "
+        "다른 기준으로 움직이면 208mm 어긋난 곳으로 들어간다 (이슈 #23, #26)")
+
+
+def ensure_tcp(name=None, logger=None):
+    """
+    움직이기 직전에 이 동작이 쓸 TCP 를 켠다 (이슈 #21).
+
+    교시 좌표는 읽을 때 켜져 있던 TCP 와 짝이라, 페그와 발현이 서로 다른 기준을
+    쓴다. 동작마다 자기 것을 켜면 순서가 섞여도 안전하다. 비용은 호출 한 번이다.
+    name 을 안 주면 connect() 가 받은 robot.tcp 를 쓴다.
+    """
+    if name is None:
+        name = (_robot_cfg or {}).get("tcp")
+    _ensure_named("tcp", name, logger=logger)
 
 
 def _require_api():
@@ -286,6 +384,7 @@ def adjust_peg(pose, joint, delta_deg, motion):
     이중으로 겹쳐 결과가 어긋난다.
     """
     _require_api()
+    ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
     _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
     try:
