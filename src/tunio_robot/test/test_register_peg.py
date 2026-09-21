@@ -439,3 +439,28 @@ def test_adjust_peg_는_힘_제어를_안_쓴다(spy, monkeypatch):
     MP.adjust_peg(_Peg(), 6, -30.0, MOTION, roll_deg=45.0)
     assert spy.api.force == []
     assert spy.api.compliance == []
+
+
+# ------------------------------------------------------------ 이동 속도 배율 (#56)
+def test_travel_속도는_직선과_회전_상한이_다르다():
+    """
+    travel_vel 은 [직선 mm/s, 회전 deg/s] 쌍이다 — 한 리스트에 단위가 둘이다.
+
+    상한을 하나로 먹이면 회전이 직선 상한(250deg/s)까지 올라간다. 칸마다 다르게 자른다.
+    """
+    caps = (MP.SPEED_CAP_LINEAR, MP.SPEED_CAP_JOINT)
+    out = MP._fast({"speed_scale": 10.0}, [50.0, 30.0], caps)
+    assert out == [MP.SPEED_CAP_LINEAR, MP.SPEED_CAP_JOINT]   # 500 -> 250, 300 -> 60
+
+
+def test_상한에_안_닿으면_배율_그대로다():
+    """상한은 천장이지 목표가 아니다."""
+    caps = (MP.SPEED_CAP_LINEAR, MP.SPEED_CAP_JOINT)
+    assert MP._fast({"speed_scale": 2.0}, [50.0, 20.0], caps) == [100.0, 40.0]
+    assert MP._fast({}, [50.0, 30.0], caps) == [50.0, 30.0]   # 배율 없으면 그대로
+
+
+def test_페그_회전은_배율을_안_탄다(spy):
+    """turn_motion 사본이 speed_scale 을 1.0 으로 못박는다. 장력을 거는 동작이다."""
+    out = MP.turn_motion({"speed_scale": 10.0, "turn_vel": 2.0, "turn_acc": 4.0})
+    assert (out["speed_scale"], out["vel"], out["acc"]) == (1.0, 2.0, 4.0)

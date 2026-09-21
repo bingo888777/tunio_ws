@@ -283,22 +283,130 @@ def _moved(ret, what):
     return ret
 
 
+# 이동 속도 배율의 상한 (실기 검증 전 임시값). speed_scale 을 아무리 올려도
+# 여기서 잘린다. 가속도 상한은 속도 상한의 2배로 본다 — 이 설정 전체가
+# acc = vel x 2 로 짜여 있다 (5/10, 2/4, 100/200).
+#
+# **관절 이동의 진짜 상한은 손끝 속도다** (#58, 2026-09-21 사용자 지적).
+# 같은 관절 속도가 팔 모양에 따라 손끝에서 240배까지 갈린다 —
+#   경유지 자세(팔이 수직)    60 deg/s -> 손끝    6 mm/s   (J1 축에서 6mm)
+#   6번 페그 자세(팔이 뻗음)  60 deg/s -> 손끝 1446 mm/s   (M0609 상한 1 m/s 초과)
+# 그래서 고정된 관절 상한은 어떤 자세에선 위험하고 어떤 자세에선 쓸데없이 느리다.
+# _movej 가 이번 이동의 기하를 보고 관절 속도를 직접 낮춘다 (_joint_vel_for).
+SPEED_CAP_JOINT = 60.0        # deg/s — 손끝 상한이 먼저 걸리는 게 보통이다
+SPEED_CAP_LINEAR = 250.0      # mm/s  — 직선 이동(movel)
+# 관절 이동 중 손끝이 낼 수 있는 최고 속도. ISO/TS 15066 협동 감속 기준이 250mm/s 다.
+SPEED_CAP_TCP = 250.0         # mm/s
+# 지금 관절각을 못 읽어 기하를 못 볼 때. 실측 자세에서 360mm/s 쯤 나오는 값이다.
+SPEED_CAP_JOINT_BLIND = 15.0  # deg/s
+
+
+def _peak_tcp_mm_per_deg(start, goal, n=64):
+    """
+    가장 많이 도는 관절 1도당 손끝이 최대 몇 mm 움직이는지 잰다.
+
+    movej 는 관절을 동시에 보간하므로 손끝 경로는 직선이 아니고, 속도도 구간마다
+    다르다. 경로를 잘게 떠서 최고점을 찾는다. 시간이 아니라 '도당 mm' 로 재기
+    때문에 속도 가정이 안 들어간다 — 관절 속도를 곱하면 그대로 mm/s 가 된다.
+    """
+    span = max(abs(float(goal[i]) - float(start[i])) for i in range(6))
+    if span <= 1e-6:
+        return 0.0
+    from . import kinematics as K
+    prev, peak = None, 0.0
+    for k in range(n + 1):
+        t = k / n
+        j = [float(start[i]) + (float(goal[i]) - float(start[i])) * t for i in range(6)]
+        tcp = K.fk(j)["tcp"]
+        if prev is not None:
+            step = sum((tcp[i] - prev[i]) ** 2 for i in range(3)) ** 0.5
+            peak = max(peak, step / (span / n))
+        prev = tcp
+    return peak
+
+
+def _joint_vel_for(goal, want_vel):
+    """
+    손끝이 SPEED_CAP_TCP 를 넘지 않도록 관절 속도를 낮춘다 (#58).
+
+    지금 관절각을 로봇에서 읽어 이번 이동의 기하를 본다. 못 읽으면 기하를 모르므로
+    SPEED_CAP_JOINT_BLIND 로 떨어진다 — 모를 때는 느린 쪽이다.
+    """
+    api = _require_api()
+    try:
+        start = [float(v) for v in api.get_current_posj()]
+    except Exception:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    if len(start) < 6:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    try:
+        peak = _peak_tcp_mm_per_deg(start, goal)
+    except Exception:
+        return min(want_vel, SPEED_CAP_JOINT_BLIND)
+    if peak <= 0.0:
+        return want_vel                      # 제자리다. 손끝이 안 움직인다
+    return min(want_vel, SPEED_CAP_TCP / peak)
+
+
+def _speed_scale(motion):
+    """이동 속도 배율. 없거나 이상하면 1.0(그대로)."""
+    try:
+        s = float(motion.get("speed_scale", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    return s if s > 0 else 1.0
+
+
+def _fast(motion, value, cap):
+    """
+    **이동·접근** 속도에 배율을 먹이고 상한에서 자른다 (#56). 리스트도 받는다.
+
+    검증된 물리값에는 절대 부르지 않는다 —
+      turn_vel/turn_acc       페그 회전. 줄에 장력을 거는 동작이라 느린 게 설계다
+                              (turn_motion 이 사본에 speed_scale=1.0 을 박아 막는다)
+      pluck_vel/acc_stroke    피크가 줄을 긁는 구간. 소리 세기가 여기서 정해진다
+                              (2026-09-20 검증값 100/200, PR #54)
+      *_vel_fine/*_acc_fine   접촉 직전 마지막 구간. 빠르면 그대로 박는다
+      힘 제어 진입             속도가 아니라 힘으로 묶여 있다
+
+    cap 이 튜플이면 칸마다 다른 상한을 쓴다 — travel_vel 이 [직선 mm/s, 회전 deg/s]
+    라 상한을 하나로 먹이면 회전이 직선 상한까지 올라간다.
+    """
+    s = _speed_scale(motion)
+    if isinstance(value, (list, tuple)):
+        caps = cap if isinstance(cap, tuple) else (cap,) * len(value)
+        return [min(float(v) * s, caps[min(i, len(caps) - 1)])
+                for i, v in enumerate(value)]
+    return min(float(value) * s, cap)
+
+
 def _movej(joints, motion, relative=False):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
-    return _moved(api.movej(posj(list(joints)),
-                            vel=motion.get("vel", 30), acc=motion.get("acc", 30),
-                            mod=mod), "movej")
+    vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT)
+    acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2)
+    if not relative:
+        # 상대 이동은 목표 관절각을 여기서 모른다 — 절대 이동에만 건다.
+        # 상대 movej 는 페그 회전(turn_motion, 배율 1.0)에만 쓰여서 원래 느리다.
+        capped = _joint_vel_for(joints, vel)
+        if capped < vel:
+            acc *= capped / vel               # 가속도도 같은 비로 내린다
+            vel = capped
+    return _moved(api.movej(posj(list(joints)), vel=vel, acc=acc, mod=mod), "movej")
 
 
 def _movel(task, motion):
     """작업 좌표로 직선 이동. BASE 기준 [X, Y, Z, A, B, C]."""
     api = _require_api()
     from DR_common2 import posx
-    v = motion.get("travel_vel", [50.0, 30.0])
-    a = motion.get("travel_acc", [100.0, 60.0])
+    # travel_vel/acc 는 [직선, 회전] 쌍이다 — mm/s 와 deg/s 가 한 리스트에 같이 있다.
+    # 상한을 하나로 먹이면 회전이 250deg/s 가 되므로 칸마다 다른 상한을 쓴다.
+    caps = (SPEED_CAP_LINEAR, SPEED_CAP_JOINT)
+    v = _fast(motion, motion.get("travel_vel", [50.0, 30.0]), caps)
+    a = _fast(motion, motion.get("travel_acc", [100.0, 60.0]),
+              tuple(c * 2 for c in caps))
     return _moved(api.movel(posx(list(task)), vel=v, acc=a), "movel")
 
 
@@ -317,9 +425,12 @@ def _movejx(task, motion, sol=None):
     from DR_common2 import posx
     if sol is None:
         sol = api.get_current_solution_space()
-    return _moved(api.movejx(posx(list(task)),
-                             vel=motion.get("vel", 30), acc=motion.get("acc", 30),
-                             sol=sol), "movejx")
+    # movejx 도 관절 보간이지만 목표가 작업 좌표라 목표 관절각을 여기서 모른다.
+    # ikin 을 부르면 알 수 있으나 그건 또 한 번의 서비스 왕복이고, 실패하면
+    # 이동 자체가 막힌다. 기하를 못 보는 이동이므로 느린 쪽 상한을 쓴다 (#58).
+    vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT_BLIND)
+    acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT_BLIND * 2)
+    return _moved(api.movejx(posx(list(task)), vel=vel, acc=acc, sol=sol), "movejx")
 
 
 def turn_motion(motion):
@@ -329,10 +440,15 @@ def turn_motion(motion):
     페그를 돌리는 건 줄에 장력을 거는 동작이라 이동보다 느려야 한다.
     토크를 읽어 파지를 확인하는 것도 이 구간이다(CLAUDE.md 3.6).
     turn_vel/turn_acc 가 없으면 이동 속도를 그대로 쓴다.
+
+    **speed_scale 을 1.0 으로 못박는다** (#56). 이 사본은 그대로 _movej 로 넘어가는데,
+    거기서 배율이 곱해지면 "이동은 빨라도 회전은 아니다" 는 이 함수의 존재 이유가
+    통째로 사라진다. 회전을 빠르게 하려면 turn_vel 을 직접 올릴 것.
     """
     out = dict(motion)
     out["vel"] = motion.get("turn_vel", motion.get("vel", 30))
     out["acc"] = motion.get("turn_acc", motion.get("acc", 30))
+    out["speed_scale"] = 1.0
     return out
 
 
@@ -420,7 +536,8 @@ def pluck_string(pose, motion, standby=None):
         raise MotionError(f"{pose.name}: stroke_sign 은 +1 또는 -1 이어야 한다 (지금 {sign!r})")
     stroke = [float(v) * sign for v in stroke[:3]] + [float(v) for v in stroke[3:]]
     retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
-    v_app, a_app = motion.get("pluck_vel_approach", 100), motion.get("pluck_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pluck_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pluck_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
     v_str, a_str = motion.get("pluck_vel_stroke", 1000), motion.get("pluck_acc_stroke", 2000)
 
@@ -455,10 +572,67 @@ def pluck_string(pose, motion, standby=None):
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 
 
+def _standby_xyz(standby):
+    """대기 자세의 TCP 위치 [X,Y,Z]. 못 구하면 None."""
+    if standby.kind == "joint":
+        try:
+            from . import kinematics as K
+            return [float(v) for v in K.fk(list(standby.joints))["tcp"]]
+        except Exception:
+            return None
+    x = getattr(standby, "task", None)
+    if not x or len(x) < 3:
+        return None
+    return [float(v) for v in x[:3]]
+
+
+def _current_xyz():
+    """지금 TCP 위치 [X,Y,Z]. 못 읽으면 None."""
+    api = _require_api()
+    try:
+        now = api.get_current_posx()
+    except Exception:
+        return None
+    if isinstance(now, (list, tuple)) and now and isinstance(now[0], (list, tuple)):
+        now = now[0]                       # (posx, sol) 로 주는 판이 있다
+    if not isinstance(now, (list, tuple)) or len(now) < 3:
+        return None
+    try:
+        return [float(v) for v in now[:3]]
+    except (TypeError, ValueError):
+        return None
+
+
 def _goto_standby(standby, motion, vel, acc):
-    """Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel)."""
+    """
+    Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel).
+
+    **이미 거기 있으면 안 간다** (#56). 발현 대기 자세는 네 줄의 접근점
+    (접촉점 위 pluck_up_mm)에서 10~20mm 밖에 안 떨어져 있다 —
+
+      pluck_standby TCP  [642.60, -12.03, 192.52]   (fk, 오차 +-3mm)
+      6번 접근점         [645.85, -29.08, 202.28]   17.1mm
+      5번 접근점         [645.23, -19.14, 202.18]   12.0mm
+      2번 접근점         [645.24, -1.00, 201.78]    14.4mm
+      1번 접근점         [645.34,   8.06, 201.32]   22.1mm
+
+    그래서 발현이 끝날 때마다 "거의 제자리" 로 한 번 갔다가 다음 발현이 다시
+    내려오는 왕복이 붙었다. 거리는 20mm 인데 관절 이동 한 번 값을 그대로 낸다.
+    2026-09-21 통합 실기에서 사용자가 지적한 그 동작이다.
+
+    현재 자세를 **로봇에서 읽어서** 판단한다. 플래그로 기억하지 않는 이유는
+    _holding_pick 과 같다 — 중간에 예외가 나면 기억이 실제와 어긋난다.
+    못 읽으면 건너뛰지 않고 그냥 간다 (안전한 쪽).
+    """
     if standby is None:
         return
+    skip_mm = float(motion.get("standby_skip_mm", 30.0))
+    if skip_mm > 0:
+        here, there = _current_xyz(), _standby_xyz(standby)
+        if here and there:
+            gap = sum((here[i] - there[i]) ** 2 for i in range(3)) ** 0.5
+            if gap <= skip_mm:
+                return                     # 이미 거기다. 가 봐야 제자리
     if standby.kind == "joint":
         _movej(standby.joints, motion)
     else:
@@ -478,7 +652,7 @@ def _pick_points(holder, motion):
     return contact, above
 
 
-def pick_up(holder, motion, standby=None, via=None):
+def pick_up(holder, motion, standby=None, via=None, sol=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -498,6 +672,16 @@ def pick_up(holder, motion, standby=None, via=None):
               폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
     파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
 
+    sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
+          같은 뜻이다 (#56). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
+          movel 은 지금 팔 모양을 유지하므로 갈래를 못 바꾼다.
+          지금 거치대 접근은 J1 이 오른쪽인 해 하나뿐이라, 피크를 집고 발현한 뒤
+          6·5번(왼쪽) 페그로 가려면 경유지를 타야 했다. 왼쪽 해로 집어 두면 그
+          경유가 없어진다. None 이면 지금 팔 모양을 그대로 쓴다 (예전 동작).
+
+          내려가기·들어 올리기는 sol 과 무관하게 **직선**이다. 거치대·스토퍼를
+          수직으로 빠져나와야 하고, 직선은 팔 모양을 안 바꾼다.
+
     RG2.select() 의 settle_sec(기본 0.3초)만으로는 부족해 집자마자 들어 올리는 동작이
     물리적으로 안 끝난 그리퍼를 밀고 올라갔다 (2026-09-20 실기). 그래서 집은 뒤
     motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
@@ -506,14 +690,18 @@ def pick_up(holder, motion, standby=None, via=None):
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
     preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
-    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pick_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pick_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
     if via is not None:
         _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
     _release()                                          # 열고 간다
-    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    if sol is None:
+        _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
+    else:
+        _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
@@ -522,7 +710,7 @@ def pick_up(holder, motion, standby=None, via=None):
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
-def pick_return(holder, motion, via=None, home=None):
+def pick_return(holder, motion, via=None, home=None, sol=None):
     """
     피크를 거치대에 돌려놓는다.
 
@@ -531,21 +719,30 @@ def pick_return(holder, motion, via=None, home=None):
           거치대 위로 바로 movel 하는 경로는 검증된 적이 없다. frames.standby
           를 경유해 안전한 관절 자세를 한 번 거친 뒤 내려간다.
 
+    sol — 거치대 위 대기점에 설 팔 모양(IK 해 0~7). pick_up 의 sol 과 같다 (#56).
+          **반환 쪽이 더 중요하다** — 반환이 끝나면 바로 페그를 잡으러 가기
+          때문이다. 다음에 갈 페그 쪽의 해로 서 있으면 좌우 전환 경유지를
+          건너뛸 수 있다. None 이면 지금 팔 모양을 그대로 쓴다.
+
     순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
-          → 그리퍼 열기 → 거치대 위 → (home 이 있으면) 홈 자세
+          → 그리퍼 열기 → 거치대 위(sol 을 주면 그 팔 모양으로) → (home 이 있으면) 홈 자세
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
     contact, above = _pick_points(holder, motion)
-    v_app, a_app = motion.get("pick_vel_approach", 100), motion.get("pick_acc_approach", 100)
+    v_app = _fast(motion, motion.get("pick_vel_approach", 100), SPEED_CAP_LINEAR)
+    a_app = _fast(motion, motion.get("pick_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
 
     if via is not None:
         _movej(via.joints, motion)                      # 경유 자세
-    _movel_base(above, v_app, a_app)                    # 거치대 위 5cm
+    if sol is None:
+        _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
+    else:
+        _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _release()                                          # 놓는다
-    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다
+    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다 (수직)
     if home is not None:
         _movej(home.joints, motion)                     # 홈
 
