@@ -1,5 +1,5 @@
 """
-web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘
+web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘.
 
 브라우저 화면은 기획서 10.1 의 탭 3개(실시간 작업 / 작업 이력 / 설정)를 그대로 옮긴 것이다.
 판정은 센트지만 화면 표시는 Hz 다(기획 2.2).
@@ -25,14 +25,15 @@ web_node — 관제 웹. hmi_node(PyQt)를 대체한다. 담당: 정동휘
   ⚠ task_manager 는 /tuning/state 를 변화 시에만 발행한다. 주기 갱신이 아니므로
   화면의 '갱신 시각'도 변화가 있을 때만 움직인다. 정상이다.
 """
-import json
-import queue
-import threading
-import webbrowser
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
 from pathlib import Path
+import queue
+import re
+import threading
 from urllib.parse import parse_qs, urlparse
+import webbrowser
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -98,13 +99,16 @@ DEFAULT_SETTINGS = {
 }
 SETTING_FIELDS = tuple(DEFAULT_SETTINGS)
 
+# 내보낼 정적 파일. 하위 디렉터리와 '..' 를 허용하지 않는다.
+STATIC_RE = re.compile(r'^/[\w.-]+\.(?:css|js|svg|png|webp)$')
+
 
 def _stamp_to_float(stamp):
     return stamp.sec + stamp.nanosec * 1e-9
 
 
 def _string_result_to_dict(r):
-    """StringResult -> dict. has_* 가 false 인 주파수는 None 으로 낸다(0Hz 를 쓰지 않는다)."""
+    """메시지를 dict 로 바꾼다. has_* 가 false 인 주파수는 None 으로 낸다(0Hz 를 쓰지 않는다)."""
     return {
         'string_number': r.string_number,
         'target_hz': r.target_hz,
@@ -305,7 +309,10 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, name):
         types = {'.html': 'text/html; charset=utf-8',
                  '.css': 'text/css; charset=utf-8',
-                 '.js': 'application/javascript; charset=utf-8'}
+                 '.js': 'application/javascript; charset=utf-8',
+                 '.svg': 'image/svg+xml; charset=utf-8',
+                 '.png': 'image/png',
+                 '.webp': 'image/webp'}
         path = (self.web_dir / name).resolve()
         if self.web_dir not in path.parents or not path.is_file():
             self._error(404, '%s 없음' % name)
@@ -326,7 +333,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path in ('/', '/index.html'):
                 self._static('index.html')
-            elif path in ('/style.css', '/app.js'):
+            elif STATIC_RE.match(path):
+                # 파일 이름만 받는다. 하위 경로·상위 이동(..)은 정규식에서 걸린다.
+                # 실제 경로가 web_dir 안인지는 _static 이 한 번 더 확인한다.
                 self._static(path.lstrip('/'))
             elif path == '/api/state':
                 self._json({'state': self.node.latest_state()})

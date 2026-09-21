@@ -1,0 +1,57 @@
+digraph TUNIO_FLOW {
+  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=28, newrank=true,
+         label=<<B>TUNIO 작업 흐름 v2</B><BR/><FONT POINT-SIZE="13" COLOR="#5A635E">2026-09-21 · 브릿지핀 제외 · 피크 집기/반환 방식 · 응답 목표 2.2초</FONT><BR/> >,
+         bgcolor="#FBFCFA", nodesep=0.32, ranksep=0.40, compound=true];
+  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=13,
+         margin="0.22,0.13", penwidth=1.4, width=3.4];
+  edge  [fontname="Noto Sans CJK KR", fontsize=10.5, color="#79837D", penwidth=1.2,
+         arrowsize=0.75, fontcolor="#47524D"];
+
+  start [label=<<B>기타 배치 · 시작 버튼</B><BR/><FONT POINT-SIZE="10.5">사람이 받침대에 배치 후 관제 웹에서 시작</FONT>>, fillcolor="#EFF0EE", color="#9AA5AE"];
+
+  subgraph cluster_p0 {
+    label=<<B>Phase 0 · 페그 초기 등록</B>   작업 시작 전 1회<BR/> >;
+    fontsize=15; fontcolor="#6B5A9E"; color="#8C7AB8"; style=rounded; penwidth=1.6; bgcolor="#F4F2FA";
+    p0a [label=<<B>줄마다 페그를 잡아본다</B><BR/><FONT POINT-SIZE="10.5">후보 회전각 0 · 90 · 45 · 135도 순서로 시도</FONT>>, fillcolor="#E5E0F4", color="#8C7AB8"];
+    p0b [label=<<B>물린 회전각 기록</B><BR/><FONT POINT-SIZE="10.5">그 작업 내내 쓴다 · 4줄 전부 실패면 중단</FONT>>, fillcolor="#E5E0F4", color="#8C7AB8"];
+    p0a -> p0b;
+  }
+
+  subgraph cluster_p1 {
+    label=<<B>Phase 1 · 조율 루프</B>   줄당 최대 조절 5회 / 재측정 3회<BR/> >;
+    fontsize=15; fontcolor="#7A6A2E"; color="#B8A050"; style=rounded; penwidth=1.6; bgcolor="#FAF8EE";
+    sel  [label=<<B>대상 줄 선택</B><BR/><FONT POINT-SIZE="10.5">6 → 5 → 2 → 1</FONT>>, fillcolor="#E8E2F5", color="#8C7AB8"];
+    grab [label=<<B>피크 집기</B><BR/><FONT POINT-SIZE="10.5">거치대에서 · 로봇이 시점을 판단</FONT>>, fillcolor="#F0F1EF", color="#9AA5AE"];
+    pluck[label=<<B>줄 튕기기 → 주파수 측정</B><BR/><FONT POINT-SIZE="10.5">마이크가 onset 을 스스로 검출<BR/>정상 응답 2.2초 · 타임아웃 10초 · onset 제한 10초</FONT>>, fillcolor="#D2EDE0", color="#2E9070"];
+    valid[label=<<B>유효한 측정인가?</B><BR/><FONT POINT-SIZE="10.5">RMS · FFT 피크 돌출 20dB · 창 일치 12센트</FONT>>, shape=diamond, width=4.2, height=1.25, fillcolor="#FAE7C6", color="#C9873A", margin="0.05,0.05"];
+    cent [label=<<B>허용 센트 이내인가?</B><BR/><FONT POINT-SIZE="10.5">1200 × log2(측정 / 목표) · 10센트</FONT>>, shape=diamond, width=4.2, height=1.25, fillcolor="#FAE7C6", color="#C9873A", margin="0.05,0.05"];
+    ok   [label=<<B>해당 줄 성공 기록</B>>, fillcolor="#D2EDE0", color="#2E9070"];
+    more [label=<<B>남은 줄이 있는가?</B>>, shape=diamond, width=3.8, height=1.1, fillcolor="#FAE7C6", color="#C9873A", margin="0.05,0.05"];
+
+    retry[label=<<B>측정 재시도</B><BR/><FONT POINT-SIZE="10.5">최대 3회 · 소진 시 그 줄 실패</FONT>>, fillcolor="#FADEDE", color="#C25A5A"];
+    peg  [label=<<B>피크 반환 → 페그 조절 → 피크 집기</B><BR/><FONT POINT-SIZE="10.5">최대 5회 · 각도 = |오차| ÷ 센트per도<BR/>목표보다 높으면 풀었다 조여 올린다 (서버가 결정)</FONT>>, fillcolor="#FADEDE", color="#C25A5A"];
+
+    sel -> grab -> pluck -> valid;
+    valid -> cent  [label=" 예"];
+    valid -> retry [label=" 아니오"];
+    retry -> pluck [constraint=false];
+    cent -> ok   [label=" 예"];
+    cent -> peg  [label=" 아니오"];
+    peg  -> pluck [constraint=false];
+    ok -> more;
+    more -> sel [label=" 예", constraint=false];
+  }
+
+  subgraph cluster_p2 {
+    label=<<B>Phase 2 · 검증 · 마무리 · 저장</B><BR/> >;
+    fontsize=15; fontcolor="#1C5686"; color="#3E7FB8"; style=rounded; penwidth=1.6; bgcolor="#EEF5FC";
+    ver  [label=<<B>최종 검증 패스</B><BR/><FONT POINT-SIZE="10.5">4줄 측정만 · 틀어진 줄은 실패로 재기록<BR/>한 줄을 조이면 넥이 당겨 다른 줄이 틀어진다</FONT>>, fillcolor="#D2EDE0", color="#2E9070"];
+    strum[label=<<B>전체 화음 훑기 → 대기 자세 복귀</B><BR/><FONT POINT-SIZE="10.5">완료 연출 (측정 안 함) · strum_all 이 복귀까지 책임</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
+    save [label=<<B>결과 저장</B><BR/><FONT POINT-SIZE="10.5">4줄 완주했으면 PARTIAL · FAILED 도 저장<BR/>중간에 끊긴 작업만 제외 · 설정 스냅샷 같이</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
+    ver -> strum -> save;
+  }
+
+  start -> p0a;
+  p0b -> sel [label=" 등록 성공"];
+  more -> ver [label=" 아니오"];
+}
