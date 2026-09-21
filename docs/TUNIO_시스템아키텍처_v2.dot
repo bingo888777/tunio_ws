@@ -1,87 +1,65 @@
 digraph TUNIO_ARCH {
-  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=28,
-         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="13" COLOR="#5A635E">2026-09-21 · PC 3대 · 강의실 Wi-Fi · Ubuntu 24.04 / ROS 2 Jazzy · ROS_DOMAIN_ID 10</FONT><BR/> >,
-         bgcolor="#FBFCFA", nodesep=0.30, ranksep=0.50, compound=true, newrank=true];
-  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=13,
-         margin="0.20,0.13", penwidth=1.4, width=2.9];
-  edge  [fontname="Noto Sans CJK KR", fontsize=10, color="#79837D", penwidth=1.2,
-         arrowsize=0.7, fontcolor="#47524D"];
+  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=30, newrank=true,
+         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="14" COLOR="#5A635E">2026-09-21 · PC 3대 · ROS 2 Jazzy · ROS_DOMAIN_ID 10 · 인터페이스 13개는 docs/TUNIO_INTERFACE_SPEC.md</FONT><BR/> >,
+         bgcolor="#FCFDFB", nodesep=0.42, ranksep=0.62, compound=true, pad=0.35];
+  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=14,
+         margin="0.26,0.16", penwidth=1.5, width=3.1, height=0.62];
+  edge  [fontname="Noto Sans CJK KR", fontsize=11, color="#828C86", penwidth=1.3,
+         arrowsize=0.8, fontcolor="#3F4A45"];
 
+  // ───────────────────────── ① 로봇 제어 PC
   subgraph cluster_robot {
-    label=<<B>① 로봇 제어 PC</B>  ·  정묵 / 성현<BR/> >;
-    fontsize=16; fontcolor="#96590F"; color="#C9873A"; style=rounded; penwidth=1.7; bgcolor="#FDF6EC";
-    teach [label=<<B>teach_points.yaml</B><BR/><FONT POINT-SIZE="10.5">페그 4 · 발현 4 · 경유지 · 대기</FONT>>, fillcolor="#F8E6CD", color="#C9873A"];
-    rc    [label=<<B>robot_controller</B><BR/><FONT POINT-SIZE="10.5">play_string · adjust_peg · strum_all</FONT>>, fillcolor="#F5DDBC", color="#B3761F"];
-    mp    [label=<<B>motion_primitives</B><BR/><FONT POINT-SIZE="10.5">DSR_ROBOT2 · 그리퍼 디지털 I/O</FONT>>, fillcolor="#F8E6CD", color="#C9873A"];
-    drv   [label=<<B>두산 드라이버</B><BR/><FONT POINT-SIZE="10.5">m0609_rg2_bringup mode:=real</FONT>>, fillcolor="#FBEFDF", color="#D9A566"];
-    teach -> rc [style=dashed, label=" 교시 좌표"];
+    label=<<B>① 로봇 제어 PC</B>   정묵 · 성현<BR/> >;
+    fontsize=17; fontcolor="#8E520B"; color="#C9873A"; style=rounded; penwidth=1.8; bgcolor="#FDF7EE";
+    rc  [label=<<B>robot_controller</B>>, fillcolor="#F2D6AC", color="#A86E1C", fontsize=15];
+    mp  [label=<<B>motion_primitives</B>>, fillcolor="#F9E8D1", color="#C9873A"];
+    drv [label=<<B>두산 드라이버</B>>, fillcolor="#FCF2E4", color="#DCAC70"];
     rc -> mp -> drv;
   }
 
+  // ───────────────────────── ② 서버 PC
   subgraph cluster_server {
-    label=<<B>② 서버 PC</B>  ·  정동휘<BR/> >;
-    fontsize=16; fontcolor="#1C5686"; color="#3E7FB8"; style=rounded; penwidth=1.7; bgcolor="#EEF5FC";
-    web [label=<<B>web_node</B><BR/><FONT POINT-SIZE="10.5">관제 웹 · 노드 안 http.server</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
-    tm  [label=<<B>task_manager</B><BR/><FONT POINT-SIZE="10.5">6→5→2→1 · 센트 판정 · 재시도<BR/>페그 회전량 · 백래시 마무리</FONT>>, fillcolor="#C6DDF4", color="#2C6FA8"];
-    rs  [label=<<B>result_store</B><BR/><FONT POINT-SIZE="10.5">저장 · 이력 조회</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
-    db  [label=<<B>SQLite</B><BR/><FONT POINT-SIZE="10.5">jobs · string_results · settings_snapshot</FONT>>, shape=cylinder, style=filled, fillcolor="#E8F1FA", color="#3E7FB8"];
-    ds  [label=<<B>Fast DDS Discovery Server</B><BR/><FONT POINT-SIZE="10.5">UDP :11811 · systemd · 3 PC 의 관문</FONT>>, fillcolor="#DCEAF6", color="#7FA9CE", style="rounded,filled,dashed"];
-    fh  [label=<<B>fake_hardware</B><BR/><FONT POINT-SIZE="10.5">sim 전용 · 로봇/마이크 대역</FONT>>, fillcolor="#EDF3F9", color="#9DBAD4", style="rounded,filled,dashed"];
-    web -> tm [dir=both, label=<  /tuning/state<BR ALIGN="LEFT"/>  start·pause·resume·cancel<BR ALIGN="LEFT"/>  get·set_settings<BR ALIGN="LEFT"/>>];
-    tm -> rs [dir=both, label=<  /tuning/save_job<BR ALIGN="LEFT"/>  /tuning/get_history<BR ALIGN="LEFT"/>>];
+    label=<<B>② 서버 PC</B>   정동휘<BR/> >;
+    fontsize=17; fontcolor="#174F7C"; color="#3E7FB8"; style=rounded; penwidth=1.8; bgcolor="#EFF6FD";
+    web [label=<<B>web_node</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
+    tm  [label=<<B>task_manager</B>>, fillcolor="#BCD8F2", color="#20669F", fontsize=15];
+    rs  [label=<<B>result_store</B>>, fillcolor="#DCEAF8", color="#3E7FB8"];
+    db  [label=<<B>SQLite</B>>, shape=cylinder, style=filled, fillcolor="#EAF2FB", color="#3E7FB8", height=0.7];
+    web -> tm [dir=both];
+    tm -> rs [dir=both];
     rs -> db;
-    tm -> fh [style=dashed, color="#9DBAD4", label=" sim 경로"];
-    fh -> ds [style=invis];
   }
 
+  // ───────────────────────── ③ 마이크 PC
   subgraph cluster_mic {
-    label=<<B>③ 마이크 PC</B>  ·  정정인<BR/> >;
-    fontsize=16; fontcolor="#0F6749"; color="#2E9070"; style=rounded; penwidth=1.7; bgcolor="#EDF8F3";
-    usb [label=<<B>USB 외장 마이크</B><BR/><FONT POINT-SIZE="10.5">OS 향상 기능 해제 · 44.1kHz</FONT>>, fillcolor="#D6EFE4", color="#2E9070"];
-    aa  [label=<<B>audio_analyzer</B><BR/><FONT POINT-SIZE="10.5">onset 검출 → FFT 유도 + 협대역 YIN<BR/>돌출 20dB · 창 일치 12센트</FONT>>, fillcolor="#C2E8D6", color="#1F7D5E"];
-    rw  [label=<<B>replay_wav</B><BR/><FONT POINT-SIZE="10.5">마이크 없이 녹음 재생 (glob)</FONT>>, fillcolor="#EAF6F0", color="#7CC0A4", style="rounded,filled,dashed"];
+    label=<<B>③ 마이크 PC</B>   정정인<BR/> >;
+    fontsize=17; fontcolor="#0C6245"; color="#2E9070"; style=rounded; penwidth=1.8; bgcolor="#EEF9F4";
+    usb [label=<<B>USB 외장 마이크</B>>, fillcolor="#DCF1E7", color="#2E9070"];
+    aa  [label=<<B>audio_analyzer</B>>, fillcolor="#B8E5D2", color="#17755A", fontsize=15];
     usb -> aa;
-    aa -> rw [style=dashed, color="#7CC0A4", dir=back];
   }
 
-  ctrl [label=<<B>두산 컨트롤러</B><BR/><FONT POINT-SIZE="10.5">M0609 + OnRobot RG2</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
-  pick [label=<<B>피크 거치대</B><BR/><FONT POINT-SIZE="10.5">집었다 반환 · 조절 1회당 왕복</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
-  brow [label=<<B>브라우저</B><BR/><FONT POINT-SIZE="10.5">서버 PC localhost</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
+  // ───────────────────────── 바깥
+  brow [label=<<B>브라우저</B>>, fillcolor="#F2F4F5", color="#98A3AB"];
+  hw   [label=<<B>두산 컨트롤러</B>  M0609 + RG2<BR/><FONT POINT-SIZE="11">피크 거치대에서 집었다 반환</FONT>>,
+        fillcolor="#F2F4F5", color="#98A3AB", height=0.72];
 
-  drv  -> ctrl [label=" 유선 LAN"];
-  ctrl -> pick [style=dashed, arrowhead=none, label=" 피크 집기/반환"];
-  brow -> web [dir=both, label=" HTTP + SSE"];
+  brow -> web [dir=both, label=<  HTTP + SSE >];
+  drv  -> hw  [label=<  유선 LAN >];
 
-  rc -> tm [dir=both, constraint=false, label=<<B>로봇 Action</B><BR/>/robot/play_string<BR/>/robot/adjust_peg<BR/>/robot/strum_all>];
-  tm -> aa [dir=both, constraint=false, label=<<B>측정 Action</B><BR/>/audio/measure_pitch<BR/><FONT POINT-SIZE="9.5">Feedback = 준비 완료</FONT>>];
+  // ───────────────────────── 3 PC 사이 (이 그림의 핵심)
+  rc -> tm [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
+            label=<<B>로봇 Action 3</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/robot/play_string<BR ALIGN="LEFT"/>/robot/adjust_peg<BR ALIGN="LEFT"/>/robot/strum_all<BR ALIGN="LEFT"/></FONT>>];
+  tm -> aa [dir=both, constraint=false, penwidth=2.1, color="#5E6B64",
+            label=<<B>측정 Action 1</B><BR ALIGN="CENTER"/><FONT POINT-SIZE="10.5">/audio/measure_pitch<BR ALIGN="LEFT"/></FONT>>];
 
+  note [shape=plaintext, margin=0, label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="4">
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>3 PC 는 서로를 어떻게 찾는가</B>  ·  강의실 Wi-Fi 가 멀티캐스트를 막아, 서버 PC 의 <B>Fast DDS Discovery Server (UDP 11811, systemd)</B> 를 거친다.</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45">클라이언트 IP 는 바뀌어도 되고, 고정이 필요한 것은 서버 PC 하나뿐이다. 새 노드가 서로를 보기까지 약 15초 걸린다.</FONT></TD></TR>
+      <TR><TD ALIGN="LEFT"><FONT POINT-SIZE="12" COLOR="#3F4A45"><B>로봇·기타 없이 돌리는 경로</B>  ·  <B>fake_hardware</B> (서버 PC, sim 전용 — 로봇과 마이크를 모두 대신) / <B>replay_wav</B> (마이크 PC — 녹음 파일 재생)</FONT></TD></TR>
+    </TABLE>>];
+  hw -> note [style=invis];
 
-  iface [shape=plaintext, margin=0, label=<
-  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#FFFFFF" COLOR="#C6CEC9">
-    <TR><TD COLSPAN="3" BGCOLOR="#EFF2F0" ALIGN="LEFT"><B>tunio_interfaces — 13개 전부</B>  <FONT POINT-SIZE="9.5" COLOR="#5A635E">기준본: docs/TUNIO_INTERFACE_SPEC.md</FONT></TD></TR>
-
-    <TR><TD ROWSPAN="4" BGCOLOR="#FBF3E8" ALIGN="LEFT"><B>Action</B><BR/><FONT POINT-SIZE="9">4</FONT></TD>
-        <TD ALIGN="LEFT">MeasurePitch</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/audio/measure_pitch   <FONT COLOR="#7C857F">Feedback 있음</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">PlayString</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/play_string</FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">AdjustPeg</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/adjust_peg   <FONT COLOR="#7C857F">direction ±1 · angle_deg 양수</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">StrumAll</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/strum_all   <FONT COLOR="#7C857F">대기 자세 복귀까지</FONT></FONT></TD></TR>
-
-    <TR><TD ROWSPAN="5" BGCOLOR="#EAF2FA" ALIGN="LEFT"><B>Service</B><BR/><FONT POINT-SIZE="9">5종 · 8개 이름</FONT></TD>
-        <TD ALIGN="LEFT">CommandTuning</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/start · pause · resume · cancel   <FONT COLOR="#7C857F">이름이 곧 명령</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">GetSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/get_settings</FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">SetSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/set_settings   <FONT COLOR="#7C857F">작업 중 변경 거부</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">GetHistory</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/get_history   <FONT COLOR="#7C857F">job_id 비면 목록, 채우면 상세</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">SaveJob</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/save_job</FONT></TD></TR>
-
-    <TR><TD ROWSPAN="4" BGCOLOR="#EDF7F2" ALIGN="LEFT"><B>Message</B><BR/><FONT POINT-SIZE="9">4</FONT></TD>
-        <TD ALIGN="LEFT">TuningState</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/state   <FONT COLOR="#7C857F">reliable · transient local · depth 1</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">StringResult</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">토픽이 아니다 — TuningState · GetHistory · SaveJob 안에 실린다</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">TuningSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">Get/SetSettings · GetHistory 안에 실린다</FONT></FONT></TD></TR>
-    <TR><TD ALIGN="LEFT">JobSummary</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">GetHistory 목록 조회 응답 안에 실린다</FONT></FONT></TD></TR>
-  </TABLE>>];
-
-  ctrl -> iface [style=invis];
-
-  { rank=same; teach; web; usb; }
   { rank=same; rc; tm; aa; }
 }
