@@ -59,15 +59,25 @@ ADJUST_FAILURE_SKIPS_STRING_ONLY = True
 # 기획 2.5 는 "허용 센트를 벗어난 줄"만 실패 재기록 대상으로 적고 있다.
 KEEP_TUNED_RESULT_ON_VERIFY_MEASURE_FAILURE = True
 
-# C5-1. 취소가 아닌 오류로 끝난 작업을 저장할지. 취소 미저장은 확정 사항이라 그쪽에 맞췄다.
-SAVE_ON_ERROR_EXIT = False
+# C5-1 은 미확정이 아니었다. CLAUDE.md 13절 521~522행이 확정 목록에 적고 있다 —
+# "완료 결과 저장 ... 4줄을 완주했으면 PARTIAL·FAILED 도 저장한다(중간에 끊긴 작업만 제외)".
+# '중간에 끊긴 작업만 제외'가 곧 기본값 False 다. 그래서 아래 상수 목록에서 뺐다.
+#
+# 다만 실측 회차에서는 끊긴 작업의 측정값도 남겨야 원인을 본다. 그래서 상수가 아니라
+# ROS 파라미터 save_on_error_exit 로 뒀다 (__init__ 에서 선언, 기본 False).
+# 실측 때만 런치 인자로 켠다.
+#
+# ⚠ 기본값을 True 로 올리려면 이슈 #47 을 먼저 볼 것. 두 가지가 걸려 있다.
+#   - _finish_cancelled() 에 _finish_error() 로 빠지는 샛길이 있어, True 면
+#     '로봇이 취소를 안 받은 취소 작업'이 저장된다. 취소 미저장은 확정 사항이다
+#   - 중간에 끊긴 작업은 처리 못 한 줄이 RESULT_PENDING 이라 overall_result() 가
+#     OVERALL_PENDING 을 낸다. 실패가 아니라 '판정 전'으로 저장된다
 
 _POLICY_NOTES = (
     ('B1-1 조절 후 측정 재시도 리셋', MEASURE_RETRY_RESET_AFTER_ADJUST),
     ('B2-1 발현 실패를 측정 재시도로 계산', PLAY_FAILURE_COUNTS_AS_MEASURE_RETRY),
     ('B3-1 페그 실패 시 그 줄만 포기', ADJUST_FAILURE_SKIPS_STRING_ONLY),
     ('C2-1 검증 측정 실패 시 조율 판정 유지', KEEP_TUNED_RESULT_ON_VERIFY_MEASURE_FAILURE),
-    ('C5-1 오류 종료 시 DB 저장', SAVE_ON_ERROR_EXIT),
 )
 
 
@@ -111,6 +121,9 @@ class TaskManager(Node):
         # 결과를 볼 여유가 생기지만, 대역에는 그 시간이 없어 판정이 순식간에 지나간다.
         self.declare_parameter('string_done_hold_sec', 0.0)
         self.declare_parameter('cancel_wait_sec', 5.0)      # 취소 요청 수용 대기
+        # 중간에 끊긴 작업(PHASE_ERROR)을 저장할지. 기본 False 는 확정 사항이다
+        # (CLAUDE.md 13절 521~522행). 실측 회차에서만 켠다. 위 C5-1 주석과 이슈 #47 참조
+        self.declare_parameter('save_on_error_exit', False)
         self.declare_parameter(
             'strum_string_numbers', [],
             ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER_ARRAY,
@@ -218,6 +231,12 @@ class TaskManager(Node):
         else:
             log.warning('페그 캘리브레이션 미실측 — 페그 조절이 필요해지면 그 자리에서 멈춘다')
             log.warning('  %s' % self.calibration.missing_reason())
+        save_on_error = bool(self._p('save_on_error_exit'))
+        if save_on_error:
+            log.warning('save_on_error_exit = True — 중간에 끊긴 작업도 저장한다. '
+                        '실측 회차용이다. 시연에서는 꺼라 (CLAUDE.md 13절)')
+        else:
+            log.info('save_on_error_exit = False (확정 기본값). 중간에 끊긴 작업은 저장하지 않는다')
         log.warning('미확정 정책 위에서 동작 중 (확정되면 task_manager.py 상단만 고치면 된다):')
         for name, value in _POLICY_NOTES:
             log.warning('  %s = %s' % (name, value))
@@ -816,10 +835,15 @@ class TaskManager(Node):
 
     def _finish_error(self):
         self._set_phase(TuningState.PHASE_ERROR, 0)
-        if SAVE_ON_ERROR_EXIT:
+        if bool(self._p('save_on_error_exit')):
+            self.get_logger().warning(
+                '오류 종료 — save_on_error_exit 가 켜져 있어 저장한다. '
+                '처리 못 한 줄이 있으면 전체 판정은 OVERALL_PENDING 으로 들어간다')
             self._save()
         else:
-            self.get_logger().warning('오류 종료 — 저장하지 않는다 (브리핑 C5-1, 미확정)')
+            self.get_logger().warning(
+                '오류 종료 — 저장하지 않는다 (중간에 끊긴 작업. CLAUDE.md 13절). '
+                '이 회차의 측정값을 남기려면 save_on_error_exit:=true')
 
 
 def main():
