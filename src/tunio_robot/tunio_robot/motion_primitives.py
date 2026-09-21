@@ -552,6 +552,11 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     # peg_joint 는 툴 Z 둘레 회전(손목 롤)이라 관절 회전량이 곧 C 변화량이다
     exit_ = _rolled(pose, roll_deg + delta_deg) if joint == 6 else entry
 
+    # 들어가기 전에 반드시 연다. 직전 동작이 피크를 물고 있었으면 15mm 인 채로
+    # 들어가 손잡이를 정면으로 들이받는다. 나올 때는 _release() 가 같은 폭으로 연다.
+    # **완전 개방이 아니라 30mm 다** — 더 벌리면 일정 각에서 옆 페그(간격 38mm)를
+    # 친다. 30mm 는 손잡이에 안 닿는 폭이라 진입·후퇴 중 간섭이 없다 (#31)
+    _grip("open")
     _goto_pose(entry, motion)                       # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
     turned = False

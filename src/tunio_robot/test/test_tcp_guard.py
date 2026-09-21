@@ -137,8 +137,9 @@ def test_adjust_peg_가_움직이기_전에_TCP_를_켠다(api, monkeypatch):
     monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: order.append("tcp"))
 
     MP.adjust_peg(_Peg(), 6, -5.0, {})
-    assert order[0] == "tcp"
-    assert order[:3] == ["tcp", "goto", "grip"]
+    assert order[0] == "tcp"                     # 어떤 움직임보다도 먼저
+    # 진입 전에 30mm 로 연다(#31). 그다음 이동, 그다음 파지
+    assert order[:4] == ["tcp", "grip", "goto", "grip"]
 
 
 def test_TCP_가_거부되면_페그로_안_간다(api, monkeypatch):

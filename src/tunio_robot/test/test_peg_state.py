@@ -279,3 +279,26 @@ def test_돌다가_실패하면_들어온_자세로_나온다(spy, monkeypatch):
     assert [e for e in log if e[0] == "release"]        # 실패해도 놓는다
     retreat = [e for e in log if e[0] == "movel"][-1]
     assert retreat[1][5] == pytest.approx(TAUGHT_C + 40.0)
+
+
+def test_들어가기_전에_연다(spy):
+    """
+    직전 동작이 피크를 물고 있었으면 15mm 인 채로 들어가 손잡이를 들이받는다.
+
+    30mm 는 손잡이에 안 닿는 폭이다(실물 확인). 더 벌리면 옆 페그를 친다.
+    """
+    MP, log = spy
+    MP.adjust_peg(_Peg(PEG6), 6, -10.0, {}, roll_deg=0.0)
+    grips = [e for e in log if e[0] == "grip"]
+    assert grips[0] == ("grip", "open")              # 이동 전에 연다
+    assert grips[1] == ("grip", "peg")
+    # 여는 동작이 첫 이동보다 앞에 있어야 한다
+    assert log.index(("grip", "open")) < next(i for i, e in enumerate(log)
+                                              if e[0] in ("movejx", "movel"))
+
+
+def test_나갈_때도_30mm_로_연다(spy):
+    """후퇴 중에도 옆 페그를 안 쳐야 한다. _release() 가 open 프리셋을 쓴다."""
+    MP, log = spy
+    MP.adjust_peg(_Peg(PEG6), 6, -10.0, {}, roll_deg=0.0)
+    assert ("release",) in log
