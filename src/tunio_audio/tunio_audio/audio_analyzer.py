@@ -20,6 +20,7 @@ Result에는 요청의 job_id·string_number·measurement_id를 그대로 실어
 늦게 도착한 이전 측정이 현재 결과로 쓰이지 않게 하기 위한 것이다(명세 4절).
 같은 이유로 측정은 한 번에 하나만 받는다. 이미 진행 중이면 새 Goal을 거부한다.
 """
+import glob
 import time
 
 import numpy as np
@@ -69,7 +70,10 @@ class AudioAnalyzer(Node):
         self.declare_parameter("default_timeout_sec", 10.0)
         self.declare_parameter("default_onset_timeout_sec", 10.0)
         # 마이크 대신 WAV를 읽는다 (마이크 없이 흐름 확인용). 빈 문자열이면 마이크.
-        # {string_number}를 넣으면 줄 번호로 치환된다. 예: tools/g{string_number}_*.wav
+        # {string_number}를 넣으면 줄 번호로 치환되고, 와일드카드는 glob로 펼쳐
+        # 회차마다 다른 파일을 돌아가며 쓴다. 예: tools/g{string_number}_*.wav
+        # 줄마다 음 이름이 달라(g6_e2 / g5_a2 / g2_b3 / g1_e4) 한 패턴으로 4줄을
+        # 덮으려면 와일드카드가 있어야 한다. _resolve_replay 참조
         self.declare_parameter("replay_wav", "")
 
         dev = self.get_parameter("device").value
@@ -79,6 +83,10 @@ class AudioAnalyzer(Node):
         )
 
         self._busy = False
+        # replay 회차 카운터. 키는 **줄 번호를 치환한 뒤, glob 하기 전** 경로다.
+        # 키를 원본 패턴으로 바꾸면 4줄이 카운터 하나를 공유해 회전이 망가진다.
+        # 자세한 이유는 _resolve_replay 의 "키를 무엇으로 잡는가" 참조.
+        self._replay_turn = {}
         self._cb_group = ReentrantCallbackGroup()
         self.srv = ActionServer(
             self, MeasurePitch, "/audio/measure_pitch",
@@ -120,6 +128,47 @@ class AudioAnalyzer(Node):
         return CancelResponse.ACCEPT
 
     # ---------------- 보조 ----------------
+    def _resolve_replay(self, pattern, string_number):
+        """
+        replay_wav 패턴을 실제 파일 하나로 푼다.
+
+        {string_number} 를 줄 번호로 바꾸고, 와일드카드가 있으면 glob 로 펼쳐
+        **회차마다 다른 파일을 돌아가며** 고른다.
+
+        왜 와일드카드가 필요한가
+          녹음 파일 이름에 음 이름이 들어 있어 줄마다 다르다
+          (g6_e2 / g5_a2 / g2_b3 / g1_e4). {string_number} 치환만으로는
+          한 패턴이 4줄을 못 덮는다.
+
+        왜 돌아가며 쓰는가
+          같은 파일만 반복하면 매번 같은 값이 나와 흐름은 돌지만 흩어짐이
+          드러나지 않는다. 10개를 번갈아 쓰면 실제 측정에 가까워진다.
+
+        정렬한 순서대로 도는 것은 의도한 것이다. 무작위면 실패를 재현할 수 없다.
+
+        키를 무엇으로 잡는가 — 고치기 전에 읽을 것
+          self._replay_turn 의 키는 "줄 번호를 치환한 뒤, glob 하기 전" 경로다
+          (예: tools/g6_*.wav). 원본 패턴(tools/g{string_number}_*.wav)으로
+          바꾸면 더 단순해 보이지만 **4줄이 카운터 하나를 공유한다.** 줄마다 녹음
+          개수가 다르면 건너뛰기가 제각각이 되고, 줄을 옮길 때마다 회차가 엉킨다.
+
+        이 함수는 깨져도 조용하다
+          존재 이유가 "회차마다 다른 파일"인데, 그 성질이 깨져서 같은 파일만
+          반복해도 sim 은 그대로 돌고 측정도 성공하고 조율도 수렴한다. 에러가 안
+          난다. 없어지는 것은 재측정 간의 흩어짐뿐이라 눈으로는 안 보인다.
+          그래서 test_pitch.py 에 회전·키 분리·경계를 고정하는 테스트를 두었다
+          (test_replay_* 4개). 여기를 고치면 그쪽도 같이 본다.
+        """
+        path = pattern.replace("{string_number}", str(string_number))
+        if not any(c in path for c in "*?["):
+            return path
+        hits = sorted(glob.glob(path))
+        if not hits:
+            raise FileNotFoundError(f"패턴에 맞는 파일이 없다: {path}")
+        i = self._replay_turn.get(path, 0)
+        self._replay_turn[path] = i + 1
+        return hits[i % len(hits)]
+
     def _record_sec(self, target_hz):
         if target_hz < float(self.get_parameter("low_freq_hz").value):
             return float(self.get_parameter("record_sec_low").value)
@@ -181,11 +230,19 @@ class AudioAnalyzer(Node):
 
         # --- 입력 준비 ---
         if replay:
-            path = replay.replace("{string_number}", str(req.string_number))
+            # path 를 먼저 None 으로 둔다. _resolve_replay 가 던지면 path 가 아직
+            # 없는데 로그에서 그대로 쓰면 에러 처리하다 NameError 가 난다.
+            # 파일까지 풀렸으면 그 파일을, 못 풀었으면 원본 패턴을 찍는다 —
+            # 회차마다 파일이 바뀌므로 어느 파일에서 터졌는지가 중요하다.
+            # (wave.Error "file does not start with RIFF id" 처럼 예외 메시지에
+            #  파일명이 없는 경우가 있다)
+            path = None
             try:
+                path = self._resolve_replay(replay, req.string_number)
                 buf, sr = read_wav(path)
             except Exception as exc:
-                self.get_logger().error(f"[{tag}] WAV를 읽지 못했다 {path}: {exc}")
+                self.get_logger().error(
+                    f"[{tag}] WAV를 읽지 못했다 {path or replay}: {exc}")
                 goal_handle.abort()
                 return self._result(req, failure_reason=pitch.FAIL_LOW_SIGNAL)
             self.get_logger().info(
