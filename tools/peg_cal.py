@@ -105,9 +105,20 @@ def measure_once(rec, center_hz, duration, sim=None):
     return None, a.summary()
 
 
+# 직전 측정의 평균 발현 세기(dBFS). 측정 사이의 세기 차이를 잡으려고 들고 있다.
+# 2026-09-21 실측: 발현 세기와 읽히는 음높이가 r=0.913 으로 붙어 다닌다
+# (기울기 0.516 센트/dB). 약하게 뜯으면 낮게, 세게 뜯으면 높게 읽힌다.
+# 한 측정 안의 일치(아래 3.0센트 조기 종료)는 이 편향을 못 잡는다. 각 측정은
+# 자기들끼리 잘 맞으면서 측정끼리 어긋날 수 있기 때문이다. 페그 실측은 2센트
+# 변화를 보려는 것이라, 8dB 차이로 생기는 4센트가 그대로 신호로 둔갑한다.
+_last_level = None
+LEVEL_DRIFT_DB = 3.0       # 이만큼 차이나면 경고 (약 1.5센트 편향에 해당)
+
+
 def measure_stable(rec, center_hz, duration, tries=4, sim=None):
     """여러 번 재서 중앙값. 2회 이상 성공해야 값을 준다."""
-    vals, last = [], ""
+    global _last_level
+    vals, levels, last = [], [], ""
     for i in range(tries):
         if i:
             time.sleep(0.4)
@@ -122,7 +133,12 @@ def measure_stable(rec, center_hz, duration, tries=4, sim=None):
             print(f"       실패 — {info}")
             continue
         vals.append(hz)
-        print(f"       {hz:.3f} Hz")
+        lv = getattr(info, "level_db", None)
+        if lv is not None and math.isfinite(lv):
+            levels.append(lv)
+            print(f"       {hz:.3f} Hz   RMS {lv:+.1f} dBFS")
+        else:
+            print(f"       {hz:.3f} Hz")
         if len(vals) >= 2 and abs(cents(max(vals), min(vals))) < 3.0:
             break
     if len(vals) < 2:
@@ -132,6 +148,20 @@ def measure_stable(rec, center_hz, duration, tries=4, sim=None):
     spread = abs(cents(max(vals), min(vals)))
     if spread > 5.0:
         print(f"    ⚠ 측정이 {spread:.1f}센트 흔들립니다. 마이크나 발현을 확인하세요")
+
+    if levels and sim is None:
+        lv = float(np.mean(levels))
+        if max(levels) - min(levels) > LEVEL_DRIFT_DB:
+            print(f"    ⚠ 이 측정 안에서 발현 세기가 "
+                  f"{max(levels) - min(levels):.1f}dB 벌어졌습니다 "
+                  f"(약 {(max(levels) - min(levels)) * 0.516:.1f}센트 편향)")
+        if _last_level is not None and abs(lv - _last_level) > LEVEL_DRIFT_DB:
+            d = lv - _last_level
+            print(f"    ⚠ 직전 측정보다 {abs(d):.1f}dB "
+                  f"{'세게' if d > 0 else '약하게'} 뜯었습니다 "
+                  f"({_last_level:+.1f} → {lv:+.1f} dBFS). 이것만으로 "
+                  f"{d * 0.516:+.1f}센트가 생깁니다 — 회전 결과와 구분되지 않습니다")
+        _last_level = lv
     return med
 
 
