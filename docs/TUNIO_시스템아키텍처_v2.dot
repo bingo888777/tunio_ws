@@ -1,0 +1,60 @@
+digraph TUNIO_ARCH {
+  graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=28,
+         label=<<B>TUNIO 시스템 아키텍처 v2</B><BR/><FONT POINT-SIZE="13" COLOR="#5A635E">2026-09-21 · PC 3대 · 강의실 Wi-Fi · Ubuntu 24.04 / ROS 2 Jazzy · ROS_DOMAIN_ID 10</FONT><BR/> >,
+         bgcolor="#FBFCFA", nodesep=0.30, ranksep=0.50, compound=true, newrank=true];
+  node  [shape=box, style="rounded,filled", fontname="Noto Sans CJK KR", fontsize=13,
+         margin="0.20,0.13", penwidth=1.4, width=2.9];
+  edge  [fontname="Noto Sans CJK KR", fontsize=10, color="#79837D", penwidth=1.2,
+         arrowsize=0.7, fontcolor="#47524D"];
+
+  subgraph cluster_robot {
+    label=<<B>① 로봇 제어 PC</B>  ·  정묵 / 성현<BR/> >;
+    fontsize=16; fontcolor="#96590F"; color="#C9873A"; style=rounded; penwidth=1.7; bgcolor="#FDF6EC";
+    teach [label=<<B>teach_points.yaml</B><BR/><FONT POINT-SIZE="10.5">페그 4 · 발현 4 · 경유지 · 대기</FONT>>, fillcolor="#F8E6CD", color="#C9873A"];
+    rc    [label=<<B>robot_controller</B><BR/><FONT POINT-SIZE="10.5">play_string · adjust_peg · strum_all</FONT>>, fillcolor="#F5DDBC", color="#B3761F"];
+    mp    [label=<<B>motion_primitives</B><BR/><FONT POINT-SIZE="10.5">DSR_ROBOT2 · 그리퍼 디지털 I/O</FONT>>, fillcolor="#F8E6CD", color="#C9873A"];
+    drv   [label=<<B>두산 드라이버</B><BR/><FONT POINT-SIZE="10.5">m0609_rg2_bringup mode:=real</FONT>>, fillcolor="#FBEFDF", color="#D9A566"];
+    teach -> rc [style=dashed, label=" 교시 좌표"];
+    rc -> mp -> drv;
+  }
+
+  subgraph cluster_server {
+    label=<<B>② 서버 PC</B>  ·  정동휘<BR/> >;
+    fontsize=16; fontcolor="#1C5686"; color="#3E7FB8"; style=rounded; penwidth=1.7; bgcolor="#EEF5FC";
+    web [label=<<B>web_node</B><BR/><FONT POINT-SIZE="10.5">관제 웹 · 노드 안 http.server</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
+    tm  [label=<<B>task_manager</B><BR/><FONT POINT-SIZE="10.5">6→5→2→1 · 센트 판정 · 재시도<BR/>페그 회전량 · 백래시 마무리</FONT>>, fillcolor="#C6DDF4", color="#2C6FA8"];
+    rs  [label=<<B>result_store</B><BR/><FONT POINT-SIZE="10.5">저장 · 이력 조회</FONT>>, fillcolor="#D9E9F8", color="#3E7FB8"];
+    db  [label=<<B>SQLite</B><BR/><FONT POINT-SIZE="10.5">jobs · string_results · settings_snapshot</FONT>>, shape=cylinder, style=filled, fillcolor="#E8F1FA", color="#3E7FB8"];
+    ds  [label=<<B>Fast DDS Discovery Server</B><BR/><FONT POINT-SIZE="10.5">UDP :11811 · systemd · 3 PC 의 관문</FONT>>, fillcolor="#DCEAF6", color="#7FA9CE", style="rounded,filled,dashed"];
+    fh  [label=<<B>fake_hardware</B><BR/><FONT POINT-SIZE="10.5">sim 전용 · 로봇/마이크 대역</FONT>>, fillcolor="#EDF3F9", color="#9DBAD4", style="rounded,filled,dashed"];
+    web -> tm [dir=both, label=<  /tuning/state<BR ALIGN="LEFT"/>  start·pause·resume·cancel<BR ALIGN="LEFT"/>  get·set_settings<BR ALIGN="LEFT"/>>];
+    tm -> rs [dir=both, label=<  /tuning/save_job<BR ALIGN="LEFT"/>  /tuning/get_history<BR ALIGN="LEFT"/>>];
+    rs -> db;
+    tm -> fh [style=dashed, color="#9DBAD4", label=" sim 경로"];
+    fh -> ds [style=invis];
+  }
+
+  subgraph cluster_mic {
+    label=<<B>③ 마이크 PC</B>  ·  정정인<BR/> >;
+    fontsize=16; fontcolor="#0F6749"; color="#2E9070"; style=rounded; penwidth=1.7; bgcolor="#EDF8F3";
+    usb [label=<<B>USB 외장 마이크</B><BR/><FONT POINT-SIZE="10.5">OS 향상 기능 해제 · 44.1kHz</FONT>>, fillcolor="#D6EFE4", color="#2E9070"];
+    aa  [label=<<B>audio_analyzer</B><BR/><FONT POINT-SIZE="10.5">onset 검출 → FFT 유도 + 협대역 YIN<BR/>돌출 20dB · 창 일치 12센트</FONT>>, fillcolor="#C2E8D6", color="#1F7D5E"];
+    rw  [label=<<B>replay_wav</B><BR/><FONT POINT-SIZE="10.5">마이크 없이 녹음 재생 (glob)</FONT>>, fillcolor="#EAF6F0", color="#7CC0A4", style="rounded,filled,dashed"];
+    usb -> aa;
+    aa -> rw [style=dashed, color="#7CC0A4", dir=back];
+  }
+
+  ctrl [label=<<B>두산 컨트롤러</B><BR/><FONT POINT-SIZE="10.5">M0609 + OnRobot RG2</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
+  pick [label=<<B>피크 거치대</B><BR/><FONT POINT-SIZE="10.5">집었다 반환 · 조절 1회당 왕복</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
+  brow [label=<<B>브라우저</B><BR/><FONT POINT-SIZE="10.5">서버 PC localhost</FONT>>, fillcolor="#F1F3F5", color="#9AA5AE"];
+
+  drv  -> ctrl [label=" 유선 LAN"];
+  ctrl -> pick [style=dashed, arrowhead=none, label=" 피크 집기/반환"];
+  brow -> web [dir=both, label=" HTTP + SSE"];
+
+  rc -> tm [dir=both, constraint=false, label=<<B>로봇 Action</B><BR/>/robot/play_string<BR/>/robot/adjust_peg<BR/>/robot/strum_all>];
+  tm -> aa [dir=both, constraint=false, label=<<B>측정 Action</B><BR/>/audio/measure_pitch<BR/><FONT POINT-SIZE="9.5">Feedback = 준비 완료</FONT>>];
+
+  { rank=same; teach; web; usb; }
+  { rank=same; rc; tm; aa; }
+}
