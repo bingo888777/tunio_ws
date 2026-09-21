@@ -176,9 +176,87 @@ def _release():
     return _grip("open")
 
 
-def pluck_string(pose, motion):
-    """줄 튕기기. 힘 제어로 일정한 세기 유지 후 즉시 5mm 이상 후퇴(버징 방지)."""
-    raise NotImplementedError("성현 담당 — 발현 동작 교시 후 구현")
+def pluck_string(pose, motion, standby=None):
+    """
+    줄 튕기기 1차 구현 (위치 제어만). 힘 제어·피크 집기는 2단계에서 붙인다.
+
+    pose    — 발현 접촉 자세. 작업 좌표(**pose.task**, YAML 의 x: Base 절대 [X,Y,Z,A,B,C],
+              교시 TCP 기준)여야 한다. 접촉점 하나만 교시하고 위 대기점은 여기서 계산한다.
+              관절각(j)만 있으면 "위에서 접근"을 만들 수 없어 거부한다.
+    motion  — teach_points.yaml 의 motion 절. 아래 pluck_* 키가 없으면 기본값을 쓴다
+              (기본값은 pluck_test.py 에서 검증한 값).
+    standby — 기타 위 대기 자세(Pose, joints). 주면 발현 전후에 들른다.
+
+    순서 (성현 2026-09-19):
+      대기 자세 → 접촉점 위 pluck_up_mm → 접촉점(느리게) → 옆으로 스트로크
+      → 즉시 후퇴(5mm 이상) → 접촉점 위 → 대기 자세
+    """
+    _require_api()
+    x = getattr(pose, "task", None)
+    if not x or len(x) != 6:
+        raise MotionError(f"{pose.name}: 발현 자세는 x(Base posx 6개)로 적어야 한다. "
+                          "접촉점 위로 접근하려면 작업 좌표가 필요하다")
+
+    up_mm = float(motion.get("pluck_up_mm", 20.0))
+    stroke = list(motion.get("pluck_stroke_tool", [-8.0, 0.0, 0.0, 0.0, 0.0, 0.0]))
+    retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
+    v_app, a_app = motion.get("pluck_vel_approach", 100), motion.get("pluck_acc_approach", 100)
+    v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
+    v_str, a_str = motion.get("pluck_vel_stroke", 1000), motion.get("pluck_acc_stroke", 2000)
+
+    if _retract_depth_mm(retract) < 5.0:
+        raise MotionError("후퇴 거리가 5mm 미만이다 (CLAUDE.md 3.4). pluck_retract_tool 을 확인하라")
+
+    contact = list(x)
+    above = list(x)
+    above[2] += up_mm                                   # Base +Z
+
+    if standby is not None:
+        _movej(standby.joints, motion)                  # 기타 위 대기
+    _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
+    _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
+    _movel_tool_rel(stroke, v_str, a_str, radius=3)     # 옆으로 살짝 → 발현
+    _movel_tool_rel(retract, v_str, a_str)              # 즉시 후퇴 (버징 방지)
+    _movel_base(above, v_app, a_app)                    # 다시 2cm 위
+    if standby is not None:
+        _movej(standby.joints, motion)                  # 기타 위 대기
+
+
+def _retract_depth_mm(delta):
+    """후퇴 벡터의 병진 크기(mm)."""
+    return sum(float(v) ** 2 for v in delta[:3]) ** 0.5
+
+
+def _movel_base(pos, vel, acc):
+    """직선 이동 (Base 절대 posx). 속도를 직접 준다. _movel 은 motion 절의 travel_* 를 쓴다."""
+    api = _require_api()
+    from DR_common2 import posx
+    return api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE)
+
+
+def _movel_tool_rel(delta, vel, acc, radius=0):
+    """
+    Tool(TCP) 좌표 기준 상대 직선 이동. 스트로크·후퇴에 쓴다.
+
+    피크 자세를 기준으로 움직이므로 기타가 조금 옮겨져도 방향이 유지된다.
+    radius 를 주면 다음 모션과 블렌딩(멈춤 없이 이어짐).
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    return api.movel(posx(list(delta)), vel=vel, acc=acc,
+                     ref=api.DR_TOOL, mod=api.DR_MV_MOD_REL, radius=radius)
+
+
+def read_force():
+    """툴에 걸리는 외력 [Fx,Fy,Fz,Mx,My,Mz] (Tool 기준). 로그·힘 제어 파라미터 산정용."""
+    api = _require_api()
+    return api.get_tool_force(api.DR_TOOL)
+
+
+def read_posx():
+    """현재 TCP 자세 (Base). 교시값 기록·로그용. 반환 (posx, sol)."""
+    api = _require_api()
+    return api.get_current_posx(api.DR_BASE)
 
 
 def adjust_peg(pose, joint, delta_deg, motion):

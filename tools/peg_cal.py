@@ -6,9 +6,11 @@
 이 값이 있어야 task_manager 가 측정 오차로부터 AdjustPeg 의 angle_deg 를 계산한다.
 현재 tuning_logic.peg_angle() 의 k 는 임시값이다.
 
-정동휘가 쓴 수동 측정 가이드(PEG_ANGLE_MEASUREMENT.md, 저장소에는 없고 본인 로컬에 있음)의
-절차를 그대로 따르되, 주파수 측정·센트 환산·회귀·편차 점검을 자동으로 한다.
+주파수 측정·센트 환산·회귀·편차 점검을 자동으로 한다.
 사람은 페그를 돌리고 실제로 몇 도 돌렸는지만 입력하면 된다.
+
+측정 절차와 실측 기록의 기준 문서는 docs/주파수분석_테스트가이드.md 다 (마이크·분석 담당).
+아래 '측정 원칙'도 그 문서를 따른다.
 
 실행 (워크스페이스를 source 해야 한다):
     source /opt/ros/jazzy/setup.bash && source install/setup.bash

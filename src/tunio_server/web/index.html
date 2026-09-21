@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TUNIO 관제</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%8E%B8%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -16,6 +17,7 @@
   <div class="topmeta">
     <span id="job-id" class="jobid">작업 없음</span>
     <span id="link" class="badge badge-wait">연결 중</span>
+    <button id="btn-theme" class="btn btn-icon" title="밝은/어두운 화면 전환">◐</button>
   </div>
 </header>
 
@@ -46,34 +48,74 @@
 
   <div id="toast" class="toast"></div>
 
-  <div class="now">
-    <div class="now-head">
-      <span class="label">현재 줄</span>
-      <span id="now-string" class="now-string">—</span>
-    </div>
-    <div class="readouts">
-      <div class="readout">
-        <span class="label">목표</span>
-        <strong id="now-target" class="hz">—</strong><span class="unit">Hz</span>
-      </div>
-      <div class="readout readout-main">
-        <span class="label">측정</span>
-        <strong id="now-measured" class="hz hz-big">—</strong><span class="unit">Hz</span>
-      </div>
-      <div class="readout">
-        <span class="label">오차</span>
-        <strong id="now-error" class="hz">—</strong><span class="unit">Hz</span>
-      </div>
-      <div class="readout">
-        <span class="label">조절 횟수</span>
-        <strong id="now-adjust" class="hz">—</strong>
-      </div>
-    </div>
-    <p class="hint">판정은 센트로 하고 화면 표시는 Hz 다. 오차가 양수면 목표보다 높은 음이다.</p>
-  </div>
+  <div class="stage">
 
-  <h2 class="section-title">줄별 결과</h2>
-  <div id="strings" class="strings"></div>
+    <!-- 헤드스톡. 조율에서 실제로 보는 곳은 페그와 줄이라 바디는 쓰지 않는다. -->
+    <div class="guitar-wrap">
+      <div class="progress">
+        <span class="progress-label">조율 진행</span>
+        <div id="progress-dots" class="progress-dots"></div>
+        <span id="progress-count" class="progress-count">— / 4</span>
+      </div>
+      <div id="guitar" class="guitar"></div>
+      <p class="guitar-cap">대상 줄 6 · 5 · 2 · 1 (4 · 3번은 조율하지 않는다)</p>
+    </div>
+
+    <!-- 튜너 + 줄별 결과. 한 화면에 같이 두려고 오른쪽 칸에 세로로 쌓는다. -->
+    <div class="stage-right">
+
+      <div class="tuner">
+        <div class="tuner-top">
+          <span id="now-stringno" class="tuner-stringno">—</span>
+          <div class="tuner-note">
+            <strong id="now-note" class="note">—</strong>
+            <span id="now-octave" class="octave"></span>
+          </div>
+          <span id="now-adjust" class="tuner-adjust">—</span>
+        </div>
+
+        <div class="meter">
+          <div class="meter-scale">
+            <span class="flat">♭</span>
+            <div class="meter-track">
+              <div class="meter-zone"></div>
+              <div class="meter-ticks">
+                <i style="left:0%"></i><i style="left:25%"></i>
+                <i class="mid" style="left:50%"></i>
+                <i style="left:75%"></i><i style="left:100%"></i>
+              </div>
+              <div id="needle" class="needle"></div>
+            </div>
+            <span class="sharp">♯</span>
+          </div>
+          <div class="meter-labels">
+            <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+          </div>
+        </div>
+
+        <div class="tuner-bottom">
+          <div class="cents-wrap">
+            <strong id="now-cents" class="cents-big">—</strong>
+            <span class="cents-unit">센트</span>
+          </div>
+          <div class="hzline">
+            <span class="hz-item"><span class="k">측정</span>
+              <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
+            <span class="hz-sep">/</span>
+            <span class="hz-item"><span class="k">목표</span>
+              <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="results">
+        <h2 class="section-title">줄별 결과</h2>
+        <div id="strings" class="strings"></div>
+      </div>
+
+    </div>
+
+  </div>
 
 </section>
 
@@ -81,7 +123,19 @@
 <section id="tab-history" class="panel">
   <div class="controls">
     <button id="btn-history-reload" class="btn">새로 읽기</button>
-    <span class="hint" id="history-hint">최신순으로 최근 20건까지 보여준다.</span>
+    <div class="search">
+      <input id="history-q" type="search" placeholder="시작 시각으로 검색 (예: 2026-09-19, 12:56, 20260919)"
+             autocomplete="off">
+      <button id="btn-history-clear" class="btn btn-icon" title="검색어 지우기">✕</button>
+    </div>
+    <select id="history-filter" class="select" title="판정으로 거르기">
+      <option value="">전체 판정</option>
+      <option value="1">성공만</option>
+      <option value="2">일부 성공만</option>
+      <option value="3">실패만</option>
+    </select>
+    <div class="spacer"></div>
+    <span class="hint" id="history-hint">최신순으로 보여준다.</span>
   </div>
   <div class="history-wrap">
     <div id="history-list" class="history-list"></div>

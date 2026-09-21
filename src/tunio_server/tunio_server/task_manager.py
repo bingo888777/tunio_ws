@@ -30,7 +30,7 @@ from tunio_server import peg_calibration as PC
 from tunio_server import tuning_logic as L
 
 # 명세 5절: /tuning/state 는 reliable, depth 1, transient local.
-# 늦게 켠 UI도 마지막 상태를 즉시 받는다. hmi_node 쪽 값과 같아야 매칭된다.
+# 늦게 켠 UI도 마지막 상태를 즉시 받는다. web_node 쪽 값과 같아야 매칭된다.
 STATE_QOS = QoSProfile(
     reliability=QoSReliabilityPolicy.RELIABLE,
     durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
@@ -104,6 +104,12 @@ class TaskManager(Node):
         self.declare_parameter('adjust_timeout_sec', 60.0)  # 임시값. F3 로봇 실측 후 조정
         self.declare_parameter('strum_timeout_sec', 60.0)   # 임시값
         self.declare_parameter('measure_slack_sec', 5.0)    # 통신 왕복 여유
+
+        # 줄 하나가 끝난 뒤 다음 줄로 넘어가기 전에 쉬는 시간.
+        # 기본 0 — 실제 동작에 없는 대기를 넣지 않는다. 화면 확인용 대역(fake_hardware)
+        # 으로 돌릴 때만 값을 준다. 로봇이 실제로 움직이면 줄 사이 이동 시간이 있어
+        # 결과를 볼 여유가 생기지만, 대역에는 그 시간이 없어 판정이 순식간에 지나간다.
+        self.declare_parameter('string_done_hold_sec', 0.0)
         self.declare_parameter('cancel_wait_sec', 5.0)      # 취소 요청 수용 대기
         self.declare_parameter(
             'strum_string_numbers', [],
@@ -452,6 +458,19 @@ class TaskManager(Node):
             raise Cancelled()
         self._set_phase(resume_to)
 
+    def _sleep_gated(self, seconds):
+        """
+        취소를 존중하며 기다린다.
+
+        통째로 time.sleep 하면 그동안 취소 요청이 들어와도 반응하지 않는다.
+        잘게 나눠 자면서 확인한다.
+        """
+        end = time.monotonic() + float(seconds)
+        while time.monotonic() < end:
+            if self._cancel.is_set():
+                raise Cancelled()
+            time.sleep(min(0.1, end - time.monotonic()))
+
     # ------------------------------------------------------------------ 측정 1회
 
     def _measure_once(self, string_number):
@@ -612,6 +631,10 @@ class TaskManager(Node):
 
             self.adjust_count += 1
             rec.adjust_count = self.adjust_count
+            # 조절이 끝난 직후에 알린다. 여기서 발행하지 않으면 다음 측정이 끝날 때까지
+            # 화면의 조절 횟수가 그대로라, 측정값과 조절 횟수가 한꺼번에 바뀌는 것처럼
+            # 보이고 페그를 돌리는 동안은 화면이 멈춘 것처럼 보인다.
+            self._publish_state()
             if MEASURE_RETRY_RESET_AFTER_ADJUST:
                 retry_budget = self.active_settings.max_measure_retry
 
@@ -740,9 +763,13 @@ class TaskManager(Node):
     def _run_job(self):
         self.get_logger().info('작업 %s 시작' % self.job_id)
         try:
+            hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
                 self._gate()
                 self._tune_string(s)
+                # 판정 결과를 화면이 보여 줄 여유. 기본 0 이라 실제 동작에는 영향이 없다.
+                if hold > 0:
+                    self._sleep_gated(hold)
 
             self._verify_pass()                           # Phase 2
             self._strum()
