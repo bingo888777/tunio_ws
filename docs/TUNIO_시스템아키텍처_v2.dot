@@ -55,6 +55,33 @@ digraph TUNIO_ARCH {
   rc -> tm [dir=both, constraint=false, label=<<B>로봇 Action</B><BR/>/robot/play_string<BR/>/robot/adjust_peg<BR/>/robot/strum_all>];
   tm -> aa [dir=both, constraint=false, label=<<B>측정 Action</B><BR/>/audio/measure_pitch<BR/><FONT POINT-SIZE="9.5">Feedback = 준비 완료</FONT>>];
 
+
+  iface [shape=plaintext, margin=0, label=<
+  <TABLE BORDER="0" CELLBORDER="1" CELLSPACING="0" CELLPADDING="5" BGCOLOR="#FFFFFF" COLOR="#C6CEC9">
+    <TR><TD COLSPAN="3" BGCOLOR="#EFF2F0" ALIGN="LEFT"><B>tunio_interfaces — 13개 전부</B>  <FONT POINT-SIZE="9.5" COLOR="#5A635E">기준본: docs/TUNIO_INTERFACE_SPEC.md</FONT></TD></TR>
+
+    <TR><TD ROWSPAN="4" BGCOLOR="#FBF3E8" ALIGN="LEFT"><B>Action</B><BR/><FONT POINT-SIZE="9">4</FONT></TD>
+        <TD ALIGN="LEFT">MeasurePitch</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/audio/measure_pitch   <FONT COLOR="#7C857F">Feedback 있음</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">PlayString</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/play_string</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">AdjustPeg</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/adjust_peg   <FONT COLOR="#7C857F">direction ±1 · angle_deg 양수</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">StrumAll</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/robot/strum_all   <FONT COLOR="#7C857F">대기 자세 복귀까지</FONT></FONT></TD></TR>
+
+    <TR><TD ROWSPAN="5" BGCOLOR="#EAF2FA" ALIGN="LEFT"><B>Service</B><BR/><FONT POINT-SIZE="9">5종 · 8개 이름</FONT></TD>
+        <TD ALIGN="LEFT">CommandTuning</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/start · pause · resume · cancel   <FONT COLOR="#7C857F">이름이 곧 명령</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">GetSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/get_settings</FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">SetSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/set_settings   <FONT COLOR="#7C857F">작업 중 변경 거부</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">GetHistory</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/get_history   <FONT COLOR="#7C857F">job_id 비면 목록, 채우면 상세</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">SaveJob</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/save_job</FONT></TD></TR>
+
+    <TR><TD ROWSPAN="4" BGCOLOR="#EDF7F2" ALIGN="LEFT"><B>Message</B><BR/><FONT POINT-SIZE="9">4</FONT></TD>
+        <TD ALIGN="LEFT">TuningState</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10">/tuning/state   <FONT COLOR="#7C857F">reliable · transient local · depth 1</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">StringResult</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">토픽이 아니다 — TuningState · GetHistory · SaveJob 안에 실린다</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">TuningSettings</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">Get/SetSettings · GetHistory 안에 실린다</FONT></FONT></TD></TR>
+    <TR><TD ALIGN="LEFT">JobSummary</TD><TD ALIGN="LEFT"><FONT POINT-SIZE="10"><FONT COLOR="#7C857F">GetHistory 목록 조회 응답 안에 실린다</FONT></FONT></TD></TR>
+  </TABLE>>];
+
+  ctrl -> iface [style=invis];
+
   { rank=same; teach; web; usb; }
   { rank=same; rc; tm; aa; }
 }
