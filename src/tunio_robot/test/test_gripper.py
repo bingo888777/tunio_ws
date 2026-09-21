@@ -27,9 +27,7 @@ def test_저장소_프리셋이_읽힌다():
     p = _presets()
     assert set(p) == {"open", "close", "peg"}
     assert p["peg"].width_mm == 21
-    # 2026-09-21 — 90 에서 줄였다. 놓을 때 벌어진 손가락이 옆 페그를 쳤다 (#31).
-    # 웹로직이 실제 폭을 정하므로 이 값은 기록일 뿐이다. 어긋나도 로봇은 그대로 움직인다
-    assert p["open"].width_mm == 30
+    assert p["open"].width_mm > p["peg"].width_mm
 
 
 def test_출력을_전부_내린_뒤_올린다():
@@ -74,3 +72,47 @@ def test_출력값이_0이나_1이_아니면_걸린다():
 def test_outputs_가_없으면_걸린다():
     with pytest.raises(G.GripperError, match="outputs"):
         G.parse_presets({"bad": {"width_mm": 21}})
+
+
+# ─────────────── 열기 폭이 안전한 값인가 (이슈 #31) ───────────────
+#
+# 숫자를 박아두지 않고 **조건**을 본다. 웹로직에서 폭을 바꾸면 yaml 기록도 같이
+# 고치게 되어 있는데(어긋나도 로봇은 그대로 움직인다), 고칠 때 안전 범위를 벗어나면
+# 여기서 걸린다.
+
+def _cfg():
+    with open(CONFIG, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def test_열기_폭이_손잡이_최대_폭보다_넓다():
+    """
+    손잡이가 **어느 각으로 서 있어도** 안 닿아야 한다.
+
+    죔 방향에 필요한 폭이 p(θ) = 길이·sinθ + 두께·cosθ 라 최대가 대각선이다.
+    90도(32.8mm)가 아니라 59도(38.2mm)가 최악이다. 90도로 보고 정하면 5.4mm 모자란다.
+    실제로 30mm 로 정했다가 진입 중 충돌 위험이 드러났다.
+    """
+    d = _cfg()
+    handle = d["peg_handle"]
+    assert handle["max_sweep_mm"] > handle["length_mm"]      # 대각선이 90도보다 넓다
+    assert d["gripper"]["presets"]["open"]["width_mm"] > handle["max_sweep_mm"]
+
+
+def test_열기_폭이_옆_페그를_안_친다():
+    """
+    손끝이 중심에서 폭/2 만큼 나간다. 옆 페그 간격(실측 38.0~38.6mm)보다 작아야 한다.
+
+    90mm 일 때 반경 45mm 로 실제로 쳤다. 그래서 줄인 것이다.
+    """
+    d = _cfg()
+    peg_spacing_mm = 38.0        # 2026-09-19 교시에서 잰 양쪽 열 간격 중 작은 쪽
+    assert d["gripper"]["presets"]["open"]["width_mm"] / 2.0 < peg_spacing_mm
+
+
+def test_문턱이_실측값_사이에_있다():
+    """빈손 < 문턱 < 물림 < 문턱 < 사점 순서가 깨지면 판정이 뒤집힌다."""
+    h = _cfg()["peg_handle"]
+    t = h["thresholds_mm"]
+    assert h["empty_mm"] < t["empty_below"] < h["thickness_mm"]
+    assert h["thickness_mm"] < t["dead_above"] < h["length_mm"]
