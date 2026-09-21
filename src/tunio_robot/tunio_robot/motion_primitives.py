@@ -504,13 +504,40 @@ def read_posx():
     return api.get_current_posx(api.DR_BASE)
 
 
-def adjust_peg(pose, joint, delta_deg, motion):
+def _rolled(pose, roll_deg):
+    """
+    손잡이 각만큼 손목을 돌린 파지 자세를 만든다 (이슈 #31).
+
+    툴 Z 둘레 회전이라 손끝 위치도 접근축도 안 바뀐다. 손가락 방향만 돈다.
+    관절각(j)으로 적힌 자세에는 쓸 수 없다 — 페그는 전부 작업 좌표(x)다.
+    """
+    if not roll_deg:
+        return pose
+    if pose.kind != "task":
+        raise MotionError(
+            f"{pose.name} 이 관절각으로 적혀 있어 손잡이 각을 못 반영한다. "
+            "페그 자세는 작업 좌표(x)여야 한다 (#31)")
+    from tunio_robot.kinematics import roll_about_tool_z
+    turned = TP.Pose(pose.name, pose.taught,
+                     task=roll_about_tool_z(pose.task, roll_deg), tcp=pose.tcp)
+    turned.sol = getattr(pose, "sol", None)
+    return turned
+
+
+def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     """
     페그 조절. 받은 관절을 받은 각도만큼 돌린다.
 
     pose      — 페그 파지 자세 (teach_points.Pose)
     joint     — 돌릴 관절 번호 1~6
     delta_deg — 부호 붙은 회전량. 부호 변환은 teach_points.joint_delta 가 이미 했다
+    roll_deg  — 손잡이가 교시 자세에서 얼마나 돌아가 있는지(도). 그만큼 손목을
+                더 돌려서 들어간다. 부르는 쪽이 peg_state 에서 꺼내 준다 (#31).
+                0 이면 교시 자세 그대로다
+
+    **끝나고 나면 손잡이가 delta_deg 만큼 더 돌아가 있다.** 그 누적은 여기서
+    안 한다 — 동작이 중간에 실패하면 얼마나 돌았는지 모르기 때문이다.
+    성공을 확인한 쪽(robot_controller)이 peg_state.add_turn 으로 적는다.
 
     백래시 대응(목표보다 높으면 풀었다 조여 올리기)은 task_manager 가 결정한다
     (명세 9.1 확정). 여기서 조이는 방향 마무리를 덧붙이면 서버가 계산한 각도와
@@ -518,16 +545,27 @@ def adjust_peg(pose, joint, delta_deg, motion):
     """
     _require_api()
     ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
-    _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
+
+    entry = _rolled(pose, roll_deg)                 # 손잡이가 돌아가 있으면 맞춰 들어간다 (#31)
+    # 돌리고 나면 손목이 그만큼 더 돌아가 있다. 나올 때 원래 자세로 되돌리면
+    # 손목이 역회전하면서 아직 손가락 사이에 있는 페그를 다시 돌려 버린다.
+    # peg_joint 는 툴 Z 둘레 회전(손목 롤)이라 관절 회전량이 곧 C 변화량이다
+    exit_ = _rolled(pose, roll_deg + delta_deg) if joint == 6 else entry
+
+    _goto_pose(entry, motion)                       # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
+    turned = False
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
         # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
         _movej(delta, turn_motion(motion), relative=True)
+        turned = True
     finally:
         _release()                                  # 실패해도 페그는 놓는다
-        _retreat(pose, motion)                      # 들어온 직선 그대로 나온다
+        # 다 돌았으면 돌아간 자세로, 도중에 멈췄으면 들어온 자세로 나온다.
+        # 어느 쪽이든 직선 경로 자체는 같다 — 자세만 다르다
+        _retreat(exit_ if turned else entry, motion)
 
 
 def strum_all(string_numbers, points):

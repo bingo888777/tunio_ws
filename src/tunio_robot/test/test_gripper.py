@@ -27,7 +27,9 @@ def test_저장소_프리셋이_읽힌다():
     p = _presets()
     assert set(p) == {"open", "close", "peg"}
     assert p["peg"].width_mm == 21
-    assert p["open"].width_mm == 90
+    # 2026-09-21 — 90 에서 줄였다. 놓을 때 벌어진 손가락이 옆 페그를 쳤다 (#31).
+    # 웹로직이 실제 폭을 정하므로 이 값은 기록일 뿐이다. 어긋나도 로봇은 그대로 움직인다
+    assert p["open"].width_mm == 30
 
 
 def test_출력을_전부_내린_뒤_올린다():

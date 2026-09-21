@@ -115,6 +115,17 @@ def test_ensure_tcp_는_이름을_받을_수_있다(api):
     assert api.calls == [("set_tcp", "PickTCP")]
 
 
+class _Peg:
+    """teach_points.Pose 흉내. adjust_peg 가 자세를 읽으므로 object() 로는 안 된다."""
+
+    kind = "task"
+    taught = True
+    tcp = "GripperDA_v1"
+    sol = 7
+    name = "pegs.6"
+    task = [342.32, -75.38, 113.49, 86.40, 89.50, 1.11]
+
+
 def test_adjust_peg_가_움직이기_전에_TCP_를_켠다(api, monkeypatch):
     """순서가 중요하다. 켜기가 goto 보다 **뒤**면 첫 직선 진입이 틀린 기준으로 나간다."""
     order = []
@@ -125,7 +136,7 @@ def test_adjust_peg_가_움직이기_전에_TCP_를_켠다(api, monkeypatch):
     monkeypatch.setattr(MP, "_movej", lambda *a, **k: order.append("movej"))
     monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: order.append("tcp"))
 
-    MP.adjust_peg(object(), 6, -5.0, {})
+    MP.adjust_peg(_Peg(), 6, -5.0, {})
     assert order[0] == "tcp"
     assert order[:3] == ["tcp", "goto", "grip"]
 
@@ -137,7 +148,7 @@ def test_TCP_가_거부되면_페그로_안_간다(api, monkeypatch):
     monkeypatch.setattr(MP, "_goto_pose", lambda *a: moved.append("goto"))
 
     with pytest.raises(MP.MotionError):
-        MP.adjust_peg(object(), 6, -5.0, {})
+        MP.adjust_peg(_Peg(), 6, -5.0, {})
     assert moved == []
 
 

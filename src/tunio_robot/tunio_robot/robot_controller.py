@@ -26,6 +26,7 @@ from rclpy.node import Node
 
 from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
 from tunio_robot import motion_primitives as MP
+from tunio_robot import peg_state as PS
 from tunio_robot import teach_points as TP
 
 
@@ -37,12 +38,24 @@ class RobotController(Node):
             get_package_share_directory("tunio_robot"), "config", "teach_points.yaml")
         self.declare_parameter("teach_points", default_yaml)
         self.declare_parameter("dry_run", True)
+        self.declare_parameter("peg_state_file", PS.DEFAULT_PATH)
+        self.declare_parameter("peg_state_max_age_sec", PS.DEFAULT_MAX_AGE_SEC)
 
         path = self.get_parameter("teach_points").value
         self.dry_run = bool(self.get_parameter("dry_run").value)
 
         self.points = TP.load(path)
         self.get_logger().info(f"교시점 로드: {path}")
+
+        # 페그 손잡이 각. 조절할 때마다 바뀌므로 기억해 둬야 다음에 제대로 문다 (#31).
+        # 파일로 남겨 노드가 죽었다 살아나도 Phase 0 를 다시 안 돌게 한다. 단 오래된
+        # 값은 사람이 손으로 돌려놨을 수 있어 믿지 않는다 (peg_state 주석 참조)
+        self.pegs = PS.PegState(
+            path=self.get_parameter("peg_state_file").value,
+            max_age_sec=float(self.get_parameter("peg_state_max_age_sec").value)).load()
+        known = self.pegs.registered()
+        self.get_logger().info(
+            f"페그 손잡이 각 등록: {known if known else '없음 — Phase 0 필요'}")
         if self.dry_run:
             self.get_logger().warn("dry_run=true — 로봇을 움직이지 않는다")
         else:
@@ -177,8 +190,19 @@ class RobotController(Node):
                     f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도{via}")
                 self._side = side
                 return
+            # 손잡이가 지금 몇 도 돌아가 있는지 (#31). 미등록이면 교시 자세 그대로 간다
+            roll = self.pegs.roll_of(r.string_number)
+            if roll is None:
+                self.get_logger().warn(
+                    f"{r.string_number}번 페그의 손잡이 각이 등록돼 있지 않다. "
+                    "교시 자세 그대로 들어간다 — 헛물 수 있다 (Phase 0 미구현, #31)")
             self._cross_to(side)
-            MP.adjust_peg(pose, joint, delta, self.points.motion)
+            MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll or 0.0)
+            # 돌린 만큼 손잡이도 돌아갔다. **성공한 뒤에만** 적는다 —
+            # 중간에 실패하면 얼마나 돌았는지 모르므로 누적하면 더 틀어진다
+            if roll is not None:
+                self.pegs.add_turn(r.string_number, delta)
+                self.pegs.save()
             self._side = side
 
         return self._run("adjust_peg", goal, AdjustPeg.Result, work)

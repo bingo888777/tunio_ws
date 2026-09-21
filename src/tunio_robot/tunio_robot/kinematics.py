@@ -142,6 +142,24 @@ def shift_tcp(posx, delta_mm):
     return [posx[i] + z[i] * delta_mm for i in range(3)] + list(posx[3:6])
 
 
+def roll_about_tool_z(posx, deg):
+    """
+    툴 Z 둘레로 손목만 돌린 자세를 만든다. 손끝 위치와 접근축은 안 바뀐다 (이슈 #31).
+
+    intrinsic ZYZ 에서 마지막 Rz(C) 가 **툴 Z 둘레** 회전이다. 툴 Z 자체는
+    Rz(A)Ry(B) 로 정해지므로 C 를 건드려도 방향이 안 바뀐다
+    (teach_points.approach_axis 주석과 같은 이야기다).
+
+    그래서 페그 손잡이가 돌아가 있으면 C 에 그만큼 더해 주면 된다. 접근 경로는
+    그대로 두고 손가락 방향만 맞춘다.
+    """
+    if len(posx) < 6:
+        raise ValueError("posx 는 [X, Y, Z, A, B, C] 6개다")
+    out = list(posx)
+    out[5] = posx[5] + float(deg)
+    return out
+
+
 def wrist_casing(joints_deg):
     """J5 쪽 L자 케이싱이 부푼 자리만 [X, Y, Z] mm 로."""
     return fk(joints_deg)["wrist_casing"]
