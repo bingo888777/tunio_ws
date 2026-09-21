@@ -89,6 +89,17 @@ def main():
         print(f"get_last_alarm() = {alarm}")
     except Exception as e:                                       # noqa: BLE001
         print(f"get_last_alarm() 실패: {e}")
+    try:
+        ctrl_mode = api.get_control_mode()
+        print(f"get_control_mode() = {ctrl_mode}"
+              "  (성현 2026-09-20: '서보를 펜던트가 쥐고 있다' 제보 확인용)")
+    except Exception as e:                                       # noqa: BLE001
+        print(f"get_control_mode() 실패: {e}")
+    try:
+        ctrl_space = api.get_control_space()
+        print(f"get_control_space() = {ctrl_space}")
+    except Exception as e:                                       # noqa: BLE001
+        print(f"get_control_space() 실패: {e}")
 
     print("\n==== 현재 등록된 tool/tcp (변경 전) ====")
     print(f"get_tool() = '{api.get_tool()}'")

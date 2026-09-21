@@ -66,6 +66,12 @@ class RobotController(Node):
         self._lock = threading.Lock()
         self._running = None
         self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
+        # 지금 피크를 쥐고 있는지. 집기·반환 시점은 로봇이 스스로 판단하고
+        # 서버는 지시하지 않는다 (CLAUDE.md 2절). 페그를 잡으려면 손가락이
+        # 필요해 발현↔페그 조절 사이마다 반환·집기가 한 번씩 낀다.
+        # 노드 시작 시 피크는 거치대에 있다고 가정한다 — Phase 0 은 페그
+        # 손잡이 각도만 다루고 피크는 다루지 않는다
+        self._holding_pick = False
 
         cb = ReentrantCallbackGroup()
         self.play_srv = ActionServer(
@@ -158,6 +164,35 @@ class RobotController(Node):
             self.get_logger().info(f"경유지를 거쳐 {side} 쪽으로")
             MP.goto_route(route, self.points.motion)
 
+    def _ensure_pick(self):
+        """
+        피크가 필요한 동작(발현·화음) 전에 부른다. 이미 쥐고 있으면 아무 일도 안 한다.
+
+        집는 시점을 여기서 판단하는 이유 — 서버는 play_string 이 언제 오는지만
+        알지, 로봇이 지금 손이 비어 있는지는 모른다. 인터페이스를 안 늘리려면
+        로봇이 스스로 판단해야 한다 (CLAUDE.md 2절).
+        """
+        if self._holding_pick:
+            return
+        holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
+        standby = self.points.frame("standby")
+        if self.dry_run:
+            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task}")
+        else:
+            MP.pick_up(holder, self.points.motion, standby=standby)
+        self._holding_pick = True
+
+    def _release_pick(self):
+        """페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다."""
+        if not self._holding_pick:
+            return
+        holder = self.points.pick_holder()
+        if self.dry_run:
+            self.get_logger().info(f"[dry_run] 피크 반환 {holder.task}")
+        else:
+            MP.pick_return(holder, self.points.motion)
+        self._holding_pick = False
+
     # ------------------------------------------------------ Action
     def on_play(self, goal):
         # Feedback 없음. 측정 타임아웃은 이 Result 와 무관하다 —
@@ -168,6 +203,7 @@ class RobotController(Node):
 
         def work():
             pose = self.points.pluck(no)            # 미교시면 여기서 걸린다
+            self._ensure_pick()
             if self.dry_run:
                 self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.joints}")
                 return
@@ -184,6 +220,8 @@ class RobotController(Node):
             joint, delta = self.points.joint_delta(r.string_number, r.direction, r.angle_deg)
             pose = self.points.peg(r.string_number)
             side = TP.side_of(r.string_number)
+            # 페그를 잡으려면 손가락이 필요하다. 피크를 쥐고 있으면 먼저 반환한다
+            self._release_pick()
             if self.dry_run:
                 via = "" if side == self._side else f" (경유: {side})"
                 self.get_logger().info(
@@ -215,11 +253,16 @@ class RobotController(Node):
             # Action 이 인터페이스 13개에 없어서 이 Action 이 복귀까지 책임진다
             # (2026-09-19 결정). 정상 완료 경로에만 있다.
             standby = self.points.frame("standby")
+            # 화음도 발현이라 피크가 필요하다. 작업 마지막이니 훑은 뒤 거치대에
+            # 돌려놓고 빈손으로 복귀한다 — 다음 작업 시작도 "거치대에 있다"는
+            # 가정(Phase 0)이 그대로 성립해야 한다
+            self._ensure_pick()
             if self.dry_run:
                 self.get_logger().info(
                     f"[dry_run] 화음 훑기 {numbers} -> 대기 자세 복귀 {standby.joints}")
                 return
             MP.strum_all(numbers, self.points)
+            self._release_pick()
             MP.return_home(standby, self.points.motion)
 
         return self._run("strum_all", goal, StrumAll.Result, work)
