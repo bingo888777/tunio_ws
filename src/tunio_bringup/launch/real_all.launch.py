@@ -39,6 +39,12 @@
   device:=2       마이크 장치 번호
   port:=9000      웹 포트
   db:=<경로>      SQLite 파일 위치
+  save_on_error_exit:=true
+                  중간에 끊긴 작업(PHASE_ERROR)도 DB 에 저장한다. 기본 false.
+                  실측 회차에서 원인을 보려고 켜는 것이다. 시연에서는 켜지 말 것 —
+                  '중간에 끊긴 작업은 저장하지 않는다'가 확정 사항이다 (CLAUDE.md 13절).
+                  켜면 처리 못 한 줄이 RESULT_PENDING 이라 전체 판정이
+                  OVERALL_PENDING('판정 전')으로 들어간다
 """
 import os
 
@@ -54,6 +60,7 @@ def generate_launch_description():
     device = LaunchConfiguration('device')
     port = LaunchConfiguration('port')
     db = LaunchConfiguration('db')
+    save_on_error = LaunchConfiguration('save_on_error_exit')
 
     return LaunchDescription([
         DeclareLaunchArgument('dry_run', default_value='true',
@@ -63,6 +70,9 @@ def generate_launch_description():
         DeclareLaunchArgument('device', default_value='-1'),
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('db', default_value=os.path.expanduser('~/.tunio/tunio.db')),
+        DeclareLaunchArgument(
+            'save_on_error_exit', default_value='false',
+            description='끊긴 작업도 저장한다. 실측 회차용. 시연에서는 false'),
 
         LogInfo(msg='[real_all] 가짜 노드가 없다. 페그 실측과 교시가 끝났는지 확인했는가.'),
         LogInfo(msg=['[real_all] dry_run=', dry_run,
@@ -77,7 +87,8 @@ def generate_launch_description():
         # 캘리브레이션 파일을 지정하지 않는다. 기본값인 peg_calibration.yaml 을 읽고,
         # measured 가 false 면 조절 단계에서 멈춘다. 그게 의도한 동작이다.
         Node(package='tunio_server', executable='task_manager', name='task_manager',
-             output='screen'),
+             output='screen',
+             parameters=[{'save_on_error_exit': save_on_error}]),
         Node(package='tunio_server', executable='result_store', name='result_store',
              output='screen', parameters=[{'db_path': db}]),
         Node(package='tunio_server', executable='web_node', name='web_node',
