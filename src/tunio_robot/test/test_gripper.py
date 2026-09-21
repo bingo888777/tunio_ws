@@ -85,18 +85,29 @@ def _cfg():
         return yaml.safe_load(f)
 
 
-def test_열기_폭이_손잡이_최대_폭보다_넓다():
+def test_손잡이를_다_덮지_못하면_사전_정렬이_필수다():
     """
-    손잡이가 **어느 각으로 서 있어도** 안 닿아야 한다.
+    폭만으로는 답이 없다는 것이 2026-09-21 실물로 확정됐다.
 
-    죔 방향에 필요한 폭이 p(θ) = 길이·sinθ + 두께·cosθ 라 최대가 대각선이다.
-    90도(32.8mm)가 아니라 59도(38.2mm)가 최악이다. 90도로 보고 정하면 5.4mm 모자란다.
-    실제로 30mm 로 정했다가 진입 중 충돌 위험이 드러났다.
+      38.2mm 보다 커야   손잡이가 59도쯤 서 있을 때 안 닿는다
+      38.0mm 이하여야    옆 페그를 안 친다 (41·42·45 전부 쳤다)
+
+    창이 겹치지 않는다. 그래서 38 로 두고 **사람이 작업 전에 세로로 선 손잡이를
+    눕혀 둔다.** 그 전제가 빠지면 로봇이 들이받는다. 폭을 다시 건드릴 때 이
+    전제를 같이 지우는 일이 없도록 여기서 묶어 둔다.
     """
     d = _cfg()
     handle = d["peg_handle"]
     assert handle["max_sweep_mm"] > handle["length_mm"]      # 대각선이 90도보다 넓다
-    assert d["gripper"]["presets"]["open"]["width_mm"] > handle["max_sweep_mm"]
+    if d["gripper"]["presets"]["open"]["width_mm"] <= handle["max_sweep_mm"]:
+        assert handle.get("requires_prealign") is True
+        assert handle.get("contact_force_n")                 # 빠뜨렸을 때 걸러낼 수단
+
+
+def test_열기_폭이_손잡이_두께보다는_넓다():
+    """눕혀 놓은 손잡이조차 못 지나면 사전 정렬을 해도 소용이 없다."""
+    d = _cfg()
+    assert d["gripper"]["presets"]["open"]["width_mm"] > d["peg_handle"]["thickness_mm"]
 
 
 def test_열기_폭이_옆_페그를_안_친다():

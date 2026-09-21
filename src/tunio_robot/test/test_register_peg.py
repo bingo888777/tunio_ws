@@ -1,10 +1,11 @@
 """
 Phase 0 페그 초기 등록 단위 테스트 (이슈 #31). 로봇·Modbus 없이 돈다.
 
-지키려는 것 셋 —
-  · 사점이면 **열고 나서** 돌린다. 문 채로 돌리면 옆힘으로 안전모드가 걸린다
-  · 돌리는 각이 충분해야 한다. 조금 돌리면 카밍이 다시 사점으로 끌고 간다
-  · 빈손이면 멈춘다. 물린 척하고 진행하면 조용히 틀린다
+지키려는 것 —
+  · 들이받기 전에 멈춘다. 열기 폭 38mm 로는 서 있는 손잡이를 못 지난다
+  · 걸리면 **어느 줄인지 알리고** 물러난다. 사람이 그 줄만 손대면 된다
+  · 빈손이면 멈춘다. 물린 척하고 진행하면 서버가 조용히 틀린 각도를 계산한다
+  · 순응은 켰으면 반드시 끈다. 켠 채로 다니면 이동이 흐물거린다
 """
 import pytest
 from tunio_robot import grip_width as GW
@@ -12,11 +13,13 @@ from tunio_robot import motion_primitives as MP
 
 # 2026-09-21 6번 줄 실측 (tools/peg_grip_probe.py)
 HANDLE = {
-    "measured": True,
+    "measured": True, "requires_prealign": True,
     "thickness_mm": 19.6, "length_mm": 32.8, "empty_mm": 13.0,
-    "probe_preset": "close", "retry_roll_deg": 45.0, "max_attempts": 3,
+    "probe_preset": "close", "contact_force_n": 8.0, "insert_steps": 4,
     "thresholds_mm": {"empty_below": 16.3, "dead_above": 26.2},
 }
+MOTION = {"peg_joint": 6, "approach_mm": 100.0,
+          "compliance_stx": [1000.0, 200.0, 1000.0, 50.0, 50.0, 50.0]}
 PEG6 = [342.32, -75.38, 113.49, 86.40, 89.50, 1.11]
 
 
@@ -27,98 +30,139 @@ class _Peg:
         self.task = list(PEG6)
 
 
+class _Api:
+    """순응제어 호출만 기록하는 가짜 두산 API."""
+
+    def __init__(self):
+        self.compliance = []
+
+    def task_compliance_ctrl(self, stx):
+        self.compliance.append(("on", list(stx)))
+        return 0
+
+    def release_compliance_ctrl(self):
+        self.compliance.append(("off",))
+        return 0
+
+
+class _Log(list):
+    """호출 기록 + 가짜 API 를 같이 들고 다닌다 (list 에는 속성을 못 붙인다)."""
+
+    api = None
+
+
 @pytest.fixture
 def spy(monkeypatch):
-    log = []
-    monkeypatch.setattr(MP, "_api", object())
+    log, api = _Log(), _Api()
+    monkeypatch.setattr(MP, "_api", api)
     monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
     monkeypatch.setattr(MP, "_grip", lambda n: log.append(("grip", n)))
-    monkeypatch.setattr(MP, "_release", lambda: log.append(("release",)))
     monkeypatch.setattr(MP, "_movejx", lambda t, m, sol=None: log.append(("movejx", list(t))))
     monkeypatch.setattr(MP, "_movel", lambda t, m: log.append(("movel", list(t))))
-    monkeypatch.setattr(MP, "_movej",
-                        lambda j, m, relative=False: log.append(("movej", list(j), relative)))
+    monkeypatch.setattr(MP, "read_force", lambda: [0.0, 0.0, 0.0, 0, 0, 0])
+    log.api = api
     return log
 
 
 def _widths(*seq):
-    """차례로 이 폭들을 돌려주는 가짜 측정기."""
     it = iter(seq)
     return lambda: next(it)
 
 
-def test_한_번에_물리면_0도를_돌려준다(spy):
-    roll = MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(19.6))
-    assert roll == pytest.approx(0.0)
-
-
-def test_사점이면_45도_돌려서_다시_문다(spy):
-    """32.8 은 사점이다. 한 번 돌리고 다시 물어 19.6 이 나오면 45도가 답이다."""
-    roll = MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
-    assert roll == pytest.approx(45.0)
-
-
-def test_두_번_사점이면_90도까지_간다(spy):
-    roll = MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 30.0, 19.6))
-    assert roll == pytest.approx(90.0)
-
-
-def test_돌리기_전에_반드시_연다(spy):
-    """
-    사점에서 멈춘 상태는 손가락이 손잡이 양 끝을 40N 으로 누르고 있는 상태다.
-
-    그대로 돌리면 그게 안전모드 걸리는 조합이다. 열고 돌려야 한다.
-    """
-    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
-    turn = next(i for i, e in enumerate(spy) if e[0] == "movej" and e[2])
-    before = [e for e in spy[:turn] if e[0] == "grip"]
-    assert before[-1] == ("grip", "open")        # 회전 직전이 '열기' 여야 한다
-
-
-def test_돌리는_각이_분수령을_넘는다():
-    """
-    카밍은 p(θ) 를 줄이는 쪽으로 비튼다. p 최대는 대각선(약 59도)이다.
-
-    사점(90도)에서 그 아래로 내려오려면 90-59 = 31도를 넘겨야 한다.
-    덜 돌리면 카밍이 다시 90도로 끌고 가 영영 못 빠져나온다.
-    """
-    import math
-    T, W = HANDLE["thickness_mm"], HANDLE["length_mm"]
-    watershed = math.degrees(math.atan2(W, T))
-    assert HANDLE["retry_roll_deg"] > 90.0 - watershed
-
-
-def test_빈손이면_멈춘다(spy):
-    """물린 척하고 진행하면 서버가 조용히 틀린 각도를 계산한다."""
-    with pytest.raises(MP.MotionError, match="빈손"):
-        MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(13.0))
-
-
-def test_계속_사점이면_포기한다(spy):
-    with pytest.raises(MP.MotionError, match="사점"):
-        MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 32.8, 32.8))
-
-
-def test_실패해도_놓고_물러난다(spy):
-    """페그를 문 채로 두면 다음 동작이 전부 막힌다."""
-    with pytest.raises(MP.MotionError):
-        MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(13.0))
-    assert ("release",) in spy
-    assert spy[-1][0] == "movel"                 # 후퇴까지 했다
+# ------------------------------------------------------------ 정상
+def test_물리면_0도를_돌려준다(spy):
+    """사람이 눕혀 뒀으면 교시 자세 그대로 물린다."""
+    assert MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6)) == pytest.approx(0.0)
 
 
 def test_꽉_무는_프리셋으로_잰다(spy):
-    """
-    작업용 peg(21mm)는 손잡이 두께(19.6)보다 넓어 닿지도 않는다.
-
-    각이 안 잡히고 물림·빈손이 똑같이 읽힌다. probe 프리셋이어야 한다.
-    """
-    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(19.6))
+    """작업용 peg(21mm)는 손잡이(19.6)에 닿지도 않아 각이 안 잡힌다."""
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
     assert ("grip", "close") in spy
     assert ("grip", "peg") not in spy
 
 
-# ----------------------------------------------------------- 폭 판정
+def test_나눠서_들어간다(spy):
+    """한 번에 직선으로 들어가면 도중에 걸렸는지 볼 지점이 없다."""
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    ins = [e for e in spy if e[0] == "movel"]
+    assert len(ins) >= HANDLE["insert_steps"]
+
+
+# ------------------------------------------------------------ 접촉 감지
+def test_걸리면_멈추고_어느_줄인지_알린다(spy, monkeypatch):
+    """
+    열기 38mm 로는 59도쯤 선 손잡이(38.2mm 필요)를 못 지난다.
+
+    폭을 키우면 옆 페그를 친다. 그래서 들이받기 전에 멈추고 사람에게 알린다.
+    """
+    monkeypatch.setattr(MP, "read_force", lambda: [9.0, 0.0, 0.0, 0, 0, 0])
+    with pytest.raises(MP.MotionError) as e:
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    assert "pegs.6" in str(e.value)
+    assert "눕힌" in str(e.value)
+
+
+def test_걸리면_물러난다_밀지_않는다(spy, monkeypatch):
+    monkeypatch.setattr(MP, "read_force", lambda: [9.0, 0.0, 0.0, 0, 0, 0])
+    with pytest.raises(MP.MotionError):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    assert abs(spy[-1][1][1] - PEG6[1]) > 50.0       # 마지막 이동이 물러난 지점
+
+
+def test_문턱_아래면_그냥_들어간다(spy, monkeypatch):
+    monkeypatch.setattr(MP, "read_force", lambda: [7.9, 0.0, 0.0, 0, 0, 0])
+    assert MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6)) == pytest.approx(0.0)
+
+
+def test_힘을_못_읽어도_진행한다(spy, monkeypatch):
+    """감시가 안 되는 건 아쉽지만, 그것 때문에 등록 자체를 막지는 않는다."""
+    def boom():
+        raise RuntimeError("센서 없음")
+    monkeypatch.setattr(MP, "read_force", boom)
+    assert MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6)) == pytest.approx(0.0)
+
+
+# ------------------------------------------------------------ 폭 판정
+def test_사점이면_돌리지_말고_멈춘다(spy):
+    """돌려서 빠져나올 공간이 없다. 사람이 눕혀야 한다."""
+    with pytest.raises(MP.MotionError) as e:
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(32.8))
+    assert "눕힌" in str(e.value)
+
+
+def test_빈손이면_멈춘다(spy):
+    with pytest.raises(MP.MotionError, match="빈손"):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+
+
+def test_실패해도_놓고_순응을_끈다(spy):
+    """페그를 문 채 두거나 순응을 켠 채 다니면 다음 동작이 전부 망가진다."""
+    with pytest.raises(MP.MotionError):
+        MP.register_peg(_Peg(), MOTION, HANDLE, _widths(13.0))
+    assert ("grip", "open") in spy
+    assert spy.api.compliance[-1] == ("off",)
+
+
+# ------------------------------------------------------------ 순응제어
+def test_순응을_켜고_끈다(spy):
+    MP.register_peg(_Peg(), MOTION, HANDLE, _widths(19.6))
+    assert spy.api.compliance[0][0] == "on"
+    assert spy.api.compliance[0][1] == MOTION["compliance_stx"]
+    assert spy.api.compliance[-1] == ("off",)
+
+
+def test_삽입축이_제일_무르다():
+    """
+    네 페그의 접근축이 전부 base ±Y 다(실측).
+
+    걸렸을 때 물러나려면 그 축이 제일 물러야 한다. X·Z 보다 단단하면 기타를 민다.
+    """
+    x, y, z = MOTION["compliance_stx"][:3]
+    assert y < x and y < z
+
+
+# ------------------------------------------------------------ 폭 판정 함수
 def test_폭_하나로_셋이_갈린다():
     t = HANDLE["thresholds_mm"]
     assert GW.classify(19.6, t) == "hold"
@@ -137,28 +181,3 @@ def test_문턱_경계():
 def test_폭이_없으면_판정_안_한다():
     with pytest.raises(GW.WidthError):
         GW.classify(None, HANDLE["thresholds_mm"])
-
-
-def test_돌리기_전에_물러난다(spy):
-    """
-    페그 앞에서 돌리면 벌어진 손가락이 옆 페그 손잡이를 휘두르며 친다.
-
-    간격이 38mm 인데 이웃 손잡이가 16.4mm 뻗어와 실효 21.6mm 뿐이다.
-    접근점까지 빠져서 돌고 다시 들어간다.
-    """
-    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
-    turn = next(i for i, e in enumerate(spy) if e[0] == "movej" and e[2])
-    moves = [e for e in spy[:turn] if e[0] == "movel"]
-    # 회전 직전 이동이 페그(Y -75.38)가 아니라 물러난 지점이어야 한다
-    assert abs(moves[-1][1][1] - PEG6[1]) > 50.0
-    # 회전 뒤에는 다시 들어간다
-    after = [e for e in spy[turn:] if e[0] == "movel"]
-    assert abs(after[0][1][1] - PEG6[1]) < 1e-6
-
-
-def test_다시_들어갈_때_돌린_자세다(spy):
-    """돌려놓고 원래 자세로 들어가면 돌린 의미가 없다."""
-    MP.register_peg(_Peg(), {"peg_joint": 6}, HANDLE, _widths(32.8, 19.6))
-    turn = next(i for i, e in enumerate(spy) if e[0] == "movej" and e[2])
-    entry = next(e for e in spy[turn:] if e[0] == "movel")
-    assert entry[1][5] == pytest.approx(PEG6[5] + HANDLE["retry_roll_deg"])

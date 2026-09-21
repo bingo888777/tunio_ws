@@ -4,7 +4,7 @@ peg_register — Phase 0 등록부터 재진입까지 **전체 흐름**을 확�
 
 이 도구가 확인하는 것
   1. 손잡이가 어느 각에 있든 물어서 각을 확정한다 (Phase 0, register_peg)
-     · 사점이면 열고 45도 돌려서 다시 문다
+     · 서 있으면 못 들어간다. 진입 중 접촉을 감지해 멈추고 어느 줄인지 알린다
   2. 그 각을 기억한다 (peg_state, 파일로 남는다)
   3. 조절하러 다시 들어갈 때 **그 각으로 돌아서** 들어간다
      · 이게 안 되면 물리면서 페그가 교시 각으로 되돌려진다 (#31 의 본론)
@@ -13,7 +13,12 @@ peg_register — Phase 0 등록부터 재진입까지 **전체 흐름**을 확�
 
 안전
   · Phase 0 는 꽉 물지만(15mm) **돌리지 않는다.** 돌릴 때는 21mm 로 푼다
-  · 사점에서 돌릴 때는 **열고** 돌린다
+  · 진입은 순응제어(삽입축 무르게)로 나눠서 들어간다. 걸리면 물러나고 멈춘다
+
+시작 전에
+  **세로로 선 손잡이가 있으면 손으로 눕혀 두세요.** 열기 폭 38mm 로는 서 있는
+  손잡이(38.2mm 필요)를 못 지납니다. 폭을 키우면 옆 페그를 칩니다.
+  조율 전이라 음이 틀어져도 상관없습니다. 빠뜨리면 로봇이 멈추고 알려줍니다.
   · 기본 회전 방향은 푸는 쪽이다. 조이는 쪽은 줄이 끊어질 수 있다
   · 단계마다 확인을 받는다
 
@@ -88,8 +93,10 @@ def main():
     print(f"  열기           open ({points.gripper['presets']['open'].get('width_mm')}mm)")
     print(f"  문턱           빈손 < {handle['thresholds_mm']['empty_below']} "
           f"< 물림 < {handle['thresholds_mm']['dead_above']} < 사점  (mm)")
-    print(f"  사점 재시도    {handle['retry_roll_deg']:.0f}도씩 "
-          f"최대 {handle['max_attempts']}회")
+    print(f"  접촉 문턱      {handle['contact_force_n']:.1f}N, "
+          f"{handle['insert_steps']}단계로 나눠 진입")
+    if handle.get("requires_prealign"):
+        print("  ⚠️ 세로로 선 손잡이는 미리 손으로 눕혀 둘 것 (열기 38mm 로는 못 지난다)")
     if args.turn:
         print(f"  조절 확인      {args.direction} {args.turn:.0f}도 × {args.cycles}회")
     print(f"  상태 파일      {state.path}")
@@ -128,8 +135,8 @@ def main():
             MP.goto_route(route, motion)
 
         rec = {"attempts": []}
-        confirm(f"\n1) 등록 — 꽉 물어 각을 확정한다. 사점이면 열고 "
-                f"{handle['retry_roll_deg']:.0f}도 돌려 다시 문다.")
+        confirm("\n1) 등록 — 순응 켜고 나눠 들어간 뒤 꽉 물어 각을 확정한다.\n"
+                "    손잡이가 서 있으면 들어가다 걸려 멈춘다. 그때는 손으로 눕히고 다시.")
         try:
             roll = MP.register_peg(peg, motion, handle, read_width)
         except MP.MotionError as e:
