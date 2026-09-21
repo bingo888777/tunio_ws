@@ -44,6 +44,19 @@ def _sign(v):
     return 1 if v >= 0 else -1
 
 
+class _Say:
+    """connect() 가 진행을 찍게 하는 최소 출력기. 어디서 멈췄는지 보여야 한다."""
+
+    def info(self, m):
+        print(f"    {m}")
+
+    def warn(self, m):
+        print(f"    ! {m}")
+
+    def error(self, m):
+        print(f"    !! {m}")
+
+
 def fmt(vals, w=7, d=1):
     return "[" + ", ".join(f"{v:{w}.{d}f}" for v in vals) + "]"
 
@@ -87,6 +100,20 @@ def main():
     rclpy.init()
     node = rclpy.create_node("tunio_sol_check", namespace=args.id)
     DR_init.__dsr__node = node
+
+    # 서비스 디스커버리를 기다리고 TCP 를 확인한다. 둘 다 빠져 있었다 —
+    #   · 안 기다리면 ikin 첫 호출이 **영원히 멈춘다.** spin_until_future_complete
+    #     에 타임아웃이 없다 (#21). 이 도구만 빠져 있었다 (2026-09-21)
+    #   · TCP 가 안 맞으면 ikin 이 **다른 기준으로 푼다.** 페그 좌표는
+    #     GripperDA_v1(툴 Z 208mm) 기준이라, 안 켜진 채 풀면 208mm 어긋난
+    #     자리의 팔 모양이 나온다. 그걸 보고 sol 을 고르면 조용히 틀린다 (#26)
+    from tunio_robot import motion_primitives as MP
+    robot_cfg = dict(points.robot)
+    robot_cfg["id"], robot_cfg["model"] = args.id, args.model
+    print("  서비스를 기다린다 (최대 30초) …")
+    MP.connect(robot_cfg, logger=_Say())
+    print(f"  TCP 확인됨 — tool='{MP._read_named('tool')}' "
+          f"tcp='{MP._read_named('tcp')}'\n")
 
     route = points.route()
     route_j1 = route.joints[0] if route and route.joints[0] is not None else None
