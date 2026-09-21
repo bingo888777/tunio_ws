@@ -471,7 +471,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
   - 아키텍처는 **파이썬 생성기**(`TUNIO_시스템아키텍처_v2.py`)가 SVG 를 만든다.
     graphviz 가 아니다. 작업 흐름은 `TUNIO_작업흐름_v2.dot` (graphviz)
   - ⚠️ **PNG 는 생성기가 안 만든다.** SVG 를 고쳤으면 `rsvg-convert` 로 따로 뽑는다
-- docs/TUNIO_시스템아키텍처.png, docs/TUNIO_작업흐름.png — **v1. 낡았다.**
+- docs/TUNIO_시스템아키텍처.png · .svg, docs/TUNIO_작업흐름.png · .svg — **v1. 낡았다.**
   피크 집기·반환과 Phase 0 가 없다
 
 **마이크·분석**
@@ -486,10 +486,17 @@ colcon test --packages-select tunio_server && colcon test-result --all
 
 - docs/로봇점검_체크리스트.md — 로봇 기동 전 점검 순서. **순서가 중요하다**
   (파지 폭을 바꾸면 백래시 측정이 무효가 되는 식의 의존이 있다)
-- docs/페그_실측표.md — 페그 회전량 대 음정 변화 실측 결과. 원자료 `docs/peg_data/`
+- docs/페그_실측표.md — 페그 실측의 기준 문서. 회전량 대 음정 변화(센트/도)에 더해
+  **백래시 10.4도·최소 유효 각도 2.3도·측정 편향**(4절)과 설계 반영 항목(5절)이 있다.
+  **`peg_calibration.yaml` 에 넣을 값이 4.1절에 모여 있다** — 네 칸이 다 차면 그 블록을
+  옮긴다. 원자료 `docs/peg_data/`
 - docs/페그_캘리브레이션_가이드.md — 페그 실측 절차
 - docs/페그실측_단독PC_런북.md — 로봇·마이크를 한 PC 에서 돌릴 때의 절차
-- 로봇 실측 원자료는 `docs/robot_data/` (회전 토크·파지 폭·Phase 0 등록)
+- **docs/robot_data/README.md — 원자료를 보기 전에 읽는다.** 단순 색인이 아니라
+  **"믿으면 안 되는 진단 문구"** 를 모아 둔 경고 문서다. 도구가 내는 진단이 실제
+  원인과 달랐던 사례들이 적혀 있다 — 안 읽으면 같은 곳에서 같은 시간을 버린다
+- 로봇 실측 원자료는 `docs/robot_data/` (회전 토크·파지 폭·Phase 0 등록).
+  성공한 회차만 있는 게 아니라 **실패·진단 회차도 그대로 남는다**
 
 **서버·UI·통합**
 
