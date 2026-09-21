@@ -1,0 +1,16 @@
+{
+  "tool": "peg_grip_probe",
+  "peg": 6,
+  "probe_preset": "close",
+  "width_reg": 9,
+  "measured_mm": {
+    "물림": 19.6,
+    "사점": 28.9,
+    "빈손": 13.0
+  },
+  "thresholds_mm": {
+    "empty_below": 16.3,
+    "dead_above": 24.2
+  },
+  "saved_at": "2026-09-21 12:54:47"
+}
