@@ -16,14 +16,26 @@
 그리퍼는 OnRobot RG2 이고, Compute Box 의 WebLogic 을 디지털 I/O 로 부른다
 (2026-09-19 확정). 폭·힘은 웹에서 정하고 코드는 프리셋만 고른다. gripper.py 참조.
 
+tool 과 TCP 는 connect() 가 **항상 설정하고 읽어서 확인한다** (이슈 #26·#23·#21)
+  배포용이라 펜던트 설정에 기대지 않는다. 설정이 안 된 로봇에 가져다 놓아도 같은
+  코드가 돌아야 하므로, 이미 맞아 보여도 set 을 생략하지 않는다. 이름은
+  move.py 에서 동작이 확인된 것과 같다 — tool "Tool Weight", tcp "GripperDA_v1".
+
+  판정은 set 반환값이 아니라 get 결과로 한다. 펜던트가 켜 둔 경우 set 이 -1 로
+  거부돼도 좌표는 맞기 때문이다(#23). 못 맞추면 움직이기 전에 멈춘다.
+
+  교시 좌표는 **읽을 때 켜져 있던 TCP 와 짝**이다. 그 이름을 YAML 의 pose 마다
+  tcp: 로 적어 두고, teach_points 가 robot.tcp 와 다르면 조회를 거부한다.
+  섞인 채로 움직이면 208mm 어긋난다 (#21).
+
 TODO(정묵·성현):
   - pluck_string: 피크를 집어 힘 제어로 타현 + 발현 직후 5mm 후퇴 + 피크 반환
   - strum_all: 전체 줄 훑기
   - return_home: 대기 자세 복귀 (strum_all 끝에 호출됨. 이동만이라 구현 완료)
   - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
-  - set_tcp — 피크를 든 상태와 페그를 잡은 상태의 TCP 가 다르다.
-    티칭 펜던트에 각각 등록해야 한다
+  - pluck_tcp — 발현·거치대 좌표를 읽은 TCP 이름을 YAML 에 적고,
+    pluck_string / pick_up / pick_return 시작 시 ensure_tcp 로 켠다 (이슈 #21, 성현)
 """
 import time
 
@@ -33,6 +45,7 @@ from tunio_robot import teach_points as TP
 _api = None
 _node = None
 _gripper = None
+_robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
 class MotionError(Exception):
@@ -47,9 +60,10 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
     gripper_cfg — 같은 파일의 gripper 절 (presets, settle_sec)
     executor 에 넣지 않은 전용 노드를 만들어 DR_init 에 물린다.
     """
-    global _api, _node, _gripper
+    global _api, _node, _gripper, _robot_cfg
     if _api is not None:
         return _api
+    _robot_cfg = dict(robot_cfg)
 
     import rclpy
 
@@ -73,13 +87,157 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
         _gripper = RG2(api, parse_presets(gripper_cfg.get("presets")),
                        settle_sec=gripper_cfg.get("settle_sec", 0.3))
 
-    if robot_cfg.get("tool"):
-        api.set_tool(robot_cfg["tool"])
-    if robot_cfg.get("tcp"):
-        api.set_tcp(robot_cfg["tcp"])
+    # 첫 호출 전에 서비스가 보이기를 기다린다. 안 기다리면 첫 호출이 영원히 멈춘다.
+    # 디스커버리가 불안정해(#23) 기본값을 넉넉히 둔다. robot_cfg 로 덮을 수 있다
+    _wait_services(_node, robot_cfg["id"],
+                   timeout_sec=float(robot_cfg.get("service_wait_sec", 30.0)),
+                   logger=logger)
+
+    # 배포용이라 펜던트 설정에 기대지 않는다. 항상 설정하고, 읽어서 확인한다.
+    # 순서는 tool 먼저다 — 무게 설정이 먼저 들어가야 TCP 보정이 제 값을 쓴다
+    _ensure_named("tool", robot_cfg.get("tool"), logger=logger)
+    _ensure_named("tcp", robot_cfg.get("tcp"), logger=logger)
     if logger:
-        logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']}")
+        logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']} "
+                    f"tool='{_read_named('tool')}' tcp='{_read_named('tcp')}'")
     return _api
+
+
+# connect() 가 기다릴 서비스. DSR_ROBOT2 가 실제로 쓰는 것들 중 대표만 고른다
+_WAIT_SERVICES = [
+    ("GetCurrentTool", "dsr_controller2/tool/get_current_tool"),
+    ("GetCurrentTcp", "dsr_controller2/tcp/get_current_tcp"),
+    ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
+    ("MoveJoint", "dsr_controller2/motion/move_joint"),
+    ("MoveLine", "dsr_controller2/motion/move_line"),
+]
+
+
+def _wait_services(node, robot_id, timeout_sec=30.0, logger=None, report=print):
+    """
+    DSR_ROBOT2 의 첫 호출 전에 서비스 디스커버리를 기다린다 (이슈 #21·#23).
+
+    DSR_ROBOT2 는 기다리지 않고 바로 부른다. 브링업 직후처럼 아직 디스커버리가
+    안 끝난 시점에 부르면 spin_until_future_complete 에 타임아웃이 없어 **영원히
+    멈춘다.** 2026-09-20 로봇 PC 에서 실제로 겪었다.
+
+    반드시 **DSR 이 쓰는 그 노드**로 기다려야 한다. 다른 노드로 기다리면 그 노드만
+    디스커버리가 끝나고 DSR 노드는 아직이라 똑같이 멈춘다.
+
+    디스커버리가 불안정해서(#23) 조용히 수십 초 막혀 있으면 멈춘 건지 기다리는
+    중인지 구분이 안 된다. 5초마다 지금 몇 개가 보이는지 알려준다.
+    """
+    import dsr_msgs2.srv as srv
+    pending = [(getattr(srv, t), n) for t, n in _WAIT_SERVICES]
+    t0 = time.monotonic()
+    while pending:
+        still = []
+        for srv_type, name in pending:
+            cli = node.create_client(srv_type, name)
+            try:
+                if not cli.wait_for_service(timeout_sec=0.5):
+                    still.append((srv_type, name))
+            finally:
+                node.destroy_client(cli)
+        pending = still
+        if not pending:
+            break
+        elapsed = time.monotonic() - t0
+        if elapsed >= timeout_sec:
+            raise MotionError(
+                f"서비스가 안 보인다 ({timeout_sec:.0f}초): "
+                + ", ".join(f"/{robot_id}/{n}" for _, n in pending)
+                + ". 브링업이 떠 있는지, ROS_DOMAIN_ID·RMW·ROS_DISCOVERY_SERVER 가"
+                " 브링업 터미널과 같은지 확인하라. 디스커버리 자체가 불안정할 수도"
+                " 있다 — tools/tcp_diag.py 로 더 길게 볼 수 있다 (이슈 #21, #23)")
+        if report and int(elapsed) % 5 < 1:
+            report(f"  서비스 대기 {elapsed:.0f}/{timeout_sec:.0f}초 — "
+                   f"{len(_WAIT_SERVICES) - len(pending)}/{len(_WAIT_SERVICES)}개 보임, "
+                   f"전체 {len(node.get_service_names_and_types())}개")
+        time.sleep(1.0)
+    if logger:
+        logger.info(f"서비스 디스커버리 확인 ({len(_WAIT_SERVICES)}개)")
+    time.sleep(1.0)   # DSR_ROBOT2 가 자기 클라이언트를 만들 여유
+
+
+def _read_named(kind):
+    """
+    활성 tool/tcp 이름을 읽는다. 못 읽으면 None.
+
+    두산 래퍼(`get_tool`/`get_tcp`)에 두 가지 함정이 있어서 그대로 못 쓴다 —
+
+    1. **타입이 섞인다.** 정상이면 `result.info`(str)지만 `result == None` 이면
+       `-1`(int)을 돌려준다. 문자열로 비교하는 쪽은 -1 을 만나면 조용히 "안 맞음"이
+       된다. 그래서 str 이 아니면 None 으로 본다.
+    2. **`ret` 이 unbound 될 수 있다.** 서비스 호출이 예외로 실패하면 except 절이
+       로그만 찍고 `ret` 을 안 채워 `return ret` 에서 UnboundLocalError 가 난다
+       (DSR_ROBOT2.py 6312·6362행). `-1` 이 아니라 파이썬 예외다. 그래서 감싼다.
+
+    응답의 `success` 는 **보지 않는다.** 컨트롤러가 `res->success = true` 로
+    하드코딩한다 (dsr_controller2.cpp 1940·1969행). 실패를 표현할 방법이 없으니
+    판단은 `info` 문자열로만 한다.
+    """
+    api = _require_api()
+    try:
+        got = getattr(api, f"get_{kind}")()
+    except Exception as e:                       # noqa: BLE001 — 래퍼가 뭘 던질지 모른다
+        raise MotionError(f"get_{kind}() 호출이 실패했다: {e!r}")
+    return got if isinstance(got, str) else None
+
+
+def _ensure_named(kind, want, logger=None):
+    """
+    활성 tool/tcp 를 want 로 **반드시 설정하고**, 읽어서 확인한다 (이슈 #26·#23).
+
+    배포용이라 펜던트 설정에 기대지 않는다. 설정이 안 된 로봇에 가져다 놓아도
+    같은 코드가 돌아야 하므로, 이미 맞아 보여도 `set` 을 생략하지 않는다.
+    기준 이름은 `move.py` 에서 동작이 확인된 것과 같다 —
+    tool `"Tool Weight"`, tcp `"GripperDA_v1"`.
+
+    판정은 **`set` 의 반환값이 아니라 `get` 결과로** 한다. 두 가지 이유다 —
+      · 펜던트가 이미 켜 둔 경우 `set` 이 -1 로 거부돼도 좌표는 맞다 (이슈 #23).
+        2026-09-19 페그 교시가 그 상태였다
+      · `set` 성공만 믿으면 컨트롤러가 다른 이름을 켜 둔 경우를 못 잡는다
+
+    못 맞추면 **움직이기 전에 멈춘다.** 페그 좌표가 GripperDA_v1(툴 Z 208mm)
+    기준이라, TCP 가 안 맞으면 208mm 어긋난 곳으로 직선 진입한다. 헤드스톡 쪽이다.
+    """
+    if not want:
+        return
+    api = _require_api()
+    before = _read_named(kind)
+
+    ret, err = None, None
+    try:
+        ret = getattr(api, f"set_{kind}")(want)
+    except Exception as e:                       # noqa: BLE001 — UnboundLocalError 포함
+        err = e                                  # 실패해도 아래 확인으로 판정한다
+
+    now = _read_named(kind)
+    if now == want:
+        if logger:
+            logger.info(f"{kind}='{want}' 확인 (set 반환 {ret}, 직전 '{before}')")
+        return
+
+    raise MotionError(
+        f"{kind} 를 '{want}' 로 못 맞췄다 (set 반환 {ret}"
+        + (f", 예외 {err!r}" if err is not None else "")
+        + f", 현재 '{now}'). 펜던트에 그 이름이 등록돼 있는지, 설정 변경 제어권이"
+        " 로봇에 있는지 확인하라. 교시 좌표가 그 기준이라 다른 기준으로 움직이면"
+        " 208mm 어긋난 곳으로 들어간다 (이슈 #23, #26)")
+
+
+def ensure_tcp(name=None, logger=None):
+    """
+    움직이기 직전에 이 동작이 쓸 TCP 를 켠다 (이슈 #21).
+
+    교시 좌표는 읽을 때 켜져 있던 TCP 와 짝이라, 페그와 발현이 서로 다른 기준을
+    쓴다. 동작마다 자기 것을 켜면 순서가 섞여도 안전하다. 비용은 호출 한 번이다.
+    name 을 안 주면 connect() 가 받은 robot.tcp 를 쓴다.
+    """
+    if name is None:
+        name = (_robot_cfg or {}).get("tcp")
+    _ensure_named("tcp", name, logger=logger)
 
 
 def _require_api():
@@ -123,6 +281,20 @@ def _movejx(task, motion, sol=None):
         sol = api.get_current_solution_space()
     return api.movejx(posx(list(task)),
                       vel=motion.get("vel", 30), acc=motion.get("acc", 30), sol=sol)
+
+
+def turn_motion(motion):
+    """
+    회전용 속도로 바꾼 설정 사본.
+
+    페그를 돌리는 건 줄에 장력을 거는 동작이라 이동보다 느려야 한다.
+    토크를 읽어 파지를 확인하는 것도 이 구간이다(CLAUDE.md 3.6).
+    turn_vel/turn_acc 가 없으면 이동 속도를 그대로 쓴다.
+    """
+    out = dict(motion)
+    out["vel"] = motion.get("turn_vel", motion.get("vel", 30))
+    out["acc"] = motion.get("turn_acc", motion.get("acc", 30))
+    return out
 
 
 def goto_route(route, motion):
@@ -345,12 +517,14 @@ def adjust_peg(pose, joint, delta_deg, motion):
     이중으로 겹쳐 결과가 어긋난다.
     """
     _require_api()
+    ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
     _goto_pose(pose, motion)                        # 물러난 지점 -> 직선으로 페그 앞
     _grip("peg")                                    # 여유를 준 폭으로 파지
     try:
         delta = [0.0] * 6
         delta[joint - 1] = float(delta_deg)
-        _movej(delta, motion, relative=True)        # 그 관절만 상대 회전
+        # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
+        _movej(delta, turn_motion(motion), relative=True)
     finally:
         _release()                                  # 실패해도 페그는 놓는다
         _retreat(pose, motion)                      # 들어온 직선 그대로 나온다

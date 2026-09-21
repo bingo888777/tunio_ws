@@ -26,7 +26,7 @@
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
   python3 tools/jog.py
-  python3 tools/jog.py --speed 20        # 더 느리게
+  python3 tools/jog.py --speed 30        # 더 느리게
   python3 tools/jog.py --confirm-over 10 # 10도 넘으면 매번 확인
 """
 import argparse
@@ -51,8 +51,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--step", type=float, default=5.0, help="기본 이동 각도(도)")
-    ap.add_argument("--speed", type=float, default=30.0,
-                    help="설정 속도의 몇 %% 로 움직일지")
+    ap.add_argument("--speed", type=float, default=100.0,
+                    help="설정 속도의 몇 %% 로 움직일지. 낯선 자세 근처면 낮춰라")
     ap.add_argument("--confirm-over", type=float, default=15.0,
                     help="이 각도를 넘으면 움직이기 전에 확인을 받는다")
     ap.add_argument("--approach", type=float, default=None)
