@@ -29,9 +29,11 @@
 ⚠ dry_run 기본값이 true 다. 로봇을 실제로 움직이려면 dry_run:=false 를 줘야 한다.
   실수로 켜자마자 움직이는 것보다 안 움직이는 쪽이 안전하기 때문이다.
 
-⚠ 3 PC 분산이 본래 구성이다. 이 파일은 한 PC 에 다 물렸을 때 쓴다.
-  분산할 때는 각 PC 에서 server.launch.py / robot.launch.py / audio.launch.py 를
-  따로 띄운다. ROS_DOMAIN_ID 를 맞추는 것을 잊지 말 것.
+⚠ 2 PC 분산이 본래 구성이다 (2026-09-22 변경, 이전에는 3대). 이 파일은 한 PC 에
+  다 물렸을 때 쓴다. 분산할 때는 —
+    정정인 PC     ros2 launch tunio_bringup station.launch.py   (마이크+서버+웹)
+    로봇 제어 PC  ros2 launch tunio_robot robot.launch.py
+  ROS_DOMAIN_ID 를 맞추는 것을 잊지 말 것. docs/TUNIO_시스템아키텍처_v3.md 참조.
 
 옵션
   dry_run:=false  실제로 로봇을 움직인다 (기본 true — 움직이지 않는다)
