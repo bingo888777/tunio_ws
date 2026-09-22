@@ -140,3 +140,37 @@ def test_adjust_success_remeasures_same_string():
         _measure_with_retry=measure, _adjust_peg=adjust)
     TM.TaskManager._tune_string(n, 2)
     assert calls == [('measure', 2), ('adjust', 2), ('measure', 2)]
+
+
+@pytest.mark.parametrize('home_ok', [True, False])
+def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(home_ok):
+    from tunio_interfaces.msg import TuningState
+
+    calls = []
+    phases = []
+    handle = Mock(accepted=True)
+    wrapped = SimpleNamespace(
+        status=4 if home_ok else 6,
+        result=SimpleNamespace(success=home_ok, message='' if home_ok else '복귀 실패'))
+    n = SimpleNamespace(
+        job_id='test', get_logger=lambda: Mock(), _gate=lambda: None, _p=lambda key: 0,
+        _register_pegs=lambda: calls.append('register'),
+        _tune_string=lambda no: calls.append(('tune', no)),
+        _verify_pass=lambda: calls.append('verify'),
+        _strum=Mock(side_effect=NotImplementedError('화음 미구현')),
+        _set_phase=lambda phase, no: phases.append(phase),
+        cli_home=Mock(), _wait=Mock(side_effect=[handle, wrapped]),
+        _track=Mock(), _untrack=Mock(),
+        _save=lambda: calls.append('save'), _finish_error=lambda: calls.append('error'))
+    n._run_action = lambda *a, **k: TM.TaskManager._run_action(n, *a, **k)
+
+    def home():
+        calls.append('home')
+        TM.TaskManager._return_home(n)
+    n._return_home = home
+    TM.TaskManager._run_job(n)
+    n._strum.assert_not_called()
+    n.cli_home.send_goal_async.assert_called_once()
+    assert calls == ['register', *[('tune', no) for no in (6, 5, 2, 1)],
+                     'verify', 'home', 'save' if home_ok else 'error']
+    assert (TuningState.PHASE_DONE in phases) is home_ok

@@ -820,7 +820,8 @@ class TaskManager(Node):
                     self._sleep_gated(hold)
 
             self._verify_pass()                           # Phase 2
-            self._strum()
+            # #84: 화음은 미구현이라 실행 제외. 구현·실기 검증 후 아래 호출 복구.
+            # self._strum()
             self._return_home()
 
             self._set_phase(TuningState.PHASE_DONE, 0)
