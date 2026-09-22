@@ -164,6 +164,8 @@ def main():
         MP._movej(standby.joints, motion)
 
         if not args.no_pick:
+            print("대기 자세에서 그리퍼를 연다.")
+            MP._release()
             confirm("피크를 집으러 간다. 거치대에 피크가 있는지 확인하라.")
             MP.pick_up(points.pick_holder(), motion, standby=standby)
 
