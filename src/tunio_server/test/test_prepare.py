@@ -7,6 +7,59 @@ import pytest
 from tunio_server import task_manager as TM
 
 
+@pytest.mark.parametrize('registration_ok', [True, False])
+def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
+    import threading
+
+    calls = []
+    phases = []
+    registering = threading.Event()
+    release = threading.Event()
+
+    def action(client, goal, timeout, name):
+        calls.append((name, goal.string_number))
+        if goal.string_number == 1:
+            registering.set()
+            assert release.wait(3)
+        return SimpleNamespace(success=registration_ok or goal.string_number != 1,
+                               message='등록 실패')
+
+    n = SimpleNamespace(
+        _lock=threading.Lock(), _starting=False, _worker=None,
+        _pause=threading.Event(), _cancel=threading.Event(),
+        settings=TM.TuningSettings(), cli_register=object(),
+        _registered_pegs={6, 5, 2, 1},  # 이전 작업의 완료 상태도 시작할 때 지워야 한다
+        _servers_not_ready=lambda: [], _reset_results=lambda: None,
+        get_logger=lambda: Mock(), _gate=lambda: None,
+        _p=lambda key: {'register_timeout_sec': 180}.get(key, 0),
+        _set_phase=lambda phase, no: phases.append((phase, no)),
+        _run_action=action, _tune_string=lambda no: calls.append(('tune', no)),
+        _verify_pass=lambda: None, _return_home=lambda: None, _save=lambda: None,
+        _finish_error=lambda: calls.append(('error', 0)))
+    for name in ('_running', '_do_start', '_run_job', '_register_pegs'):
+        setattr(n, name, getattr(TM.TaskManager, name).__get__(n))
+
+    response = TM.TaskManager.on_start(n, None, SimpleNamespace())
+    try:
+        assert response.accepted
+        assert phases[0] == (TM.TuningState.PHASE_REGISTER_PEG, 6)
+        assert registering.wait(2)
+        assert calls == [('register_peg', no) for no in (6, 5, 2, 1)]
+        assert n._registered_pegs == set()
+        with pytest.raises(TM.Aborted, match='측정·발현 요청 차단'):
+            TM.TaskManager._measure_once(n, 6)
+        with pytest.raises(TM.Aborted, match='페그 조절 요청 차단'):
+            TM.TaskManager._adjust_peg(n, 6, 20.0)
+    finally:
+        release.set()
+        n._worker.join(3)
+    assert not n._worker.is_alive()
+    expected = ([('tune', no) for no in (6, 5, 2, 1)] if registration_ok
+                else [('error', 0)])
+    assert calls[4:] == expected
+    assert n._registered_pegs == ({6, 5, 2, 1} if registration_ok else set())
+
+
 @pytest.mark.parametrize('failure', [None, 5])
 def test_registration_precedes_tuning_and_failure_stops_job(failure):
     calls = []
