@@ -27,10 +27,22 @@
   줄이 없거나 장력이 없는 상태(끊어놓은 폐줄 등)로 돈다. 기본값은
   --string intact(줄 정상)다. 파지 여부(--no-grip)와는 다른 축이라 둘을
   섞지 말 것 — 줄 유무 비교는 **둘 다 문 상태**에서만 뜻이 있다.
-  같은 페그·방향으로 intact 한 번, cut 한 번 돌리면 자동으로 견줘 준다.
-  이게 CLAUDE.md 3.6의 0.015Nm(계산) 대 0.11Nm(그리퍼 잡음) 비교를
-  조인트 6 경로로 실측하는 것이다 — 계산은 그리퍼 F/T 잡음 기준이라
-  조인트 토크 잡음이 같은지는 이 실측 전까지 아무도 모른다.
+  같은 페그·방향·각도·속도·팔 모양·파지 프리셋으로 intact 한 번, cut 한 번
+  돌리면 자동으로 견줘 준다. 조건이 다르면 비교를 건너뛴다(#79 리뷰, 정묵).
+
+  ⚠️ **센서 경로는 새 게 아니다.** get_external_torque()(조인트 6)는
+  처음부터 이 도구가 쓰던 것이다(f788f56). 여기서 새로 더하는 건 '정상 줄 대
+  무장력 줄' 비교 축이지 측정 경로가 아니다. 샘플링도 회전 중 연속이 아니라
+  movej 스텝이 끝날 때마다다 — '조인트 6은 실측이 없다'는 예전 설명은 틀렸다.
+  이미 있던 파지-허공 비교(0.023Nm 차이, 0.11Nm 잡음)가 바로 그 실측이고,
+  결과가 안 좋다 — 자세한 판정은 바로 아래 경고를 볼 것.
+
+  ⚠️ **자동 판정("가릴 수 있다")을 믿지 말 것.** `step_from_rest` 차이가
+  잡음의 2배를 넘는지만 보는데, 이 값은 **정지 baseline 이 조건마다 흔들리는
+  것**(예: 파지 +0.07 vs 허공 +0.433)까지 회전 저항으로 잡아낸다. 9/19 파지·
+  9/21 허공 기록을 이 식에 넣으면 "가릴 수 있다"로 통과하지만, 그건 우리가
+  이미 아니라고 결론 낸 사례다(CLAUDE.md 3.6). **숫자만 보고 판단은 사람이
+  한다** — 같은 세션에서 조건 맞춰 반복 측정한 뒤에.
 
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
@@ -323,67 +335,87 @@ def main():
     if path:
         print(f"\n  기록 저장: {os.path.relpath(path)}")
 
-    # 같은 페그·같은 방향의 반대 조건 기록을 찾아 견준다
+    def _conditions_match(b, check_preset=True):
+        """조건이 다른 기록을 견주면 숫자가 무의미해진다 (#79 리뷰, 정묵).
+        각도·스텝·속도·팔 모양·(문 상태끼리면) 파지 프리셋까지 맞아야 견준다."""
+        if b.get("direction") != args.direction:
+            return False
+        if b.get("angle_deg") != args.angle or b.get("step_deg") != args.step:
+            return False
+        if b.get("sol") != sol:
+            return False
+        if abs((b.get("turn_vel") or 0) - turn["vel"]) > 0.01:
+            return False
+        if check_preset and b.get("preset") != (None if args.no_grip else args.preset):
+            return False
+        return True
+
+    def _print_verdict(gap, noise, a, b, label_a, label_b, other_saved_at, what):
+        # 이 식(step_from_rest 차이 vs 잡음)은 "가릴 수 있다/없다"를 못 정한다 —
+        # 정지 baseline 이 조건마다 흔들리는 것까지 회전 저항으로 잡아낸다.
+        # 9/19 파지·9/21 허공 기록을 넣으면 이 식은 "가릴 수 있다"로 통과하지만
+        # 그건 이미 아니라고 결론 낸 사례다(CLAUDE.md 3.6, #79 리뷰). 그래서
+        # 숫자만 보여주고 판단은 사람이 한다.
+        print(f"  {label_a} 단차 {a:.3f}   {label_b} 단차 {b:.3f}   "
+              f"({other_saved_at})")
+        print(f"  차이 {gap:.3f}   흩어짐(잡음) {noise:.3f}   "
+              f"(2배 문턱 {2 * noise:.3f} — 참고용, 단정 아님)")
+        print(f"  **자동 판정 없음.** 이 식은 정지 baseline 흔들림을 {what} 신호로")
+        print("  착각할 수 있다(실제 오판 사례 있음). 같은 세션에서 조건을 맞춰")
+        print("  반복 측정한 뒤 사람이 판단할 것.")
+
+    # 같은 페그·같은 조건의 반대 조건(파지↔허공) 기록을 찾아 견준다
     other = runlog.latest(LOG_DIR, lambda b: (
         b.get("tool") == "peg_turn_check" and b.get("peg") == args.peg
-        and b.get("gripped") is args.no_grip and b.get("summary")))[1]
+        and b.get("gripped") is args.no_grip and b.get("summary")
+        and _conditions_match(b, check_preset=False)))[1]
     if other:
         mine = "허공" if args.no_grip else "파지"
         theirs = "파지" if args.no_grip else "허공"
         a = abs(log["summary"]["step_from_rest"])
         b = abs(other["summary"]["step_from_rest"])
         print(f"\n{'=' * 70}")
-        print(f"비교 — {mine} vs {theirs} ({other.get('saved_at')})")
+        print(f"비교 — {mine} vs {theirs}")
         print("=" * 70)
-        print(f"  {mine} 단차 {a:.3f}   {theirs} 단차 {b:.3f}")
         gap = abs(a - b)
         noise = max(log["summary"]["spread"], other["summary"]["spread"])
-        if gap > 2 * noise:
-            print(f"  차이 {gap:.3f} 가 잡음 {noise:.3f} 의 2배를 넘는다.")
-            print(f"  **토크로 파지를 가릴 수 있다.** 임계값은 그 사이 "
-                  f"{(a + b) / 2:.3f} 근처다")
-        else:
-            print(f"  차이 {gap:.3f} 가 잡음 {noise:.3f} 에 묻힌다.")
-            print("  **토크로는 파지를 못 가린다.** 저항이 페그가 아니라 그리퍼에서")
-            print("  나온다는 뜻이다. CLAUDE.md 3.6 의 파지 확인 방법을 고쳐야 한다")
+        _print_verdict(gap, noise, a, b, mine, theirs,
+                       other.get("saved_at"), "파지 저항")
     elif not args.no_grip:
-        print("\n  허공 값이 아직 없다. 같은 각도로 한 번 더 재면 자동으로 견줘 준다 —")
+        print("\n  같은 조건의 허공 값이 아직 없다. 같은 각도·속도·팔 모양으로 "
+              "한 번 더 재면 자동으로 견줘 준다 —")
         print(f"    python3 tools/peg_turn_check.py --peg {args.peg} "
-              f"--angle {args.angle:g} --no-grip")
+              f"--angle {args.angle:g} --step {args.step:g} --no-grip")
 
     # 줄 끊어짐 감지 (2026-09-22, 예외처리 B안) — 파지는 둘 다 한 상태에서
-    # 줄만 있다/없다를 견준다. get_external_torque() 조인트 6 경로 실측이다.
+    # 줄만 있다/없다를 견준다. 센서 경로(get_external_torque, 조인트 6)는
+    # 새 게 아니다 — 위 파지 비교와 같다. 새로운 건 비교 축뿐이다.
     if not args.no_grip:
         wanted_string = "cut" if args.string == "intact" else "intact"
         str_other = runlog.latest(LOG_DIR, lambda b: (
             b.get("tool") == "peg_turn_check" and b.get("peg") == args.peg
-            and b.get("direction") == args.direction and b.get("gripped") is True
-            and b.get("string") == wanted_string and b.get("summary")))[1]
+            and b.get("gripped") is True and b.get("string") == wanted_string
+            and b.get("summary") and _conditions_match(b)))[1]
         if str_other:
             mine_s = "정상" if args.string == "intact" else "끊음"
             theirs_s = "끊음" if args.string == "intact" else "정상"
             a = abs(log["summary"]["step_from_rest"])
             b = abs(str_other["summary"]["step_from_rest"])
             print(f"\n{'=' * 70}")
-            print(f"줄 끊어짐 감지 — 줄 {mine_s} vs {theirs_s} "
-                  f"(조인트 6, {str_other.get('saved_at')})")
+            print(f"줄 끊어짐 감지 — 줄 {mine_s} vs {theirs_s} (조인트 6)")
             print("=" * 70)
-            print(f"  줄 {mine_s} 단차 {a:.3f}   줄 {theirs_s} 단차 {b:.3f}")
             gap = abs(a - b)
             noise = max(log["summary"]["spread"], str_other["summary"]["spread"])
-            print(f"  차이 {gap:.3f}   흩어짐(잡음) {noise:.3f}")
-            if gap > 2 * noise:
-                print(f"  차이가 잡음의 2배를 넘는다. **조인트 6 토크로 줄 끊어짐을 "
-                      f"가릴 수 있다.** 문턱은 그 사이 {(a + b) / 2:.3f} 근처다")
-            else:
-                print("  차이가 잡음에 묻힌다. **이 경로로는 못 가린다** — 그리퍼 "
-                      "F/T 와 같은 결론이다. 다른 감지 수단을 봐야 한다")
+            _print_verdict(gap, noise, a, b, f"줄 {mine_s}", f"줄 {theirs_s}",
+                           str_other.get("saved_at"), "줄 끊어짐")
         else:
             other_flag = "--string cut" if args.string == "intact" else "--string intact"
-            print(f"\n  줄 {'정상' if args.string == 'cut' else '끊음'} 값이 아직 없다. "
-                  f"같은 페그·방향으로 한 번 더 재면 자동으로 견줘 준다 —")
+            print(f"\n  같은 조건의 줄 {'정상' if args.string == 'cut' else '끊음'} 값이 "
+                  f"아직 없다. 같은 페그·방향·각도·속도·팔 모양으로 한 번 더 재면 "
+                  f"자동으로 견줘 준다 —")
             print(f"    python3 tools/peg_turn_check.py --peg {args.peg} "
-                  f"--direction {args.direction} --angle {args.angle:g} {other_flag}")
+                  f"--direction {args.direction} --angle {args.angle:g} "
+                  f"--step {args.step:g} {other_flag}")
     print()
     print("정밀 백래시는 마이크를 붙이고 tools/peg_cal.py --backlash --step 15")
     return 0
