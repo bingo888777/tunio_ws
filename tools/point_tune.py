@@ -21,7 +21,7 @@
   z-          기본 거리만큼 -
   p           지금 손끝 좌표와 교시값 대비 차이 찍기 (안 움직인다)
   u           직전 이동 되돌리기
-  up          교시점 위 대기 자리로 올라가기
+  up          교시점 위 대기 자리로 올라가기 (수직)
   down        교시점(지금 누적된 값)으로 내려가기
   save        지금 자리를 yaml 에 적는다 (.bak 를 남긴다)
   q           끝내기. 적용 안 한 변화가 있으면 yaml 조각을 찍어 준다
@@ -66,12 +66,25 @@ def fmt(vals, w=8, d=2):
 
 
 def _resolve(points, name):
-    """교시점 이름을 Pose 와 '위로 얼마나 떨어져 접근하는지' 로 푼다."""
+    """
+    교시점 이름을 (Pose, 위로 떨어져 접근하는 거리, 먼저 들를 관절 자세) 로 푼다.
+
+    경유 자세가 왜 필요한가 — 첫 이동이 **지금 팔이 있는 자리에서 목표점 위까지
+    Base 직선**이다. 팔이 어디 있는지 모르는 채 그 직선을 타면 기타를 가로지를 수
+    있다. 이슈 #48 과 같은 문제다. 관절 자세를 한 번 거쳐 직선 구간을 목표점
+    근처로 좁힌다.
+      pick.holder  -> frames.standby       (거치대 쪽 안전 자세)
+      pluck.N      -> frames.pluck_standby (네 줄 접근점에서 12~22mm 다)
+    """
     if name == "pick.holder":
-        return points.pick_holder(), float(points.motion.get("pick_up_mm", 50.0))
+        return (points.pick_holder(),
+                float(points.motion.get("pick_up_mm", 50.0)),
+                points.frame("standby"))
     m = re.fullmatch(r"pluck\.([1256])", name)
     if m:
-        return points.pluck(int(m.group(1))), float(points.motion.get("pluck_up_mm", 20.0))
+        return (points.pluck(int(m.group(1))),
+                float(points.motion.get("pluck_up_mm", 20.0)),
+                points.frame("pluck_standby"))
     raise SystemExit(f"모르는 교시점이다: {name!r} (pick.holder 또는 pluck.6 같은 형식)")
 
 
@@ -129,13 +142,15 @@ def main():
 
     from tunio_robot import teach_points as TP
     points = TP.load(os.path.abspath(args.yaml))
-    pose, up_mm = _resolve(points, args.point)
+    pose, up_mm, via = _resolve(points, args.point)
     taught = list(pose.task)
 
     # 이 도구는 교시점 바로 옆에서 논다. 배율을 타면 안 된다.
     motion = dict(points.motion)
     motion["speed_scale"] = 1.0
     scale = max(0.05, args.speed / 100.0)
+    motion["vel"] = points.motion.get("vel", 30) * scale
+    motion["acc"] = points.motion.get("acc", 30) * scale
     v = [x * scale for x in points.motion.get("travel_vel", [50.0, 30.0])]
     a = [x * scale for x in points.motion.get("travel_acc", [100.0, 60.0])]
 
@@ -145,6 +160,7 @@ def main():
     print("=" * 70)
     print(f"  교시값 {fmt(taught)}")
     print(f"  위 대기 자리는 Base +Z {up_mm:.0f}mm")
+    print(f"  먼저 들를 자세: {via.name} (관절 이동)")
     print(f"  속도 설정값의 {args.speed:.0f}% (직선 {v[0]:.1f} mm/s), "
           f"기본 거리 {args.step:.2f}mm")
     print("  **팔이 움직인다.** 비상정지를 손 닿는 곳에.")
@@ -199,10 +215,12 @@ def main():
         print(f"  교시값 대비  X {d[0]:+.2f}  Y {d[1]:+.2f}  Z {d[2]:+.2f} mm")
 
     try:
-        ans = input(f"  먼저 교시점 위 {up_mm:.0f}mm 로 간다. 진행? [y/N] ").strip().lower()
-        if ans != "y":
+        ans = input(f"  {via.name} 를 거쳐 교시점 위 {up_mm:.0f}mm 로 간다. 진행? [y/N] ")
+        if ans.strip().lower() != "y":
             print("  그만둔다.")
             return 0
+        # 관절 이동으로 먼저 안전 자세에 선다. 여기서 시작해야 다음 직선이 짧다
+        MP._movej(via.joints, motion)
         if not go(above_of(cur), "위 대기 자리로 이동"):
             return 1
         show()

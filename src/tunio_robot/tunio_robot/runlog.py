@@ -41,6 +41,35 @@ def save(name, payload, out_dir):
         return None
 
 
+def session_path(name, out_dir):
+    """
+    이번 실행이 계속 덮어쓸 파일 경로 하나를 잡는다 (노드용).
+
+    save() 는 부를 때마다 시각이 붙어 새 파일이 된다. 도구는 한 번 재고 끝이라
+    그게 맞지만, 노드는 goal 을 수십 번 받으므로 그대로 쓰면 파일이 쏟아진다.
+    시작할 때 경로를 하나 잡아 두고 goal 이 끝날 때마다 write() 로 덮어쓴다.
+    """
+    return os.path.join(out_dir, f"{time.strftime('%Y-%m-%d_%H%M%S')}_{name}.json")
+
+
+def write(path, payload):
+    """
+    session_path() 로 잡은 파일에 덮어쓴다. 성공하면 경로, 실패하면 None.
+
+    save() 와 같은 이유로 예외를 안 올린다 — 기록 때문에 실기가 날아가면 안 된다.
+    goal 이 끝날 때마다 통째로 다시 쓴다. 중간에 노드가 죽어도 그때까지가 남는다.
+    """
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        body = dict(payload)
+        body["saved_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(body, f, ensure_ascii=False, indent=2)
+        return path
+    except OSError:
+        return None
+
+
 def load(path):
     """기록 하나를 읽는다. 못 읽으면 None."""
     try:

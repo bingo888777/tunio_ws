@@ -9,7 +9,7 @@ import types
 import pytest
 
 from tunio_robot import motion_primitives as MP
-from tunio_robot.teach_points import Pose
+from tunio_robot.teach_points import Pose, Route as TPRoute
 
 
 class FakeApi:
@@ -419,7 +419,31 @@ def test_standby_skip_can_be_turned_off(monkeypatch, fake_api):
 
 
 # ---------------------------------------------------------- 거치대 팔 모양 (#56)
-def test_pick_up_with_sol_uses_joint_interpolation(fake_api, fake_gripper):
+ROUTE = TPRoute("routes.transit", [90.0, 0.0, 0.0, 0.0, 0.0, None], True)
+
+
+class SolApi(FakeApi):
+    """
+    지금 관절각과 ikin 을 흉내 낸다.
+
+    ikin 은 sol 마다 다른 J1 을 돌려준다 — 팔 모양 전환 판단이 J1 각으로 이뤄지므로
+    그 값이 가짜에도 있어야 뜻이 있다 (CLAUDE.md 3.5.1, 가짜는 실제 규약을 흉내 낸다).
+    """
+
+    J1_OF_SOL = {0: -10.0, 2: -10.0, 3: 5.0, 6: 170.0, 7: 175.0}
+
+    def __init__(self, now_j1=-10.0):
+        super().__init__()
+        self.now_j1 = now_j1
+
+    def get_current_posj(self):
+        return [self.now_j1] + [0.0] * 5
+
+    def ikin(self, pos, sol):
+        return [self.J1_OF_SOL.get(sol, 0.0), -30.0, -90.0, 0.0, 60.0, 0.0]
+
+
+def test_pick_up_with_sol_uses_joint_interpolation(monkeypatch, fake_api, fake_gripper):
     """
     Sol 을 주면 거치대 위 대기점까지 movejx 로 간다.
 
@@ -427,20 +451,92 @@ def test_pick_up_with_sol_uses_joint_interpolation(fake_api, fake_gripper):
     J1 오른쪽 해 하나뿐이라 6·5번(왼쪽) 페그로 갈 때마다 경유지를 타던 것이
     이 갈래 전환으로 없어진다 (2026-09-21 실기 지적).
     """
-    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=3)
-    kinds = [c[0] for c in fake_api.calls]
-    assert kinds == ["movejx", "movel", "movel"]        # 위(관절보간) → 거치대 → 위
-    assert fake_api.calls[0][2]["sol"] == 3
-    assert fake_api.calls[1][2]["ref"] == "BASE"        # 하강은 직선 그대로
-    assert fake_api.calls[2][1] == fake_api.calls[0][1]  # 수직으로 올라온다
+    api = SolApi(now_j1=-10.0)
+    monkeypatch.setattr(MP, "_api", api)
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=3, route=ROUTE)
+    kinds = [c[0] for c in api.calls]
+    assert kinds == ["movejx", "movel", "movel"]        # J1 -10 -> 5, 15도라 경유 없음
+    assert api.calls[0][2]["sol"] == 3
+    assert api.calls[1][2]["ref"] == "BASE"             # 하강은 직선 그대로
+    assert api.calls[2][1] == api.calls[0][1]           # 수직으로 올라온다
 
 
-def test_pick_return_with_sol_uses_joint_interpolation(fake_api, fake_gripper):
+def test_pick_return_with_sol_uses_joint_interpolation(monkeypatch, fake_api, fake_gripper):
     """반환 쪽이 더 중요하다 — 끝나면 바로 페그를 잡으러 간다."""
-    MP.pick_return(Pose("pick.holder", True, task=HOLDER), {}, sol=6)
-    kinds = [c[0] for c in fake_api.calls]
-    assert kinds == ["movejx", "movel", "movel"]
-    assert fake_api.calls[0][2]["sol"] == 6
+    api = SolApi(now_j1=170.0)
+    monkeypatch.setattr(MP, "_api", api)
+    MP.pick_return(Pose("pick.holder", True, task=HOLDER), {}, sol=6, route=ROUTE)
+    assert [c[0] for c in api.calls] == ["movejx", "movel", "movel"]
+    assert api.calls[0][2]["sol"] == 6
+
+
+def test_J1_이_뒤집히면_경유지를_지난다(monkeypatch, fake_api, fake_gripper):
+    """
+    J1 이 뒤집히는 전환은 **어느 쪽으로 가든** J1=90 을 거쳐야 한다.
+
+    2026-09-21 사용자 확인 — J1 이 뒤집히는 전환은 어느 쪽으로 가든 J1=90 을
+    거쳐야 기타에 안 부딪힌다. 반대값은 150~180도쯤 차이 나는 경우다.
+    경유지를 지나면 via(frames.standby)는 건너뛴다 — 더 안전한 출발점이다.
+    """
+    api = SolApi(now_j1=-10.0)                          # 목표 sol 6 은 J1 170 -> 180도
+    monkeypatch.setattr(MP, "_api", api)
+    via = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, via=via, sol=6, route=ROUTE)
+    assert api.calls[0][0] == "movej" and api.calls[0][1][0] == 90.0     # 경유지로 갔고
+    assert [c[1] for c in api.calls].count([0, 0, 75, 0, 100, 0]) == 0   # via 는 안 들렀다
+
+
+def test_J1_이_비슷하면_경유지를_안_지난다(monkeypatch, fake_api, fake_gripper):
+    """
+    Sol 번호가 달라도 J1 이 그대로면 경유가 낭비다.
+
+    sol 은 어깨·팔꿈치·손목 세 비트라 팔꿈치나 손목만 바뀌는 전환이 있다.
+    기타를 가로지르는 건 J1 이 뒤집힐 때뿐이다.
+    """
+    api = SolApi(now_j1=-10.0)                          # 목표 sol 2 도 J1 -10 -> 0도 차이
+    monkeypatch.setattr(MP, "_api", api)
+    via = Pose("frames.standby", True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, via=via, sol=2, route=ROUTE)
+    assert api.calls[0][0] == "movej"
+    assert api.calls[0][1] == [0, 0, 75, 0, 100, 0]     # 경유지가 아니라 via 다
+
+
+def test_230도_차이도_경유지를_지난다(monkeypatch, fake_api, fake_gripper):
+    """Movej 는 관절 공간에서 곧이곧대로 돈다. 230도를 130도로 접어 보면 안 된다."""
+    api = SolApi(now_j1=-60.0)                          # 목표 sol 6 은 J1 170 -> 230도
+    monkeypatch.setattr(MP, "_api", api)
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=6, route=ROUTE)
+    assert api.calls[0][0] == "movej" and api.calls[0][1][0] == 90.0
+
+
+def test_문턱을_yaml_로_바꿀_수_있다(monkeypatch, fake_api, fake_gripper):
+    """실기에서 재 보고 조일 수 있어야 한다. 실측 전 임시값이다."""
+    api = SolApi(now_j1=-10.0)                          # sol 6 까지 180도
+    monkeypatch.setattr(MP, "_api", api)
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {"j1_flip_deg": 200.0},
+               sol=6, route=ROUTE)
+    assert api.calls[0][0] == "movejx"                  # 200도 문턱이면 안 뒤집힌 셈
+
+
+def test_팔_모양을_바꿔야_하는데_경유지가_없으면_거부한다(monkeypatch, fake_api, fake_gripper):
+    """J1=90 을 안 거치고 뒤집으면 기타에 부딪힌다. 조용히 넘어가면 안 된다."""
+    api = SolApi(now_j1=-10.0)
+    monkeypatch.setattr(MP, "_api", api)
+    with pytest.raises(MP.MotionError, match="경유지가 없다"):
+        MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=6)
+    assert api.calls == []                              # 움직이지 않았다
+
+
+def test_J1_을_못_읽으면_경유지를_지난다(monkeypatch, fake_api, fake_gripper):
+    """모르면서 뒤집는 것보다 한 번 더 들르는 쪽이 싸다."""
+    class 깜깜(SolApi):
+        def ikin(self, pos, sol):
+            raise RuntimeError("ikin 서비스 없음")
+
+    api = 깜깜(now_j1=-10.0)
+    monkeypatch.setattr(MP, "_api", api)
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, sol=6, route=ROUTE)
+    assert api.calls[0][0] == "movej" and api.calls[0][1][0] == 90.0
 
 
 def test_pick_without_sol_keeps_the_straight_approach(fake_api, fake_gripper):
@@ -516,3 +612,37 @@ def test_movej_가_가속도도_같은_비로_내린다(monkeypatch):
     kw = api.calls[0][2]
     assert kw["vel"] < 50.0
     assert abs(kw["acc"] / kw["vel"] - 2.0) < 1e-6        # 비가 유지된다
+
+
+# ---------------------------------------------------------- J1 뒤집힘 판단 (#58)
+def test_j1_flip_문턱():
+    """
+    사용자 기준 — 반대값은 150~180도쯤, 230도도 옮긴다. 그 아래는 근사값이다.
+
+    이 함수 하나가 판단을 쥔다. tools/sol_check.py 도 이걸 불러서 찍으므로
+    도구가 보여주는 값이 곧 실기에서 코드가 내릴 판단이다.
+    """
+    m = {}
+    assert MP.j1_flip(-10.0, 5.0, m)[0] is False        # 15도 — 근사값
+    assert MP.j1_flip(0.0, 119.0, m)[0] is False        # 119도 — 아직 근사
+    assert MP.j1_flip(0.0, 120.0, m)[0] is True         # 120도 — 문턱
+    assert MP.j1_flip(-10.0, 170.0, m)[0] is True       # 180도 — 반대값
+    assert MP.j1_flip(-60.0, 170.0, m)[0] is True       # 230도 — 반대값
+
+
+def test_j1_flip_은_모듈러로_접지_않는다():
+    """Movej 는 관절 공간에서 곧이곧대로 돈다. 230도를 130도로 보면 안 된다."""
+    flip, turn = MP.j1_flip(-60.0, 170.0, {})
+    assert turn == 230.0 and flip is True
+
+
+def test_j1_flip_문턱은_설정으로_바꾼다():
+    """실측 전 임시값이라 실기에서 조여야 한다."""
+    assert MP.j1_flip(-10.0, 170.0, {"j1_flip_deg": 200.0})[0] is False
+    assert MP.j1_flip(-10.0, 170.0, {"j1_flip_deg": 100.0})[0] is True
+
+
+def test_j1_을_모르면_뒤집는_것으로_본다():
+    """모르면서 뒤집는 것보다 한 번 더 들르는 쪽이 싸다."""
+    assert MP.j1_flip(None, 170.0, {}) == (True, None)
+    assert MP.j1_flip(-10.0, None, {}) == (True, None)

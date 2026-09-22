@@ -639,6 +639,97 @@ def _goto_standby(standby, motion, vel, acc):
         _movel_base(standby.task, vel, acc)
 
 
+def _target_j1(task, sol):
+    """그 작업 좌표를 그 팔 모양(sol)으로 풀었을 때의 J1. 못 풀면 None."""
+    api = _require_api()
+    try:
+        from DR_common2 import posx
+        j = api.ikin(posx(list(task)), sol)
+    except Exception:
+        return None
+    if not j or len(j) < 6 or all(abs(float(v)) < 1e-9 for v in j):
+        return None
+    return float(j[0])
+
+
+def _current_j1():
+    """지금 J1. 못 읽으면 None."""
+    api = _require_api()
+    try:
+        return float(list(api.get_current_posj())[0])
+    except Exception:
+        return None
+
+
+def j1_flip(now_j1, want_j1, motion):
+    """
+    이 전환이 J1 을 뒤집는가. (뒤집는다, 돌아야 하는 각) 로 낸다.
+
+    **판단은 여기 한 곳에서만 한다.** _ensure_solution 과 tools/sol_check.py 가
+    같이 부른다 — 도구가 찍는 값이 곧 실기에서 코드가 내릴 판단이어야 한다.
+    따로 계산하면 도구는 "경유 안 함" 이라 찍고 코드는 경유하는 일이 생긴다.
+
+    문턱은 motion["j1_flip_deg"](기본 120도). 사용자 기준(2026-09-21) — "반대값"은
+    150~180도쯤 차이 나는 경우이고 230도 차이도 옮겨야 한다. 그 아래는 근사값이라
+    그 자리에서 이어 간다. 120 은 둘 사이의 여유값이고 실측 전 임시값이다.
+
+    **모듈러로 접지 않는다.** movej 는 관절 공간에서 곧이곧대로 보간하므로 230도
+    차이는 실제로 230도를 돈다. 130도로 줄여 보면 안 된다.
+
+    둘 중 하나라도 None(못 읽음)이면 뒤집는 것으로 본다 — 모르면서 뒤집는 것보다
+    한 번 더 들르는 쪽이 싸다. 그때 각은 None 이다.
+    """
+    if now_j1 is None or want_j1 is None:
+        return True, None
+    turn = abs(float(want_j1) - float(now_j1))
+    return turn >= float(motion.get("j1_flip_deg", 120.0)), turn
+
+
+def _ensure_solution(task, sol, route, motion, logger=None):
+    """
+    목표 팔 모양이 지금과 **J1 반대쪽**이면 J1=90 경유지를 먼저 지난다 (#58).
+
+    2026-09-21 사용자 확인 — 거치대에서 팔 모양을 바꿀 때 J1 이 뒤집히면
+    **어느 쪽으로 가든** J1 이 90 인 자세를 거쳐야 기타에 안 부딪힌다. 왼쪽으로
+    갈 때도 오른쪽으로 돌아올 때도 같다. routes.transit 이 그 자세다
+    ([90, 0, 0, 0, 0, null]) — 팔이 수직으로 서서 기타에서 떨어진 자리다.
+
+    **판단은 sol 번호가 아니라 J1 각으로 한다.** sol 은 어깨·팔꿈치·손목 세 비트라
+    번호가 달라도 팔꿈치나 손목만 다르면 J1 은 그대로다. 그때는 그 자리에서
+    이어서 작업하면 되므로 경유가 낭비다. 기타를 가로지르는 건 J1 이 뒤집힐 때뿐이다.
+
+    문턱은 motion["j1_flip_deg"](기본 120도). 사용자가 말한 "반대값" 이 **150~180도쯤
+    차이 나는 경우**이고 230도 차이도 옮겨야 할 수 있다 (2026-09-21). 그 아래는
+    근사값이라 그 자리에서 이어 간다. 120 은 그 둘 사이에 여유를 둔 값이다.
+
+    **모듈러로 접지 않는다.** movej 는 관절 공간에서 곧이곧대로 보간하므로 230도
+    차이는 실제로 230도를 돈다. 130도로 줄여 보면 안 된다.
+
+    둘 중 하나라도 못 읽으면 지난다 — 모르면서 뒤집는 것보다 싸다.
+
+    바꿨으면 True. 부르는 쪽은 그때 via 를 건너뛴다 — 경유지가 더 안전한 출발점이다.
+    """
+    if sol is None:
+        return False
+    now, want = _current_j1(), _target_j1(task, sol)
+    flip, turn = j1_flip(now, want, motion)
+    if not flip:
+        if logger:
+            logger.info(f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도). "
+                        "같은 쪽이라 경유지를 안 탄다")
+        return False
+    why = (f"J1 {now:.0f} -> {want:.0f}도 ({turn:.0f}도 뒤집힘)" if turn is not None
+           else f"J1 을 못 읽었다 (지금 {now}, 목표 {want})")
+    if route is None:
+        raise MotionError(
+            f"거치대 팔 모양을 바꿔야 하는데 경유지가 없다 — {why}. "
+            "J1=90 을 안 거치고 뒤집으면 기타에 부딪힌다 (routes.transit 확인)")
+    if logger:
+        logger.info(f"{why}. J1=90 경유지를 먼저 지난다")
+    goto_route(route, motion)
+    return True
+
+
 def _pick_points(holder, motion):
     """거치대 접촉점과 그 위 대기점(Base +Z pick_up_mm). holder 는 작업 좌표(x)여야 한다."""
     x = getattr(holder, "task", None)
@@ -652,7 +743,8 @@ def _pick_points(holder, motion):
     return contact, above
 
 
-def pick_up(holder, motion, standby=None, via=None, sol=None):
+def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
+            logger=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -682,6 +774,9 @@ def pick_up(holder, motion, standby=None, via=None, sol=None):
           내려가기·들어 올리기는 sol 과 무관하게 **직선**이다. 거치대·스토퍼를
           수직으로 빠져나와야 하고, 직선은 팔 모양을 안 바꾼다.
 
+    route — 팔 모양을 바꿀 때 지나는 경유지(routes.transit, J1=90). sol 을 주면
+            같이 줘야 한다. 자세한 이유는 _ensure_solution.
+
     RG2.select() 의 settle_sec(기본 0.3초)만으로는 부족해 집자마자 들어 올리는 동작이
     물리적으로 안 끝난 그리퍼를 밀고 올라갔다 (2026-09-20 실기). 그래서 집은 뒤
     motion["pick_settle_sec"](기본 1.0초)만큼 한 번 더 멈췄다 움직인다.
@@ -695,7 +790,8 @@ def pick_up(holder, motion, standby=None, via=None, sol=None):
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
-    if via is not None:
+    flipped = _ensure_solution(above, sol, route, motion, logger)  # J1 뒤집히면 경유
+    if not flipped and via is not None:
         _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
     _release()                                          # 열고 간다
     if sol is None:
@@ -710,7 +806,8 @@ def pick_up(holder, motion, standby=None, via=None, sol=None):
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
-def pick_return(holder, motion, via=None, home=None, sol=None):
+def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
+                logger=None):
     """
     피크를 거치대에 돌려놓는다.
 
@@ -734,7 +831,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None):
     a_app = _fast(motion, motion.get("pick_acc_approach", 100), SPEED_CAP_LINEAR * 2)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
 
-    if via is not None:
+    flipped = _ensure_solution(above, sol, route, motion, logger)  # J1 뒤집히면 경유
+    if not flipped and via is not None:
         _movej(via.joints, motion)                      # 경유 자세
     if sol is None:
         _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)

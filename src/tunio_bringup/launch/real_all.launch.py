@@ -37,6 +37,8 @@
   dry_run:=false  실제로 로봇을 움직인다 (기본 true — 움직이지 않는다)
   gripper:=rg2    그리퍼 종류. 반드시 rg2
   device:=2       마이크 장치 번호
+  speed_scale:=1.0          이동 속도 배율. 0 이면 teach_points.yaml 값(2.0)
+  peg_register_force:=true  페그 진입을 힘 제어로 (기본 false, #51)
   port:=9000      웹 포트
   db:=<경로>      SQLite 파일 위치
   save_on_error_exit:=true
@@ -61,6 +63,8 @@ def generate_launch_description():
     dry_run = LaunchConfiguration('dry_run')
     gripper = LaunchConfiguration('gripper')
     device = LaunchConfiguration('device')
+    speed_scale = LaunchConfiguration('speed_scale')
+    peg_register_force = LaunchConfiguration('peg_register_force')
     port = LaunchConfiguration('port')
     db = LaunchConfiguration('db')
     save_on_error = LaunchConfiguration('save_on_error_exit')
@@ -71,6 +75,11 @@ def generate_launch_description():
         DeclareLaunchArgument('gripper', default_value='rg2',
                               description='반드시 rg2. 기본값 rg6 는 한계값이 달라 위험하다'),
         DeclareLaunchArgument('device', default_value='-1'),
+        # 실기에서 속도를 바꿔 가며 보려고 뺀다. 0 이면 teach_points.yaml 의
+        # motion.speed_scale(지금 2.0)을 그대로 쓴다. 1.0 을 주면 예전 속도다
+        DeclareLaunchArgument('speed_scale', default_value='0.0'),
+        # 페그 진입을 힘 제어로 할지. 기본 false — 실물 검증이 안 끝났다 (#51)
+        DeclareLaunchArgument('peg_register_force', default_value='false'),
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('db', default_value=os.path.expanduser('~/.tunio/tunio.db')),
         DeclareLaunchArgument(
@@ -83,7 +92,9 @@ def generate_launch_description():
 
         Node(package='tunio_robot', executable='robot_controller', name='robot_controller',
              output='screen',
-             parameters=[{'dry_run': dry_run, 'gripper': gripper}]),
+             parameters=[{'dry_run': dry_run, 'gripper': gripper,
+                          'speed_scale': speed_scale,
+                          'peg_register_force': peg_register_force}]),
         Node(package='tunio_audio', executable='audio_analyzer', name='audio_analyzer',
              output='screen', parameters=[{'device': device}]),
 

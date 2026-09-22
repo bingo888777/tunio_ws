@@ -187,6 +187,13 @@ def main():
         print(f"sol {sol}   {fmt(j, 7, 2)}{tag}")
         print(f"        J1 {j[0]:+7.2f}도 — {'왼쪽' if j[0] < 0 else '오른쪽'}"
               f"  (6·5번은 왼쪽, 2·1번은 오른쪽)")
+        if args.point == "pick.holder":
+            # **코드와 같은 함수로 판단한다.** 따로 계산하면 도구는 "경유 안 함" 이라
+            # 찍고 실기에서는 경유하는 일이 생긴다 (motion_primitives.j1_flip)
+            flip, turn = MP.j1_flip(now_j[0], j[0], points.motion)
+
+            print(f"        지금 J1 {now_j[0]:+.2f} 에서 {turn:.0f}도 돌아야 한다"
+                  f"  ->  {'J1=90 경유지를 탄다' if flip else '경유 없이 바로 간다'}")
         print(f"        {'손목 뒤집힘(J5<0)' if j[4] < 0 else '손목 안 뒤집힘(J5>0)'}"
               f"    케이싱 {fmt(r['wrist_casing'])}")
         print(f"        어깨팔꿈치 {fmt(r['origins'][2])}   "
@@ -216,6 +223,13 @@ def main():
                   f"(X {d[0]:+.0f}, Y {d[1]:+.0f}, Z {d[2]:+.0f} mm).")
     print("  케이싱이 기타에서 먼 쪽(X 작고 Z 낮은 쪽)인 해를 고른다.")
     if args.point == "pick.holder":
+        thr = points.motion.get("j1_flip_deg", 120.0)
+        print(f"  경유 판단 문턱은 motion.j1_flip_deg = {thr:g}도 다.")
+        print("  이 도구가 찍는 '경유지를 탄다/안 탄다' 는 motion_primitives.j1_flip 이")
+        print("  낸 값 그대로다 — 실기에서 코드가 내릴 판단과 같다.")
+        print("  ⚠️ 위 판단은 **지금 팔이 서 있는 자세 기준**이다. 실기에서는 직전")
+        print("     동작이 남긴 자세에서 출발하므로 줄마다 달라질 수 있다.")
+        print()
         print("  거치대는 **J1 부호**로 고른다 — 다음에 갈 페그 쪽과 같아야")
         print("  좌우 전환 경유지를 건너뛴다 (#56).")
         print("    J1 음수 -> sol_by_side.left  (6·5번 쪽)")
