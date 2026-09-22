@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/PlayString.action"
   "action/AdjustPeg.action"
   "action/StrumAll.action"
+  "action/RegisterPeg.action"
+  "action/ReturnHome.action"
   "msg/TuningSettings.msg"
   "msg/StringResult.msg"
   "msg/JobSummary.msg"

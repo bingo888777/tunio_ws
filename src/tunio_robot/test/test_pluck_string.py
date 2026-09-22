@@ -30,10 +30,18 @@ class FakeApi:
     def __init__(self):
         self.calls = []
         self.reject = set()
+        self.current = None
 
     def _record(self, kind, pos, kw):
         self.calls.append((kind, list(pos), kw))
-        return -1 if len(self.calls) - 1 in self.reject else 0
+        if len(self.calls) - 1 in self.reject:
+            return -1
+        if kind in ("movel", "movejx") and kw.get("mod") != self.DR_MV_MOD_REL:
+            self.current = list(pos)
+        return 0
+
+    def get_current_posx(self):
+        return (self.current, 0) if self.current else None
 
     def movej(self, pos, **kw):
         return self._record("movej", pos, kw)
@@ -95,7 +103,7 @@ def test_sequence_with_task_standby(fake_api):
     """기타 위 대기 자세가 작업 좌표(x)면 movej 가 아니라 Base 직선(movel)으로 간다."""
     standby = Pose("frames.pluck_standby", True,
                    task=[641.83, -13.17, 192.0, 180.0, -180.0, -90.0])
-    MP.pluck_string(_pose_x(CONTACT), {}, standby=standby)
+    MP.pluck_string(_pose_x(CONTACT), {"standby_skip_mm": 0}, standby=standby)
     kinds = [c[0] for c in fake_api.calls]
     assert kinds == ["movel"] * 7                               # 대기 자세까지 전부 movel
     assert fake_api.calls[0][1] == standby.task
@@ -708,3 +716,49 @@ def test_j1_을_모르면_뒤집는_것으로_본다():
     """모르면서 뒤집는 것보다 한 번 더 들르는 쪽이 싸다."""
     assert MP.j1_flip(None, 170.0, {}) == (True, None)
     assert MP.j1_flip(-10.0, None, {}) == (True, None)
+
+
+@pytest.mark.parametrize("stuck_at", ["above", "contact", "unreadable"])
+def test_반환_위치_미도달이면_피크를_놓지_않는다(fake_api, fake_gripper, monkeypatch, stuck_at):
+    original = fake_api.get_current_posx
+
+    def read():
+        if stuck_at == "unreadable":
+            return -1
+        actual, sol = original()
+        if len(fake_api.calls) == (1 if stuck_at == "above" else 2):
+            actual = list(actual)
+            actual[2] += 10
+        return actual, sol
+
+    monkeypatch.setattr(fake_api, "get_current_posx", read)
+    with pytest.raises(MP.MotionError, match="피크 반환"):
+        MP.pick_return(Pose("pick.holder", True, task=HOLDER), {})
+    assert fake_gripper.calls == []
+    assert len(fake_api.calls) == (2 if stuck_at == "contact" else 1)
+
+
+def test_반환은_거치대_위에서_수직하강_완료후_놓는다(fake_api, fake_gripper):
+    MP.pick_return(Pose("pick.holder", True, task=HOLDER), {"pick_up_mm": 200.0})
+    above, contact, back = fake_api.calls
+    assert above[1][:2] == contact[1][:2] == HOLDER[:2]
+    assert above[1][2] == HOLDER[2] + 200
+    assert contact[1] == HOLDER
+    assert back[1] == above[1]
+    assert all(c[2]["radius"] == 0 for c in fake_api.calls)
+    assert fake_gripper.calls == ["open"]
+
+
+def test_반환_후에는_페그이동_높이와_모델여유까지_수직상승한다(fake_api, fake_gripper):
+    holder = list(HOLDER)
+    holder[2] = 164.0
+    motion = {"pick_up_mm": 50.0, "pick_to_peg_min_z_mm": 214.0,
+              "pick_to_peg_margin_mm": 5.0}
+    MP.pick_return(Pose("pick.holder", True, task=holder), motion)
+    above, contact, retreat = fake_api.calls
+    assert above[1][2] == 214.0
+    assert contact[1][2] == 164.0
+    assert retreat[1][2] == 224.0
+    assert retreat[1][:2] == holder[:2]
+    assert retreat[1][3:] == holder[3:]
+    assert fake_gripper.calls == ["open"]

@@ -409,6 +409,7 @@ def test_조절_Action은_동작전_등록을_지우고_성공시에만_요청�
         node = h.node
         node.dry_run = False
         node._side = "left"
+        monkeypatch.setattr(MP, "_current_j1", lambda: 180.0)
         node.pegs = PegState(str(tmp_path / "state.json"))
         node.pegs.register(6, 20.0)
         node.pegs.save()
@@ -460,12 +461,7 @@ def test_폭_읽기는_한_번만_만든다(ros, taught):
         node.destroy_node()
 
 
-# ─────────── 거치대에서 페그로 바로 가지 않는다 (이슈 #34) ───────────
-#
-# 피크를 반환하면 팔이 거치대 위에 남는다. _cross_to 는 "직전에 있던 쪽" 으로
-# 판단하는데 거치대는 좌우 어느 쪽도 아니다. 그 기억을 안 지우면 직전 페그와 같은
-# 쪽일 때 경유지를 건너뛰고 거치대에서 페그 접근점으로 관절 보간으로 바로 간다.
-# 그 경로는 아무도 본 적이 없다 — 충돌 검증(2026-09-19)은 페그↔페그와 경유지뿐이다.
+# 반환 후 쪽 기록은 지우되, 페그 접근은 현재 J1으로 판단한다.
 
 def test_피크를_반환하면_어디_있는지_모르는_상태가_된다(ros, taught):
     node = _node(taught)
@@ -486,20 +482,22 @@ def test_쪽을_모르면_무조건_경유지를_탄다(ros, taught, monkeypatch
         went = []
         monkeypatch.setattr(MP, "goto_route", lambda r, m: went.append(r.name))
         node._side = None
+        monkeypatch.setattr(MP, "_current_j1", lambda: None)
         node._cross_to("left")
         assert went, "경유지를 안 탔다"
     finally:
         node.destroy_node()
 
 
-def test_같은_쪽이면_경유지를_건너뛴다(ros, taught, monkeypatch):
-    """같은 쪽 페그끼리는 37mm 라 매번 경유하면 사이클 타임만 는다."""
+def test_현재_J1이_해당_범위면_경유지를_건너뛴다(ros, taught, monkeypatch):
+    """직전 쪽 기록 대신 실제 J1을 사용한다."""
     from tunio_robot import motion_primitives as MP
     node = _node(taught)
     try:
         went = []
         monkeypatch.setattr(MP, "goto_route", lambda r, m: went.append(r.name))
-        node._side = "left"
+        node._side = None
+        monkeypatch.setattr(MP, "_current_j1", lambda: 180.0)
         node._cross_to("left")
         assert went == []
     finally:
@@ -603,5 +601,119 @@ def test_goal_마다_실행_기록이_쌓인다(ros, taught, tmp_path):
         assert g["success"] is True
         assert g["elapsed_sec"] >= 0.0
         assert g["request"]["string_number"] == 6      # 요청이 그대로 남는다
+    finally:
+        h.shutdown()
+
+
+def test_등록_Action은_기등록을_건너뛰고_미등록만_등록한다(ros, taught, monkeypatch, tmp_path):
+    from tunio_interfaces.action import RegisterPeg
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(str(tmp_path / "pegs.json"))
+        n.pegs.register(6, 12.0)
+        seen = []
+        monkeypatch.setattr(n, "_cross_to", lambda side: seen.append(side))
+        monkeypatch.setattr(MP, "register_peg", lambda *a, **k: seen.append("register") or 30.0)
+        for no in (6, 5):
+            r = h.send(RegisterPeg, "/robot/register_peg", RegisterPeg.Goal(string_number=no))
+            assert r.result.success
+        assert seen == ["left", "register"]
+        assert n.pegs.roll_of(6) == 12.0
+        assert n.pegs.roll_of(5) == 30.0
+        assert n._holding_pick is False
+    finally:
+        h.shutdown()
+
+
+def test_복귀_Action은_피크_반환후_대기로_간다(ros, taught, monkeypatch):
+    from tunio_interfaces.action import ReturnHome
+    h = Harness(taught)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True
+        seen = []
+        monkeypatch.setattr(MP, "pick_return", lambda *a, **k: seen.append("return"))
+        monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
+        res = h.send(ReturnHome, "/robot/return_home", ReturnHome.Goal())
+        assert res.result.success
+        assert seen == ["return", "home"]
+        assert h.node._holding_pick is False
+    finally:
+        h.shutdown()
+
+
+@pytest.mark.parametrize("side,j1,skip", [
+    ("right", -30.0, True), ("right", 30.0, True),
+    ("right", -30.01, False), ("right", 30.01, False),
+    ("left", 150.0, True), ("left", 210.0, True),
+    ("left", 149.99, False), ("left", 210.01, False),
+    ("left", -180.0, False), ("left", 0.0, False),
+    ("right", None, False), ("left", float("nan"), False),
+])
+def test_페그_경유는_실제_J1과_30도_경계로_결정한다(monkeypatch, side, j1, skip):
+    went = []
+    route = TPRoute("transit", [90, 0, 0, 0, 0, None], True)
+    monkeypatch.setattr(MP, "_current_j1", lambda: j1)
+    monkeypatch.setattr(MP, "goto_route", lambda r, m: went.append(r))
+    MP.approach_peg_side(side, route, {})
+    assert bool(went) is not skip
+
+
+@pytest.mark.parametrize("route", [None, TPRoute("bad", [-90, 0, 0, 0, 0, None], True)])
+def test_페그_경유는_양의_90도만_허용한다(monkeypatch, route):
+    monkeypatch.setattr(MP, "_current_j1", lambda: 90.0)
+    with pytest.raises(MP.MotionError, match=r"J1=\+90"):
+        MP.approach_peg_side("left", route, {})
+
+
+def test_미등록_회전요청은_등록이나_피크반환_없이_실패한다(ros, taught, monkeypatch, tmp_path):
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(str(tmp_path / "empty.json"))
+        with mock.patch.object(n, "_release_pick") as release, \
+                mock.patch.object(n, "_ensure_registered") as register, \
+                mock.patch.object(n, "_cross_to") as cross, \
+                mock.patch.object(MP, "adjust_peg") as adjust:
+            result = h.send(AdjustPeg, "/robot/adjust_peg",
+                            AdjustPeg.Goal(string_number=1, direction=1, angle_deg=3.0))
+            assert not result.result.success
+            assert "register_peg" in result.result.message
+            for operation in (release, register, cross, adjust):
+                operation.assert_not_called()
+    finally:
+        h.shutdown()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_반환_후에는_높이검사_경로를_쓰고_실패해도_직행으로_바꾸지_않는다(
+        ros, taught, monkeypatch, tmp_path, fails):
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(str(tmp_path / "state.json"))
+        n.pegs.register(2, 0.0)
+        n._holding_pick = True
+        monkeypatch.setattr(MP, "pick_return", lambda *a, **k: None)
+
+        def adjust(*a, **kw):
+            assert kw["from_pick"] is True
+            assert kw["side"] == "right"
+            if fails:
+                raise MP.MotionError("경로 높이 부족")
+        monkeypatch.setattr(MP, "adjust_peg", adjust)
+        with mock.patch.object(n, "_cross_to") as cross:
+            result = h.send(AdjustPeg, "/robot/adjust_peg",
+                            AdjustPeg.Goal(string_number=2, direction=1, angle_deg=3.0))
+            assert result.result.success is not fails
+            cross.assert_not_called()
+            assert n._from_pick is fails
     finally:
         h.shutdown()

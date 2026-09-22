@@ -1,7 +1,7 @@
 """
 fake_hardware — 로봇·마이크 없이 서버를 통째로 돌려 보기 위한 하드웨어 대역. 담당: 정동휘.
 
-robot_controller 와 audio_analyzer 를 대신해 네 Action 을 제공한다. 그 위에서
+robot_controller 와 audio_analyzer 를 대신해 여섯 Action 을 제공한다. 그 위에서
 **진짜 task_manager 와 진짜 result_store 가 돈다.** 조율 판정·재시도·백래시 결정·
 검증 패스·저장이 전부 실제 코드로 실행된다. 기획 11.1 의 "모의 결과로 서버 흐름 테스트".
 
@@ -46,7 +46,8 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, MeasurePitch, PlayString, StrumAll
+from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, RegisterPeg,
+                                     ReturnHome, StrumAll)
 from tunio_interfaces.srv import SaveJob
 
 # mode 파라미터 값
@@ -86,7 +87,7 @@ class FakeHardware(Node):
         #   serve_measure=false + 진짜 audio_analyzer  -> 마이크만 실물로 검증
         #   serve_robot=false   + 진짜 robot_controller -> 로봇만 실물로 검증
         self.declare_parameter('serve_measure', True)   # /audio/measure_pitch
-        self.declare_parameter('serve_robot', True)     # /robot/* 세 개
+        self.declare_parameter('serve_robot', True)     # /robot/* 다섯 개
 
         # mode=sim 전용. 전부 지어낸 값이다 (상단 주석 참조).
         self.declare_parameter('sim_start_cents', -38.0)      # 시작할 때 벗어난 정도
@@ -111,7 +112,9 @@ class FakeHardware(Node):
         if bool(self.get_parameter('serve_measure').value):
             wanted.append((MeasurePitch, '/audio/measure_pitch', self.on_measure))
         if bool(self.get_parameter('serve_robot').value):
-            wanted += [(PlayString, '/robot/play_string', self.on_play),
+            wanted += [(ReturnHome, '/robot/return_home', self.on_return_home),
+                       (RegisterPeg, '/robot/register_peg', self.on_register),
+                       (PlayString, '/robot/play_string', self.on_play),
                        (AdjustPeg, '/robot/adjust_peg', self.on_adjust),
                        (StrumAll, '/robot/strum_all', self.on_strum)]
         if not wanted:
@@ -275,6 +278,14 @@ class FakeHardware(Node):
         goal.succeed()
         self.get_logger().info(what)
         return result_type(success=True, message='')
+
+    def on_return_home(self, goal):
+        goal.succeed()
+        return ReturnHome.Result(success=True, message='')
+
+    def on_register(self, goal):
+        goal.succeed()
+        return RegisterPeg.Result(success=True, message='')
 
     def on_play(self, goal):
         return self._simple(goal, PlayString.Result, 'play_delay_sec',

@@ -27,6 +27,7 @@ uint8 PHASE_DONE=8             # 완료
 uint8 PHASE_PAUSED=9           # 일시정지
 uint8 PHASE_CANCELED=10        # 취소
 uint8 PHASE_ERROR=11           # 오류
+uint8 PHASE_REGISTER_PEG=12    # 측정 전 미등록 페그 초기 등록
 
 uint8 OVERALL_PENDING=0        # 판정 전
 uint8 OVERALL_SUCCESS=1        # 4줄 모두 성공

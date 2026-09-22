@@ -171,11 +171,6 @@ def main():
     log = {"tool": "peg_register", "pegs": pegs, "direction": args.direction,
            "turn_deg": args.turn, "cycles": args.cycles, "results": {}}
     failed = []
-    # 경유지는 **반대쪽으로 넘어갈 때만** 쓴다. 같은 쪽 페그끼리는 37mm 밖에
-    # 안 떨어져 있어 바로 간다 (robot_controller._cross_to 와 같은 규칙).
-    # 첫 페그는 팔이 어디 있는지 모르므로 무조건 경유한다.
-    last_side = None
-
     for no in pegs:
         peg = points.peg(no)
         print("\n" + "=" * 66)
@@ -186,14 +181,9 @@ def main():
         if args.no_route:
             print("  경유지를 건너뛴다 (--no-route). 지금 자리에서 바로 들어간다.")
             print("  ⚠️ 그 페그 근처에 있을 때만 맞다. 반대쪽이면 기타를 쓸고 간다")
-        elif side == last_side:
-            print(f"  경유지를 안 거친다 — 직전 페그와 같은 {side} 쪽이다 "
-                  f"(37mm 옆). 반대쪽으로 넘어갈 때만 경유한다")
-        elif route is not None:
-            confirm(f"경유지로 올라간다 ({last_side or '어디 있는지 모름'} -> {side}). "
-                    f"팔이 크게 움직인다.")
-            MP.goto_route(route, motion)
-        last_side = side
+        else:
+            confirm("현재 J1을 확인하고 필요하면 +90도 경유지로 이동한다.")
+            MP.approach_peg_side(side, route, motion)
 
         rec = {"attempts": []}
         confirm(f"\n1) 등록 — 순응 켜고 {handle['insert_force_n']:.1f}N 상한으로 밀어 넣은 뒤\n"

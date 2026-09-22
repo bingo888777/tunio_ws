@@ -1,7 +1,7 @@
 """
 robot_controller — 발현·페그 조절·화음 Action 서버. 두산 API 연동.
 
-세 Action(play_string / adjust_peg / strum_all)은 같은 팔을 쓰므로
+다섯 Action(register_peg / play_string / adjust_peg / strum_all / return_home)은 같은 팔을 쓰므로
 동시에 실행되면 안 된다. 하나가 도는 동안 들어온 goal 은 REJECT 한다
 (audio_analyzer 의 동시 요청 거부와 같은 방식).
 
@@ -25,7 +25,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
+from tunio_interfaces.action import AdjustPeg, PlayString, RegisterPeg, ReturnHome, StrumAll
 from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
@@ -144,7 +144,7 @@ class RobotController(Node):
             MP.connect(self.points.robot, self.points.gripper,
                        logger=self.get_logger())
 
-        # 팔은 하나뿐이라 세 Action 이 같은 락을 쓴다
+        # 팔은 하나뿐이라 다섯 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
         self._running = None
         self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
@@ -162,8 +162,16 @@ class RobotController(Node):
         # (거치대 위가 아닐 수 있다). None 이면 그 대신 멈추고 사람을 부른다
         # (이슈 #34-1).
         self._holding_pick = False
+        self._from_pick = False  # 반환 후에는 높이 검사 경로 필수. 실패 시에도 유지
 
         cb = ReentrantCallbackGroup()
+        self.home_srv = ActionServer(
+            self, ReturnHome, "/robot/return_home", self.on_return_home,
+            goal_callback=self.on_goal, cancel_callback=self.on_cancel, callback_group=cb)
+        self.register_srv = ActionServer(
+            self, RegisterPeg, "/robot/register_peg",
+            self.on_register, goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel, callback_group=cb)
         self.play_srv = ActionServer(
             self, PlayString, "/robot/play_string",
             self.on_play, goal_callback=self.on_goal,
@@ -263,31 +271,15 @@ class RobotController(Node):
         RL.write(self._runlog_path, self._runlog)
 
     def _cross_to(self, side):
-        """
-        헤드스톡 반대쪽으로 넘어갈 때만 경유지를 거친다.
-
-        같은 쪽 페그끼리는 37mm 밖에 안 떨어져 있어 바로 간다.
-        반대쪽은 손목이 뒤집혀야 하고, TCP 가 208mm 라 그 뒤집힘이
-        기타 근처에서 일어나면 손끝이 큰 호를 그리며 부딪힌다.
-
-        self._side 가 None 이면 **어디 있는지 모른다**는 뜻이라 무조건 경유지를 탄다.
-        피크를 반환한 직후가 그렇다 — 거치대는 좌우 어느 쪽도 아니다 (#34).
-        """
-        if self._side == side:
-            return
-        route = self.points.route()
-        if route is not None:
-            self.get_logger().info(f"경유지를 거쳐 {side} 쪽으로")
-            MP.goto_route(route, self.points.motion)
+        """실제 J1을 읽어 페그 쪽 접근에 필요한 경유를 결정한다."""
+        MP.approach_peg_side(side, self.points.route(), self.points.motion,
+                             logger=self.get_logger())
 
     def _ensure_registered(self, string_number):
         """
         페그 손잡이 각이 등록돼 있는지 보고, 없으면 **그 자리에서 Phase 0 를 돈다**.
 
-        왜 여기서 하나
-          서버는 "작업 시작" 을 로봇에 알리지 않는다. 로봇이 아는 건 Action 세 개뿐이다.
-          피크 집기·반환 시점을 로봇이 스스로 판단하는 것과 같은 방식으로(CLAUDE.md 2절),
-          등록도 **필요해지는 순간** 한다. 인터페이스가 안 바뀐다.
+        RegisterPeg 전용이다. AdjustPeg는 등록을 수행하지 않는다.
 
         왜 등록이 꼭 있어야 하나
           손잡이가 돌아가 있는데 교시 자세로 들어가면, 물리는 순간 페그가 그 각으로
@@ -307,7 +299,8 @@ class RobotController(Node):
             self.points.peg(string_number), self.points.motion,
             self.points.peg_handle(), self._width_reader(),
             logger=self.get_logger(),
-            use_force=bool(self.get_parameter("peg_register_force").value))
+            use_force=bool(self.get_parameter("peg_register_force").value),
+            from_pick=self._from_pick, side=TP.side_of(string_number), route=self.points.route())
         self.pegs.register(string_number, roll)
         self.pegs.save()
         self.get_logger().info(f"{string_number}번 손잡이 각 {roll:+.1f}도 등록")
@@ -360,6 +353,7 @@ class RobotController(Node):
         MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol,
                    route=self.points.route(), logger=self.get_logger())
         self._holding_pick = True
+        self._from_pick = False
         # 경유지를 지나며 팔 모양을 그 쪽으로 맞췄다면 거기 서 있는 셈이다
         if sol is not None:
             self._side = side
@@ -368,15 +362,7 @@ class RobotController(Node):
         """
         페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다.
 
-        반환한 뒤에는 팔이 거치대 위에 남는다. 그 자리에서 페그로 직행하는
-        경로(movejx)는 실기 충돌 검증이 없어서(이슈 #34-2), _side 를 비워
-        다음 adjust_peg 가 무조건 경유지를 타게 한다.
-
-        **단 그 쪽 팔 모양(sol_by_side)이 적혀 있으면 비우지 않는다** (#58).
-        경유지가 있는 이유는 좌우를 넘을 때 손목이 뒤집히기 때문인데, 이미
-        그 쪽 해로 서서 반환했으면 뒤집을 게 없다. 거치대 접근이 J1 오른쪽
-        해 하나뿐이라 6·5번으로 갈 때마다 경유를 타던 것이 이걸로 없어진다.
-        값이 null 이면(기본) 예전대로 무조건 경유한다.
+        반환 뒤 페그 접근 경유 여부는 _cross_to가 실제 J1으로 다시 판단한다.
         """
         if self._holding_pick is None:
             raise MP.MotionError(
@@ -395,10 +381,41 @@ class RobotController(Node):
             MP.pick_return(holder, self.points.motion, via=via, sol=sol,
                            route=self.points.route(), logger=self.get_logger())
         self._holding_pick = False
-        # 그 쪽 해로 서서 반환했으면 손목을 뒤집을 일이 없다. 경유지를 안 탄다 (#58)
+        self._from_pick = True
+        # 마지막 팔 모양 기록. 페그 경유 판단에는 실제 J1을 사용한다.
         self._side = side if sol is not None else None
 
     # ------------------------------------------------------ Action
+    def on_return_home(self, goal):
+        def work():
+            self._release_pick()
+            if not self.dry_run:
+                MP.return_home(self.points.frame("standby"), self.points.motion)
+                self._side = None
+                self._from_pick = False
+
+        return self._run("return_home", goal, ReturnHome.Result, work)
+
+    def on_register(self, goal):
+        no = goal.request.string_number
+
+        def work():
+            self.points.peg(no)  # 줄 번호와 교시 여부 검증
+            if self.pegs.roll_of(no) is not None:
+                return
+            if self.dry_run:
+                self.get_logger().info(f"[dry_run] {no}번 페그 초기 등록")
+                return  # 가짜 등록값을 실기 파일에 저장하지 않는다
+            side = TP.side_of(no)
+            self._release_pick(side)
+            if not self._from_pick:
+                self._cross_to(side)
+            self._ensure_registered(no)
+            self._from_pick = False
+            self._side = side
+
+        return self._run("register_peg", goal, RegisterPeg.Result, work)
+
     def on_play(self, goal):
         # Feedback 없음. 측정 타임아웃은 이 Result 와 무관하다 —
         # 마이크가 오디오 onset(무음 -> 소리)을 스스로 검출한 시점부터 센다.
@@ -427,6 +444,11 @@ class RobotController(Node):
             joint, delta = self.points.joint_delta(r.string_number, r.direction, r.angle_deg)
             pose = self.points.peg(r.string_number)
             side = TP.side_of(r.string_number)
+            roll = self.pegs.roll_of(r.string_number)
+            if not self.dry_run and roll is None:
+                raise MP.MotionError(
+                    f"{r.string_number}번 페그 미등록: register_peg를 먼저 완료하라. "
+                    "adjust_peg는 초기 등록을 실행하지 않는다")
             # 페그를 잡으려면 손가락이 필요하다. 피크를 쥐고 있으면 먼저 반환한다.
             # 갈 쪽을 알려 줘서 그 쪽 팔 모양으로 반환하게 한다 (#58)
             self._release_pick(side)
@@ -436,13 +458,15 @@ class RobotController(Node):
                     f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도{via}")
                 self._side = side
                 return
-            self._cross_to(side)
-            # 손잡이 각을 모르면 돌리지 않는다. 미등록이면 여기서 Phase 0 를 돈다 (#31)
-            roll = self._ensure_registered(r.string_number)
+            if not self._from_pick:
+                self._cross_to(side)
             # 회전/후퇴 중 실패하면 예전 각을 다시 믿지 않는다. 되감기는 페그를
             # 안 돌리므로 누적량에 넣지 않고, 요청한 delta만 성공 후 확정한다 (#70).
             with self.pegs.turning(r.string_number, delta if joint == 6 else None):
-                MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll)
+                MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll,
+                              from_pick=self._from_pick, side=side, route=self.points.route(),
+                              logger=self.get_logger())
+            self._from_pick = False
             if joint != 6:
                 self.get_logger().warn(
                     f"peg_joint 가 J{joint} 라 손잡이 각을 누적하지 않는다. "
