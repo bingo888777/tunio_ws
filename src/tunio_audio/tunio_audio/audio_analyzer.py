@@ -46,6 +46,27 @@ RECORD_SEC_HIGH = 1.5
 RECORD_SEC_LOW = 2.0
 LOW_FREQ_HZ = 150.0       # 이 아래면 저음현으로 본다 (E2 82.4 / A2 110 vs B3 246.9)
 
+# onset 직후 버리는 길이(초). 발현 초기의 과도음을 분석에서 뺀다.
+#
+# 0.3 이었는데 6번 E2 의 과도음이 그 안에서 안 끝났다. 2026-09-22 통합에서 6번이
+# 창 일치 25.8센트로 기각됐고(문턱 12), 같은 발현의 돌출도 19.0 까지 깎여 있었다.
+# 두 관문이 같이 나빠지는 게 단서였다 — 피치가 흔들리면 FFT 봉우리가 옆 칸으로
+# 퍼져서, 봉우리는 낮아지고 탐색 대역 중앙값은 올라간다. 돌출이 그 비율이라
+# 양쪽에서 깎인다.
+#
+# 2026-09-18 녹음 10개(g6_e2_*.wav)로 스윕한 결과 —
+#   skip 0.3  일치 평균 5.27 최대  8.19센트   돌출 평균 33.2 최소 24.8 dB
+#   skip 0.5  일치 평균 2.79 최대  3.97센트   돌출 평균 33.1 최소 26.9 dB
+#   skip 0.8  일치 평균 4.17 최대  8.12센트   돌출 평균 31.4 최소 24.8 dB
+#   skip 1.0  일치 평균 4.83 최대 15.07센트   돌출 평균 29.2 최소 24.2 dB
+# 0.5 에서 일치가 절반이 되고 돌출 최소값이 2.1dB 오른다. 더 버리면 분석 구간이
+# 짧아져 다시 나빠지므로 0.8 · 1.0 은 아니다.
+#
+# 녹음 길이는 안 건드린다 — 0.5 + 분석 1.5초 = 2.0초라 측정 응답 2.2초 예산 안이다.
+# 고음현(1.5초 녹음)은 0.3 에서도 문제가 없었지만, 줄마다 다른 값을 두면 확인할
+# 것이 늘어난다. 저음에서 나은 값이 고음에서 나쁘지 않아 하나로 둔다.
+SKIP_HEAD_SEC = 0.5
+
 CHUNK_SEC = 0.1           # onset을 보며 받아들이는 단위
 MIN_USABLE_SEC = 0.7      # 입력이 끝난 뒤(WAV 모드) 잘린 꼬리라도 이만큼은 있어야 분석한다
 RESPONSE_GOAL_SEC = 2.2   # onset 이후 정상 목표. 넘으면 경고만 남긴다
@@ -59,7 +80,7 @@ class AudioAnalyzer(Node):
 
         self.declare_parameter("device", -1)             # -1이면 시스템 기본 입력
         self.declare_parameter("sample_rate", 44100)
-        self.declare_parameter("skip_head_sec", 0.3)     # onset 직후 과도음 제외
+        self.declare_parameter("skip_head_sec", SKIP_HEAD_SEC)  # onset 직후 과도음 제외
         self.declare_parameter("min_db", -50.0)          # 소리 부족 판정
         self.declare_parameter("min_prominence_db", pitch.MIN_PROMINENCE_DB)
         self.declare_parameter("max_agreement_cents", pitch.MAX_AGREEMENT_CENTS)
