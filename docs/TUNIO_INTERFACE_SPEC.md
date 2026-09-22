@@ -490,7 +490,8 @@ string message
 실패/시간 초과 시 작업을 PHASE_ERROR로 종료하고 발현하지 않는다.
 줄별 대기시간은 서버 `register_timeout_sec`(180초, 실측 전 임시값)으로 설정한다.
 등록 중 상태는 PHASE_REGISTER_PEG=12로 표시한다. 기존 번호는 바꾸지 않는다.
-기존 AdjustPeg의 미등록 시 등록 동작은 단독 호출·등록 무효화 후 복구용으로 유지한다.
+AdjustPeg는 등록을 수행하지 않는다. 미등록이면 이동 전에 실패를 반환한다.
+등록 무효화 후에도 RegisterPeg를 명시적으로 완료한 뒤 AdjustPeg를 요청한다.
 서버·로봇 PC 모두 tunio_interfaces와 사용하는 노드를 재빌드/재시작해야 한다.
 
 

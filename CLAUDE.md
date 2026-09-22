@@ -336,7 +336,7 @@
   닿지도 않아 각이 안 잡히고, 폭도 물림과 빈손이 똑같이 읽힌다.
 - 폭으로 물림·사점·빈손을 가른다. 회전 토크로는 못 가린다(3.6 참조).
 - 물린 각을 기록해 그 작업 내내 쓴다. 조절할 때마다 누적한다.
-- 4줄 전부 실패하면 조율을 시작하지 않는다. 기타 배치부터 다시 본다.
+- 미등록 줄을 모두 등록한 뒤 조율한다. 하나라도 등록 실패하면 발현 전에 중단한다.
 
 **Phase 1 · 조율 루프**
 줄 선택(6→5→2→1) → 튕기기 → 측정 → 유효성 판정 → 센트 판정
@@ -685,7 +685,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - Phase 0 — 시작 시 서버가 `/robot/register_peg`를 6→5→2→1 순서로 요청한다.
   로봇은 저장된 유효 각도가 없는 줄만 등록한다. 전부 성공한 뒤 측정을 시작한다.
   등록 실패/시간 초과 시 발현하지 않고 중단한다 (2026-09-22 사용자 결정).
-  AdjustPeg 내부 등록은 단독 호출과 등록 무효화 후 복구용으로 유지한다.
+  AdjustPeg는 등록된 각도로 회전만 한다. 미등록이면 이동 없이 실패하며 RegisterPeg를 먼저 요청해야 한다.
 - 페그 파지 판정 — **폭으로 한다. 회전 토크로는 안 된다**(2026-09-21 허공 회차로 확정).
   `close`(15mm)로 조여 물림 19.6 / 사점 32.8 / 빈손 13.0mm 를 가른다.
   작업용 `peg`(21mm)로는 손잡이보다 넓어 못 잰다. 근거는 3.6
@@ -747,8 +747,8 @@ colcon test --packages-select tunio_server && colcon test-result --all
   `standby_skip_mm` 30mm. `pick.holder.sol_by_side` 는 아직 둘 다 null 이라
   거치대 팔 모양이 예전 경로 그대로다
 - **서버의 Action 타임아웃** — `play_timeout_sec` 30 / `adjust_timeout_sec` 120 /
-  `strum_timeout_sec` 60, 전부 임시값이다. 줄마다 첫 adjust_peg 는
-  안에서 Phase 0 를 돌아 훨씬 오래 걸리는데 그 시간을 아무도 재 본 적이 없다.
+  `strum_timeout_sec` 60, 전부 임시값이다. Phase 0는 별도 register_peg로 실행하며
+  등록 제한 시간은 180초다. 실제 소요 시간은 아직 측정이 필요하다.
   `~/.tunio/robot_data` 의 실행 기록이 다음 실기에서 그 숫자를 낸다 (#58)
 
 
@@ -763,3 +763,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
   호환용으로 유지하고, 한 줄 시험은 화음 없이 ReturnHome으로 끝낸다.
 - `tools/tune_one_string.py`는 실제 서버 조율 로직을 재사용하고 ROS Action으로
   등록→조율→최종 검증→반환을 수행한다. 실기 명령은 별도 런북 참조.
+
+- 페그 등록과 회전은 별도 Action이다. 페그 접근 경유는 실제 J1으로 판단한다.
+  1·2번은 0±30도, 5·6번은 +180±30도 이내에서 생략하며 그 밖에는 +90도를 거친다.
+  -180도는 +180도로 환산하지 않는다. 발현의 반대쪽 J1/sol 변경 보류와는 별개다.

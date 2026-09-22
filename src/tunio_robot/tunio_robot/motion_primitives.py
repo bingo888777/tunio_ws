@@ -503,6 +503,25 @@ def goto_route(route, motion):
     _movej(route.resolve(current), motion)
 
 
+def approach_peg_side(side, route, motion, logger=None):
+    """1·2번은 J1=0±30°, 5·6번은 +180±30° 안에서만 경유를 생략한다."""
+    center = {"right": 0.0, "left": 180.0}[side]
+    tolerance = float(motion.get("peg_j1_skip_tolerance_deg", 30.0))
+    if not math.isfinite(tolerance) or not 0 <= tolerance < 90:
+        raise MotionError("peg_j1_skip_tolerance_deg는 0 이상 90 미만이어야 한다")
+    j1 = _current_j1()
+    # -180을 +180으로 환산하지 않는다. 반대 회전 경로는 기타에 부딪힌다.
+    skip = j1 is not None and math.isfinite(j1) and abs(j1 - center) <= tolerance
+    if logger:
+        logger.info(f"페그 {side}: J1={j1}, 기준 {center}±{tolerance}도 — "
+                    + ("경유 생략" if skip else "+90도 경유"))
+    if skip:
+        return
+    if route is None or route.joints[0] != 90.0:
+        raise MotionError("페그 접근에는 J1=+90도인 routes.transit이 필요하다")
+    goto_route(route, motion)
+
+
 def _goto_pose(pose, motion):
     """
     교시 자세로 이동한다. 관절각이면 movej, 작업 좌표면 접근축을 따라 들어간다.

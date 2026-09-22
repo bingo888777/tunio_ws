@@ -270,28 +270,15 @@ class RobotController(Node):
         RL.write(self._runlog_path, self._runlog)
 
     def _cross_to(self, side):
-        """
-        헤드스톡 반대쪽으로 넘어갈 때만 경유지를 거친다.
-
-        같은 쪽 페그끼리는 37mm 밖에 안 떨어져 있어 바로 간다.
-        반대쪽은 손목이 뒤집혀야 하고, TCP 가 208mm 라 그 뒤집힘이
-        기타 근처에서 일어나면 손끝이 큰 호를 그리며 부딪힌다.
-
-        self._side 가 None 이면 **어디 있는지 모른다**는 뜻이라 무조건 경유지를 탄다.
-        피크를 반환한 직후가 그렇다 — 거치대는 좌우 어느 쪽도 아니다 (#34).
-        """
-        if self._side == side:
-            return
-        route = self.points.route()
-        if route is not None:
-            self.get_logger().info(f"경유지를 거쳐 {side} 쪽으로")
-            MP.goto_route(route, self.points.motion)
+        """실제 J1을 읽어 페그 쪽 접근에 필요한 경유를 결정한다."""
+        MP.approach_peg_side(side, self.points.route(), self.points.motion,
+                             logger=self.get_logger())
 
     def _ensure_registered(self, string_number):
         """
         페그 손잡이 각이 등록돼 있는지 보고, 없으면 **그 자리에서 Phase 0 를 돈다**.
 
-        시작 전 RegisterPeg와 조절 시 누락 등록 복구가 같은 함수를 쓴다.
+        RegisterPeg 전용이다. AdjustPeg는 등록을 수행하지 않는다.
 
         왜 등록이 꼭 있어야 하나
           손잡이가 돌아가 있는데 교시 자세로 들어가면, 물리는 순간 페그가 그 각으로
@@ -372,15 +359,7 @@ class RobotController(Node):
         """
         페그를 잡아야 하는 동작(조절) 전에 부른다. 안 쥐고 있으면 아무 일도 안 한다.
 
-        반환한 뒤에는 팔이 거치대 위에 남는다. 그 자리에서 페그로 직행하는
-        경로(movejx)는 실기 충돌 검증이 없어서(이슈 #34-2), _side 를 비워
-        다음 adjust_peg 가 무조건 경유지를 타게 한다.
-
-        **단 그 쪽 팔 모양(sol_by_side)이 적혀 있으면 비우지 않는다** (#58).
-        경유지가 있는 이유는 좌우를 넘을 때 손목이 뒤집히기 때문인데, 이미
-        그 쪽 해로 서서 반환했으면 뒤집을 게 없다. 거치대 접근이 J1 오른쪽
-        해 하나뿐이라 6·5번으로 갈 때마다 경유를 타던 것이 이걸로 없어진다.
-        값이 null 이면(기본) 예전대로 무조건 경유한다.
+        반환 뒤 페그 접근 경유 여부는 _cross_to가 실제 J1으로 다시 판단한다.
         """
         if self._holding_pick is None:
             raise MP.MotionError(
@@ -399,7 +378,7 @@ class RobotController(Node):
             MP.pick_return(holder, self.points.motion, via=via, sol=sol,
                            route=self.points.route(), logger=self.get_logger())
         self._holding_pick = False
-        # 그 쪽 해로 서서 반환했으면 손목을 뒤집을 일이 없다. 경유지를 안 탄다 (#58)
+        # 마지막 팔 모양 기록. 페그 경유 판단에는 실제 J1을 사용한다.
         self._side = side if sol is not None else None
 
     # ------------------------------------------------------ Action
@@ -458,6 +437,11 @@ class RobotController(Node):
             joint, delta = self.points.joint_delta(r.string_number, r.direction, r.angle_deg)
             pose = self.points.peg(r.string_number)
             side = TP.side_of(r.string_number)
+            roll = self.pegs.roll_of(r.string_number)
+            if not self.dry_run and roll is None:
+                raise MP.MotionError(
+                    f"{r.string_number}번 페그 미등록: register_peg를 먼저 완료하라. "
+                    "adjust_peg는 초기 등록을 실행하지 않는다")
             # 페그를 잡으려면 손가락이 필요하다. 피크를 쥐고 있으면 먼저 반환한다.
             # 갈 쪽을 알려 줘서 그 쪽 팔 모양으로 반환하게 한다 (#58)
             self._release_pick(side)
@@ -468,8 +452,6 @@ class RobotController(Node):
                 self._side = side
                 return
             self._cross_to(side)
-            # 손잡이 각을 모르면 돌리지 않는다. 미등록이면 여기서 Phase 0 를 돈다 (#31)
-            roll = self._ensure_registered(r.string_number)
             # 회전/후퇴 중 실패하면 예전 각을 다시 믿지 않는다. 되감기는 페그를
             # 안 돌리므로 누적량에 넣지 않고, 요청한 delta만 성공 후 확정한다 (#70).
             with self.pegs.turning(r.string_number, delta if joint == 6 else None):
