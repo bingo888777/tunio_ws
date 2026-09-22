@@ -382,7 +382,7 @@ def _speed_scale(motion):
 
 def _fast(motion, value, cap):
     """
-    **이동·접근** 속도에 배율을 먹이고 상한에서 자른다 (#56). 리스트도 받는다.
+    **이동·접근** 속도에 배율을 먹이고 상한에서 자른다 (#58). 리스트도 받는다.
 
     검증된 물리값에는 절대 부르지 않는다 —
       turn_vel/turn_acc       페그 회전. 줄에 장력을 거는 동작이라 느린 게 설계다
@@ -474,7 +474,7 @@ def turn_motion(motion, pose=None):
     토크를 읽어 파지를 확인하는 것도 이 구간이다(CLAUDE.md 3.6).
     turn_vel/turn_acc 가 없으면 이동 속도를 그대로 쓴다.
 
-    **speed_scale 을 1.0 으로 못박는다** (#56). 이 사본은 그대로 _movej 로 넘어가는데,
+    **speed_scale 을 1.0 으로 못박는다** (#58). 이 사본은 그대로 _movej 로 넘어가는데,
     거기서 배율이 곱해지면 "이동은 빨라도 회전은 아니다" 는 이 함수의 존재 이유가
     통째로 사라진다. 회전을 빠르게 하려면 turn_vel 을 직접 올릴 것.
     """
@@ -646,7 +646,7 @@ def _goto_standby(standby, motion, vel, acc):
     """
     Standby 가 있으면 그리로 간다. joints 면 movej, task(x) 면 Base 직선(movel).
 
-    **이미 거기 있으면 안 간다** (#56). 발현 대기 자세는 네 줄의 접근점
+    **이미 거기 있으면 안 간다** (#58). 발현 대기 자세는 네 줄의 접근점
     (접촉점 위 pluck_up_mm)에서 10~20mm 밖에 안 떨어져 있다 —
 
       pluck_standby TCP  [642.60, -12.03, 192.52]   (fk, 오차 +-3mm)
@@ -804,7 +804,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
 
     sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
-          같은 뜻이다 (#56). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
+          같은 뜻이다 (#58). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
           movel 은 지금 팔 모양을 유지하므로 갈래를 못 바꾼다.
           지금 거치대 접근은 J1 이 오른쪽인 해 하나뿐이라, 피크를 집고 발현한 뒤
           6·5번(왼쪽) 페그로 가려면 경유지를 타야 했다. 왼쪽 해로 집어 두면 그
@@ -854,7 +854,7 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
           거치대 위로 바로 movel 하는 경로는 검증된 적이 없다. frames.standby
           를 경유해 안전한 관절 자세를 한 번 거친 뒤 내려간다.
 
-    sol — 거치대 위 대기점에 설 팔 모양(IK 해 0~7). pick_up 의 sol 과 같다 (#56).
+    sol — 거치대 위 대기점에 설 팔 모양(IK 해 0~7). pick_up 의 sol 과 같다 (#58).
           **반환 쪽이 더 중요하다** — 반환이 끝나면 바로 페그를 잡으러 가기
           때문이다. 다음에 갈 페그 쪽의 해로 서 있으면 좌우 전환 경유지를
           건너뛸 수 있다. None 이면 지금 팔 모양을 그대로 쓴다.

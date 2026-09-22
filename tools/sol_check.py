@@ -28,7 +28,7 @@
   python3 tools/sol_check.py --peg 1
   python3 tools/sol_check.py --peg 1 --at peg      # 접근점 말고 페그 자체에서
   python3 tools/sol_check.py --peg 1 --approach 60
-  python3 tools/sol_check.py --point pick.holder   # 피크 거치대 (#56)
+  python3 tools/sol_check.py --point pick.holder   # 피크 거치대 (#58)
 """
 import argparse
 import os
@@ -66,7 +66,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--peg", type=int, choices=[1, 2, 5, 6])
     ap.add_argument("--point", choices=["pick.holder"],
-                    help="페그 말고 다른 교시점에서 본다. 거치대 팔 모양(#56)용")
+                    help="페그 말고 다른 교시점에서 본다. 거치대 팔 모양(#58)용")
     ap.add_argument("--yaml", default=DEFAULT_YAML)
     ap.add_argument("--at", choices=["approach", "peg"], default="approach",
                     help="접근점에서 볼지 페그 자체에서 볼지")
@@ -231,7 +231,7 @@ def main():
         print("     동작이 남긴 자세에서 출발하므로 줄마다 달라질 수 있다.")
         print()
         print("  거치대는 **J1 부호**로 고른다 — 다음에 갈 페그 쪽과 같아야")
-        print("  좌우 전환 경유지를 건너뛴다 (#56).")
+        print("  좌우 전환 경유지를 건너뛴다 (#58).")
         print("    J1 음수 -> sol_by_side.left  (6·5번 쪽)")
         print("    J1 양수 -> sol_by_side.right (2·1번 쪽)")
         print("  적은 뒤 dry_run 으로 순서를 보고, 실기는 천천히 한 번 —")

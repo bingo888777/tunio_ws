@@ -57,6 +57,14 @@ TARGETS = {6: ("E2", 82.4069), 5: ("A2", 110.0000),
            2: ("B3", 246.9417), 1: ("E4", 329.6276)}
 
 SAFETY_CENTS = 200.0    # 목표보다 이만큼 높아지면 멈춘다 (줄 보호)
+
+# 한 방향으로만 이만큼 넘게 돌면 멈춘다 (손목 보호, 이슈 #70).
+# --min-angle 은 사다리를 끝까지 타면 조이는 쪽으로만 수백 도가 쌓인다 —
+# 1번 기준 (4.0+6.0+10.0+15.9+23.9) x 5회 = 299도다. adjust_peg 가 나올 때
+# 손목을 안 되감아서(의도된 동작) 그게 그대로 J6 에 얹히고, ±360도 한계를
+# 넘으면 movel 이 -1 로 거부된다. 2026-09-22 에 1번에서 J6 -363.3 으로 실제로 났다.
+# 270 은 한계까지 90도를 남기는 값이다. 걸리면 손목을 되감고 재등록한 뒤 잇는다.
+MAX_TOTAL_DEG = 270.0
 SETTLE_SEC = 3.0        # 손 떼고 기다리는 시간 (가이드 2절)
 
 
@@ -569,6 +577,7 @@ def run_min_angle(rec, args, name, target, out=None):
     print("  목표 근처에서, 조이는 방향으로만 돌립니다")
     print(f"  각 단을 {args.repeat}번 이어 돌려 누적 변화를 봅니다\n")
 
+    limit_deg = float(getattr(args, "max_total_deg", MAX_TOTAL_DEG))
     raw = {
         "기준_민감도_센트per도": round(float(cpd), 4),
         "민감도_출처": "--cpd" if args.cpd else "MEASURED_CPD",
@@ -577,13 +586,18 @@ def run_min_angle(rec, args, name, target, out=None):
         "판정_누적비_문턱": MIN_ANGLE_RATIO,
         "판정_고른비_문턱": MIN_ANGLE_STEADY,
         "수렴한계_도": round(10.0 / cpd, 2),
+        "누적각도_상한_도": limit_deg,
+        "줄보호_센트": SAFETY_CENTS,
         "단": [],
     }
     if out is not None:
         out["최소유효각도_원자료"] = raw
 
     found, rows = None, []
+    run_deg, stop = 0.0, None      # 회차 전체 누적 각도 / 중단 사유
     for want_cents in MIN_ANGLE_RUNGS_CENTS:
+        if stop:
+            break
         deg = round(want_cents / cpd, 1)
         print(f"\n  --- {deg}도 단계 (한 번에 약 {want_cents:.0f}센트 기대) ---")
         if deg < 3.0 and not args.robot:
@@ -618,6 +632,10 @@ def run_min_angle(rec, args, name, target, out=None):
             if args.sim is None:
                 time.sleep(SETTLE_SEC)
             total_deg += actual
+            run_deg += actual
+            if run_deg > limit_deg:
+                stop = (f"손목 보호 — 이 회차에서 조이는 방향으로 {run_deg:.0f}도를 "
+                        f"돌렸다 (상한 {limit_deg:.0f}도)")
             # 모의: 스틱-슬립. 8도가 쌓여야 한 번에 풀린다.
             # 작은 각도는 누적으로는 따라오지만 회마다 들쭉날쭉해진다.
             if args.sim is not None:
@@ -640,6 +658,14 @@ def run_min_angle(rec, args, name, target, out=None):
                   f"  누적 {total_deg:.1f}도 / {cents(f, base):+.2f}센트")
             prev = f
             ok_count += 1
+
+            over = cents(f, target)
+            if over > SAFETY_CENTS:
+                stop = (f"줄 보호 — 목표보다 {over:.0f}센트 높다 "
+                        f"(상한 {SAFETY_CENTS:.0f}센트)")
+            if stop:
+                print(f"\n  ⚠ {stop}")
+                break
 
         if ok_count < 2 or total_deg <= 0:
             rung["판정"] = "측정 부족"
@@ -672,7 +698,22 @@ def run_min_angle(rec, args, name, target, out=None):
             print(f"      ★ 최소 유효 각도 = 약 {deg}도")
             break
 
+    raw["회차_누적각도_도"] = round(run_deg, 1)
+    if stop:
+        raw["중단"] = stop
+
     print(f"\n{'=' * 64}")
+    if stop:
+        print(f"  ⚠ 중단 — {stop}")
+        print("    여기까지의 원자료는 --save 파일에 그대로 남아 있습니다.")
+        if "손목" in stop:
+            print("    펜던트로 J6 를 0 근처까지 되감고 재등록한 뒤 이어서 재세요:")
+            print(f"      python3 tools/peg_register.py --peg {args.string}")
+            print("    (ros2 topic echo /dsr01/joint_states --once --field position 로 확인)")
+            print("    이 한계의 근거는 이슈 #70 입니다.")
+        else:
+            print("    음을 목표 근처로 내린 뒤 이어서 재세요.")
+        print()
     if found is None:
         print("  사다리 안에서 '먹히는' 각도를 못 찾았습니다.")
         print(f"  유격이 {MIN_ANGLE_RUNGS_CENTS[-1] / cpd:.1f}도보다 큽니다. "
@@ -711,6 +752,10 @@ def main():
                     help="센트/도 (--min-angle 사다리 기준. 기본은 실측표 값)")
     ap.add_argument("--repeat", type=int, default=3,
                     help="--min-angle 에서 같은 각도를 이어 돌리는 횟수")
+    ap.add_argument("--max-total-deg", type=float, default=MAX_TOTAL_DEG,
+                    help=f"--min-angle 에서 한 방향으로 돌릴 누적 각도 상한(도, "
+                         f"기본 {MAX_TOTAL_DEG:.0f}). 넘으면 멈춘다 — 손목이 "
+                         f"J6 한계까지 감기는 것을 막는다 (이슈 #70)")
     ap.add_argument("--robot", action="store_true",
                     help="사람에게 묻지 않고 /robot/adjust_peg 로 로봇이 돌린다 "
                          "(robot_controller 가 떠 있어야 한다)")

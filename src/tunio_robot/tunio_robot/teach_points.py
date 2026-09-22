@@ -91,7 +91,7 @@ class Pose:
         # 이 좌표를 읽을 때 켜져 있던 TCP 이름. 작업 좌표(x)에만 뜻이 있다.
         # None 이면 "안 적어 둬서 모른다" 이고, 그 상태로는 조회가 거부된다.
         self.tcp = tcp
-        # 거치대 파지 자세의 팔 모양(IK 해)을 다음에 갈 페그 쪽별로 (#56).
+        # 거치대 파지 자세의 팔 모양(IK 해)을 다음에 갈 페그 쪽별로 (#58).
         # pick.holder 에만 뜻이 있다. 값이 null 이면 지금 팔 모양을 그대로 쓴다.
         self.sol_by_side = {"left": None, "right": None}
 
@@ -188,7 +188,7 @@ class TeachPoints:
         holder = d.get("pick", {}).get("holder")
         if holder is not None:
             self._pick = self._grip_pose("pick.holder", holder)
-            # 거치대 파지 자세의 팔 모양. 페그의 sol 과 같은 뜻이다 (#56).
+            # 거치대 파지 자세의 팔 모양. 페그의 sol 과 같은 뜻이다 (#58).
             #   지금 거치대 접근은 J1 이 오른쪽인 해 하나뿐이라, 피크를 집고
             #   발현한 뒤 6·5번(왼쪽) 페그로 가려면 경유지를 타야 한다.
             #   왼쪽 해를 같이 정해 두면 그 경유를 건너뛸 수 있다.
