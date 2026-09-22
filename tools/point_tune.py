@@ -147,6 +147,8 @@ def main():
 
     # 이 도구는 교시점 바로 옆에서 논다. 배율을 타면 안 된다.
     motion = dict(points.motion)
+    motion.pop("transit_tcp_vel", None)  # 미세 교시에서는 --speed의 관절 감속을 유지
+    motion.pop("transit_tcp_acc", None)
     motion["speed_scale"] = 1.0
     scale = max(0.05, args.speed / 100.0)
     motion["vel"] = points.motion.get("vel", 30) * scale

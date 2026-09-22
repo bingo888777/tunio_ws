@@ -614,6 +614,68 @@ def test_movej_가_가속도도_같은_비로_내린다(monkeypatch):
     assert abs(kw["acc"] / kw["vel"] - 2.0) < 1e-6        # 비가 유지된다
 
 
+TRANSIT_MOTION = {"vel": 5.0, "acc": 10.0, "speed_scale": 2.0,
+                  "transit_tcp_vel": 100.0, "transit_tcp_acc": 100.0,
+                  "turn_vel": 2.0, "turn_acc": 4.0,
+                  "pluck_vel_stroke": 100, "pluck_acc_stroke": 200}
+
+
+@pytest.mark.parametrize("start,target", [(STANDBY_J, PLUCK_STANDBY_J), (PEG6_J, TRANSIT_J)])
+def test_비접촉_관절이동은_거치대_접근_TCP속도로_환산한다(fake_api, monkeypatch, start, target):
+    api = PosjApi(start)
+    monkeypatch.setattr(MP, "_api", api)
+    MP._movej(target, TRANSIT_MOTION)
+    kind, commanded, kw = api.calls[-1]
+    peak = MP._peak_tcp_mm_per_deg(start, target)
+    assert kind == "movej" and commanded == target     # 경로 방식·목표 그대로
+    assert kw["vel"] == pytest.approx(min(60.0, 200.0 / peak))
+    assert kw["vel"] * peak <= 200.0 + 1e-6
+    assert kw["acc"] / kw["vel"] == pytest.approx(1.0)
+
+
+def test_이동속도를_통일해도_집기와_발현_접촉속도는_그대로다(fake_api, fake_gripper):
+    motion = dict(TRANSIT_MOTION, pick_settle_sec=0)
+    MP.pick_up(Pose("pick.holder", True, task=HOLDER), motion)
+    assert [c[2]["vel"] for c in fake_api.calls] == [200, 30, 200]
+    fake_api.calls.clear()
+    MP.pluck_string(_pose_x(CONTACT), motion)
+    assert [c[2]["vel"] for c in fake_api.calls] == [200, 20, 100, 100, 200]
+    fake_api.calls.clear()
+    MP.pick_return(Pose("pick.holder", True, task=HOLDER), motion)
+    assert [c[2]["vel"] for c in fake_api.calls] == [200, 30, 200]
+
+
+def test_빈손_되감기와_페그회전은_TCP이동속도를_쓰지_않는다(fake_api):
+    turn = MP.turn_motion(TRANSIT_MOTION)
+    MP._movej([0, 0, 0, 0, 0, 40], turn)               # 빈손 되감기와 같은 절대 이동
+    MP._movej([0, 0, 0, 0, 0, -30], turn, relative=True)
+    assert [(c[2]["vel"], c[2]["acc"]) for c in fake_api.calls] == [(2, 4), (2, 4)]
+
+
+def test_관절위치를_모르면_기존_느린_설정으로_이동한다(fake_api):
+    MP._movej(STANDBY_J, TRANSIT_MOTION)
+    assert fake_api.calls[-1][2]["vel"] == 10.0
+
+
+def test_movejx도_TCP목표를_쓰되_기존_관절상한을_지킨다(fake_api, monkeypatch):
+    api = PosjApi(PEG6_J)
+    api.ikin = lambda task, sol: list(TRANSIT_J)
+    monkeypatch.setattr(MP, "_api", api)
+    MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
+    peak = MP._peak_tcp_mm_per_deg(PEG6_J, TRANSIT_J)
+    assert api.calls[-1][2]["vel"] == pytest.approx(min(15.0, 200.0 / peak))
+    api.ikin = lambda task, sol: -1
+    MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
+    assert api.calls[-1][2]["vel"] == 10.0            # IK 실패는 기존 속도로
+
+
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf")])
+def test_비접촉_목표속도가_잘못되면_움직이지_않는다(fake_api, value):
+    with pytest.raises(MP.MotionError):
+        MP.pluck_string(_pose_x(CONTACT), dict(TRANSIT_MOTION, transit_tcp_vel=value))
+    assert fake_api.calls == []
+
+
 # ---------------------------------------------------------- J1 뒤집힘 판단 (#58)
 def test_j1_flip_문턱():
     """

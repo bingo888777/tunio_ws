@@ -400,6 +400,36 @@ def test_이미_등록돼_있으면_다시_안_한다(ros, taught, monkeypatch, 
         node.destroy_node()
 
 
+@pytest.mark.parametrize("fails", [False, True])
+def test_조절_Action은_동작전_등록을_지우고_성공시에만_요청각을_저장한다(
+        ros, taught, monkeypatch, tmp_path, fails):
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        node = h.node
+        node.dry_run = False
+        node._side = "left"
+        node.pegs = PegState(str(tmp_path / "state.json"))
+        node.pegs.register(6, 20.0)
+        node.pegs.save()
+
+        def adjust(*args, **kwargs):
+            assert kwargs["roll_deg"] == 20.0
+            assert PegState(node.pegs.path).load().roll_of(6) is None
+            if fails:
+                raise MP.MotionError("후퇴 실패")
+
+        monkeypatch.setattr(MP, "adjust_peg", adjust)
+        result = h.send(AdjustPeg, "/robot/adjust_peg",
+                        AdjustPeg.Goal(string_number=6, direction=1, angle_deg=30.0))
+        assert result.result.success is not fails
+        expected = None if fails else -10.0
+        assert node.pegs.roll_of(6) == expected
+        assert PegState(node.pegs.path).load().roll_of(6) == expected
+    finally:
+        h.shutdown()
+
+
 def test_등록에_실패하면_그대로_올라간다(ros, taught, monkeypatch, tmp_path):
     """
     손잡이가 서 있으면 사람이 눕혀야 한다. 조용히 넘어가면 페그를 되돌린다.

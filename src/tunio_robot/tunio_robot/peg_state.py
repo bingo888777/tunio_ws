@@ -25,6 +25,7 @@
   거짓말이 된다. 그래서 등록 시각을 같이 적고, max_age_sec 를 넘으면 미등록으로
   본다. 미등록이면 Phase 0 를 다시 돌아야 한다.
 """
+from contextlib import contextmanager
 import json
 import os
 import time
@@ -115,6 +116,24 @@ class PegState:
         no = int(string_number)
         self._rolls.pop(no, None)
         self._stamps.pop(no, None)
+
+    @contextmanager
+    def turning(self, string_number, delta_deg):
+        """움직이기 전에 디스크까지 무효화. 후퇴까지 성공해야 새 각을 확정한다 (#70)."""
+        before = self.roll_of(string_number)
+        if before is None:
+            raise ValueError(f"{string_number}번 페그 등록이 필요하다")
+        self.forget(string_number)
+        self.save()             # 실패하면 아직 로봇은 안 움직였다
+        yield                   # 중간 실패·프로세스 종료 시 디스크도 미등록으로 남는다
+        if delta_deg is None:   # J6 외의 관절은 손잡이 각을 추적할 수 없다
+            return
+        self.register(string_number, before + delta_deg)
+        try:
+            self.save()
+        except Exception:
+            self.forget(string_number)
+            raise
 
     # ------------------------------------------------------------ 파일
     def load(self):

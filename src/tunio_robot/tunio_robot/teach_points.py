@@ -249,6 +249,12 @@ class TeachPoints:
         sign = item.get("turn_sign")
         _require(sign in (1, -1), f"pegs.{no}.turn_sign 은 1 또는 -1 이어야 한다 (지금 {sign!r})")
         pose.turn_sign = sign
+        for key in ("turn_vel", "turn_acc"):
+            value = item.get(key)
+            _require(value is None or (
+                type(value) in (int, float) and math.isfinite(value) and value > 0),
+                f"pegs.{no}.{key} 는 유한한 양수여야 한다 (지금 {value!r})")
+            setattr(pose, key, value)
         return pose
 
     # -------------------------------------------------- 조회
