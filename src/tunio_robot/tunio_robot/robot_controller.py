@@ -83,7 +83,7 @@ class RobotController(Node):
         #   로봇 보호정지뿐이고, 보호정지 문턱은 아직 확인 안 됐다 (이슈 #53).
         self.declare_parameter("peg_register_force", False)
         # 이동 속도 배율. 0 이면 teach_points.yaml 의 motion.speed_scale 을 그대로 쓴다.
-        # 실기에서 값을 바꿔 가며 보려고 런치 인자로 뺐다 — 빌드 없이 바꾼다 (#56).
+        # 실기에서 값을 바꿔 가며 보려고 런치 인자로 뺐다 — 빌드 없이 바꾼다 (#58).
         #   ros2 run ... --ros-args -p speed_scale:=1.0   (1.0 이면 예전 속도)
         # **이동·접근에만 걸린다.** 페그 회전·발현 스트로크·접촉 직전 구간은
         # 배율을 안 탄다 (motion_primitives._fast 의 주석).
@@ -329,7 +329,7 @@ class RobotController(Node):
 
         side — 이 다음에 갈 페그가 헤드스톡 어느 쪽인지("left"/"right").
                pick.holder.sol_by_side 에 그 쪽 해가 적혀 있으면 그 팔 모양으로
-               집는다 (#56). 안 적혀 있으면(기본 null) 예전 그대로다.
+               집는다 (#58). 안 적혀 있으면(기본 null) 예전 그대로다.
 
         집는 시점을 여기서 판단하는 이유 — 서버는 play_string 이 언제 오는지만
         알지, 로봇이 지금 손이 비어 있는지는 모른다. 인터페이스를 안 늘리려면
@@ -372,7 +372,7 @@ class RobotController(Node):
         경로(movejx)는 실기 충돌 검증이 없어서(이슈 #34-2), _side 를 비워
         다음 adjust_peg 가 무조건 경유지를 타게 한다.
 
-        **단 그 쪽 팔 모양(sol_by_side)이 적혀 있으면 비우지 않는다** (#56).
+        **단 그 쪽 팔 모양(sol_by_side)이 적혀 있으면 비우지 않는다** (#58).
         경유지가 있는 이유는 좌우를 넘을 때 손목이 뒤집히기 때문인데, 이미
         그 쪽 해로 서서 반환했으면 뒤집을 게 없다. 거치대 접근이 J1 오른쪽
         해 하나뿐이라 6·5번으로 갈 때마다 경유를 타던 것이 이걸로 없어진다.
@@ -395,7 +395,7 @@ class RobotController(Node):
             MP.pick_return(holder, self.points.motion, via=via, sol=sol,
                            route=self.points.route(), logger=self.get_logger())
         self._holding_pick = False
-        # 그 쪽 해로 서서 반환했으면 손목을 뒤집을 일이 없다. 경유지를 안 탄다 (#56)
+        # 그 쪽 해로 서서 반환했으면 손목을 뒤집을 일이 없다. 경유지를 안 탄다 (#58)
         self._side = side if sol is not None else None
 
     # ------------------------------------------------------ Action
@@ -408,7 +408,7 @@ class RobotController(Node):
 
         def work():
             pose = self.points.pluck(no)            # 미교시면 여기서 걸린다
-            # 이 줄의 페그 쪽으로 집는다 — 발현 다음은 거의 항상 이 줄의 조절이다 (#56)
+            # 이 줄의 페그 쪽으로 집는다 — 발현 다음은 거의 항상 이 줄의 조절이다 (#58)
             self._ensure_pick(TP.side_of(no))
             standby = self.points.frame("pluck_standby")
             if self.dry_run:
@@ -428,7 +428,7 @@ class RobotController(Node):
             pose = self.points.peg(r.string_number)
             side = TP.side_of(r.string_number)
             # 페그를 잡으려면 손가락이 필요하다. 피크를 쥐고 있으면 먼저 반환한다.
-            # 갈 쪽을 알려 줘서 그 쪽 팔 모양으로 반환하게 한다 (#56)
+            # 갈 쪽을 알려 줘서 그 쪽 팔 모양으로 반환하게 한다 (#58)
             self._release_pick(side)
             if self.dry_run:
                 via = "" if side == self._side else f" (경유: {side})"
