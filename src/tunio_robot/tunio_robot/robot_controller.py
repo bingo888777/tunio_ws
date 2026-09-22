@@ -1,7 +1,7 @@
 """
 robot_controller — 발현·페그 조절·화음 Action 서버. 두산 API 연동.
 
-세 Action(play_string / adjust_peg / strum_all)은 같은 팔을 쓰므로
+다섯 Action(register_peg / play_string / adjust_peg / strum_all / return_home)은 같은 팔을 쓰므로
 동시에 실행되면 안 된다. 하나가 도는 동안 들어온 goal 은 REJECT 한다
 (audio_analyzer 의 동시 요청 거부와 같은 방식).
 
@@ -25,7 +25,7 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
+from tunio_interfaces.action import AdjustPeg, PlayString, RegisterPeg, ReturnHome, StrumAll
 from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
@@ -144,7 +144,7 @@ class RobotController(Node):
             MP.connect(self.points.robot, self.points.gripper,
                        logger=self.get_logger())
 
-        # 팔은 하나뿐이라 세 Action 이 같은 락을 쓴다
+        # 팔은 하나뿐이라 다섯 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
         self._running = None
         self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
@@ -164,6 +164,13 @@ class RobotController(Node):
         self._holding_pick = False
 
         cb = ReentrantCallbackGroup()
+        self.home_srv = ActionServer(
+            self, ReturnHome, "/robot/return_home", self.on_return_home,
+            goal_callback=self.on_goal, cancel_callback=self.on_cancel, callback_group=cb)
+        self.register_srv = ActionServer(
+            self, RegisterPeg, "/robot/register_peg",
+            self.on_register, goal_callback=self.on_goal,
+            cancel_callback=self.on_cancel, callback_group=cb)
         self.play_srv = ActionServer(
             self, PlayString, "/robot/play_string",
             self.on_play, goal_callback=self.on_goal,
@@ -284,10 +291,7 @@ class RobotController(Node):
         """
         페그 손잡이 각이 등록돼 있는지 보고, 없으면 **그 자리에서 Phase 0 를 돈다**.
 
-        왜 여기서 하나
-          서버는 "작업 시작" 을 로봇에 알리지 않는다. 로봇이 아는 건 Action 세 개뿐이다.
-          피크 집기·반환 시점을 로봇이 스스로 판단하는 것과 같은 방식으로(CLAUDE.md 2절),
-          등록도 **필요해지는 순간** 한다. 인터페이스가 안 바뀐다.
+        시작 전 RegisterPeg와 조절 시 누락 등록 복구가 같은 함수를 쓴다.
 
         왜 등록이 꼭 있어야 하나
           손잡이가 돌아가 있는데 교시 자세로 들어가면, 물리는 순간 페그가 그 각으로
@@ -399,6 +403,33 @@ class RobotController(Node):
         self._side = side if sol is not None else None
 
     # ------------------------------------------------------ Action
+    def on_return_home(self, goal):
+        def work():
+            self._release_pick()
+            if not self.dry_run:
+                MP.return_home(self.points.frame("standby"), self.points.motion)
+                self._side = None
+
+        return self._run("return_home", goal, ReturnHome.Result, work)
+
+    def on_register(self, goal):
+        no = goal.request.string_number
+
+        def work():
+            self.points.peg(no)  # 줄 번호와 교시 여부 검증
+            if self.pegs.roll_of(no) is not None:
+                return
+            if self.dry_run:
+                self.get_logger().info(f"[dry_run] {no}번 페그 초기 등록")
+                return  # 가짜 등록값을 실기 파일에 저장하지 않는다
+            side = TP.side_of(no)
+            self._release_pick(side)
+            self._cross_to(side)
+            self._ensure_registered(no)
+            self._side = side
+
+        return self._run("register_peg", goal, RegisterPeg.Result, work)
+
     def on_play(self, goal):
         # Feedback 없음. 측정 타임아웃은 이 Result 와 무관하다 —
         # 마이크가 오디오 onset(무음 -> 소리)을 스스로 검출한 시점부터 센다.

@@ -22,7 +22,8 @@ from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
                        QoSProfile, QoSReliabilityPolicy)
 
-from tunio_interfaces.action import AdjustPeg, MeasurePitch, PlayString, StrumAll
+from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, RegisterPeg,
+                                     ReturnHome, StrumAll)
 from tunio_interfaces.msg import StringResult, TuningSettings, TuningState
 from tunio_interfaces.srv import CommandTuning, GetSettings, SaveJob, SetSettings
 
@@ -110,8 +111,11 @@ class TaskManager(Node):
         self.declare_parameter('node_wait_sec', 5.0)        # 시작 시 Action 서버 대기
         self.declare_parameter('goal_response_sec', 5.0)    # goal 수락 응답 대기
         self.declare_parameter('ready_wait_sec', 10.0)      # 마이크 ready feedback 대기
+        self.declare_parameter('register_timeout_sec', 180.0)  # 줄별 임시값, 실측 후 조정
         self.declare_parameter('play_timeout_sec', 30.0)    # 임시값. F3 로봇 실측 후 조정
-        self.declare_parameter('adjust_timeout_sec', 60.0)  # 임시값. F3 로봇 실측 후 조정
+        self.declare_parameter('adjust_timeout_sec', 120.0)  # 통합 시험용 임시값, 요청 1회 기준
+        self.declare_parameter('robot_completion_wait_sec', 120.0)  # 초과 후 종료 확인 임시값
+        self.declare_parameter('return_timeout_sec', 120.0)  # 피크 반환·복귀 임시값
         self.declare_parameter('strum_timeout_sec', 60.0)   # 임시값
         self.declare_parameter('measure_slack_sec', 5.0)    # 통신 왕복 여유
 
@@ -162,6 +166,10 @@ class TaskManager(Node):
         cb = ReentrantCallbackGroup()
         self.cli_measure = ActionClient(self, MeasurePitch, '/audio/measure_pitch',
                                         callback_group=cb)
+        self.cli_home = ActionClient(
+            self, ReturnHome, '/robot/return_home', callback_group=cb)
+        self.cli_register = ActionClient(
+            self, RegisterPeg, '/robot/register_peg', callback_group=cb)
         self.cli_play = ActionClient(self, PlayString, '/robot/play_string', callback_group=cb)
         self.cli_adjust = ActionClient(self, AdjustPeg, '/robot/adjust_peg', callback_group=cb)
         self.cli_strum = ActionClient(self, StrumAll, '/robot/strum_all', callback_group=cb)
@@ -325,7 +333,9 @@ class TaskManager(Node):
         """서버가 떠 있는지 확인한다. 브리핑 B6 — 존재 확인까지만 한다."""
         wait = float(self._p('node_wait_sec'))
         missing = []
-        for name, cli in (('audio/measure_pitch', self.cli_measure),
+        for name, cli in (('robot/return_home', self.cli_home),
+                          ('robot/register_peg', self.cli_register),
+                          ('audio/measure_pitch', self.cli_measure),
                           ('robot/play_string', self.cli_play),
                           ('robot/adjust_peg', self.cli_adjust)):
             if not cli.wait_for_server(timeout_sec=wait):
@@ -445,12 +455,23 @@ class TaskManager(Node):
         """Goal 을 보내고 수락과 결과를 기다린다. 실패하면 None."""
         send = client.send_goal_async(goal, feedback_callback=feedback_cb)
         handle = self._wait(send, float(self._p('goal_response_sec')), '%s 수락' % what)
-        if handle is None or not handle.accepted:
+        if handle is None:
+            raise Aborted('%s 수락 여부 불명 — 후속 동작 중단' % what)
+        if not handle.accepted:
             self.get_logger().error('%s goal 거부' % what)
             return None
         self._track(handle)
         try:
-            wrapped = self._wait(handle.get_result_async(), timeout, '%s 결과' % what)
+            future = handle.get_result_async()
+            wrapped = self._wait(future, timeout, '%s 결과' % what)
+            if wrapped is None:
+                # 취소 수락만으로 실제 팔 정지가 보장되지 않는다. 결과를 확인해야
+                # 다음 줄을 요청할 수 있다. 늦게 성공해도 이번 요청은 실패로 처리한다.
+                self.get_logger().warning('%s 시간 초과 — 로봇 종료 응답을 기다린다' % what)
+                ended = self._wait(future, float(self._p('robot_completion_wait_sec')),
+                                   '%s 종료 확인' % what)
+                if ended is None:
+                    raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
         return wrapped.result if wrapped is not None else None
@@ -688,14 +709,14 @@ class TaskManager(Node):
 
     # ------------------------------------------------------------------ Phase 2
 
-    def _verify_pass(self):
+    def _verify_pass(self, numbers=None):
         """
         최종 검증 패스. 페그를 건드리지 않고 다시 측정만 한다 (기획 2.5).
 
         한 줄을 조이면 넥이 당겨져 먼저 맞춘 줄이 틀어진다. 전체 판정은 이 결과가 기준이다.
         Phase 1 에서 실패한 줄도 측정한다 — 기획 2.5 는 "4줄을 다시 측정"이라고 적고 있다.
         """
-        for s in L.STRING_ORDER:
+        for s in (L.STRING_ORDER if numbers is None else numbers):
             self._gate()
             self._set_phase(TuningState.PHASE_VERIFY, s)
             rec = self.results[s]
@@ -741,19 +762,13 @@ class TaskManager(Node):
             self.get_logger().warning('화음 마무리 실패. 결과 판정에는 반영하지 않는다')
 
     def _return_home(self):
-        """
-        대기 자세 복귀.
-
-        전용 Action 은 없다. 인터페이스를 다시 열지 않기 위해 strum_all 이
-        화음 연출 직후 복귀까지 맡기로 했다 (로봇측 결정, 2026-09-19 / bc0498d).
-        그래서 여기서는 goal 을 보내지 않고 단계 표시만 한다 — 이 시점에는
-        로봇이 이미 복귀를 마쳤다.
-
-        ⚠ 정상 완료 경로에만 있다. 취소·오류로 끝나면 strum_all 을 지나지 않으므로
-        복귀도 일어나지 않는다. 그 경우는 사람이 회수한다 (기획 2.7 "자동 복귀 없음").
-        """
+        """피크 반환과 복귀는 미구현 화음의 성공 여부와 분리한다."""
         self._gate()
         self._set_phase(TuningState.PHASE_RETURN, 0)
+        res = self._run_action(self.cli_home, ReturnHome.Goal(),
+                               float(self._p('return_timeout_sec')), 'return_home')
+        if res is None or not res.success:
+            raise Aborted('피크 반환·대기 복귀 실패')
 
     # ------------------------------------------------------------------ 저장
 
@@ -779,9 +794,22 @@ class TaskManager(Node):
 
     # ------------------------------------------------------------------ 상태기계 본체
 
+    def _register_pegs(self, numbers=None):
+        for no in (L.STRING_ORDER if numbers is None else numbers):
+            self._gate()
+            self._set_phase(TuningState.PHASE_REGISTER_PEG, no)
+            result = self._run_action(
+                self.cli_register, RegisterPeg.Goal(string_number=no),
+                float(self._p('register_timeout_sec')), 'register_peg')
+            if result is None or not result.success:
+                why = result.message if result is not None else '응답 없음'
+                raise Aborted(f'{no}번 페그 초기 등록 실패: {why}')
+        self._gate()  # 등록 중 취소됐다면 측정을 시작하지 않는다
+
     def _run_job(self):
         self.get_logger().info('작업 %s 시작' % self.job_id)
         try:
+            self._register_pegs()  # 마이크 ready/첫 발현보다 먼저 완료한다
             hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
                 self._gate()

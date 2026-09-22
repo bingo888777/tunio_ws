@@ -605,3 +605,43 @@ def test_goal_마다_실행_기록이_쌓인다(ros, taught, tmp_path):
         assert g["request"]["string_number"] == 6      # 요청이 그대로 남는다
     finally:
         h.shutdown()
+
+
+def test_등록_Action은_기등록을_건너뛰고_미등록만_등록한다(ros, taught, monkeypatch, tmp_path):
+    from tunio_interfaces.action import RegisterPeg
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(str(tmp_path / "pegs.json"))
+        n.pegs.register(6, 12.0)
+        seen = []
+        monkeypatch.setattr(n, "_cross_to", lambda side: seen.append(side))
+        monkeypatch.setattr(MP, "register_peg", lambda *a, **k: seen.append("register") or 30.0)
+        for no in (6, 5):
+            r = h.send(RegisterPeg, "/robot/register_peg", RegisterPeg.Goal(string_number=no))
+            assert r.result.success
+        assert seen == ["left", "register"]
+        assert n.pegs.roll_of(6) == 12.0
+        assert n.pegs.roll_of(5) == 30.0
+        assert n._holding_pick is False
+    finally:
+        h.shutdown()
+
+
+def test_복귀_Action은_피크_반환후_대기로_간다(ros, taught, monkeypatch):
+    from tunio_interfaces.action import ReturnHome
+    h = Harness(taught)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True
+        seen = []
+        monkeypatch.setattr(MP, "pick_return", lambda *a, **k: seen.append("return"))
+        monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
+        res = h.send(ReturnHome, "/robot/return_home", ReturnHome.Goal())
+        assert res.result.success
+        assert seen == ["return", "home"]
+        assert h.node._holding_pick is False
+    finally:
+        h.shutdown()

@@ -6,7 +6,7 @@
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
 PC 2대가 ROS 2 Jazzy로 통신한다(2026-09-22, PC 3대에서 축소). 정정인 PC(task_manager,
 web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). 랜을 건너는
-인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all` 셋뿐이다 — `measure_pitch`는
+인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다 — `measure_pitch`는
 정정인 PC 한 대 안에서 돈다. 근거는 `CLAUDE.md` 6절.
 
 ---
@@ -23,6 +23,8 @@ ros2 interface show tunio_interfaces/action/MeasurePitch
 ros2 interface show tunio_interfaces/action/PlayString
 ros2 interface show tunio_interfaces/action/AdjustPeg
 ros2 interface show tunio_interfaces/action/StrumAll
+ros2 interface show tunio_interfaces/action/RegisterPeg
+ros2 interface show tunio_interfaces/action/ReturnHome
 ros2 interface show tunio_interfaces/msg/TuningState
 ros2 interface show tunio_interfaces/msg/StringResult
 ros2 interface show tunio_interfaces/msg/TuningSettings
@@ -34,7 +36,7 @@ ros2 interface show tunio_interfaces/srv/GetHistory
 ros2 interface show tunio_interfaces/srv/SaveJob
 ```
 
-빌드가 통과하고 13개 인터페이스가 모두 보이면 통과다.
+빌드가 통과하고 15개 인터페이스가 모두 보이면 통과다.
 
 ---
 
@@ -46,7 +48,9 @@ src/tunio_interfaces/
 │   ├── MeasurePitch.action
 │   ├── PlayString.action
 │   ├── AdjustPeg.action
-│   └── StrumAll.action
+│   ├── StrumAll.action
+│   ├── RegisterPeg.action
+│   └── ReturnHome.action
 ├── msg/
 │   ├── TuningSettings.msg
 │   ├── StringResult.msg
@@ -300,6 +304,7 @@ uint8 PHASE_DONE=8
 uint8 PHASE_PAUSED=9
 uint8 PHASE_CANCELED=10
 uint8 PHASE_ERROR=11
+uint8 PHASE_REGISTER_PEG=12
 
 uint8 OVERALL_PENDING=0
 uint8 OVERALL_SUCCESS=1
@@ -408,6 +413,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/PlayString.action"
   "action/AdjustPeg.action"
   "action/StrumAll.action"
+  "action/RegisterPeg.action"
+  "action/ReturnHome.action"
   "msg/TuningSettings.msg"
   "msg/StringResult.msg"
   "msg/JobSummary.msg"
@@ -423,7 +430,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 ament_export_dependencies(rosidl_default_runtime)
 ```
 
-13개 파일이 모두 등록돼 있어야 한다. 하나라도 빠지면 그 인터페이스는 생성되지 않는다.
+15개 파일이 모두 등록돼 있어야 한다. 하나라도 빠지면 그 인터페이스는 생성되지 않는다.
 
 ---
 
@@ -464,3 +471,40 @@ ament_export_dependencies(rosidl_default_runtime)
   실측 후 확정한다. 5로 시작하면 수렴 실패 시 기준이 빡빡한 탓인지
   회전량 계산이 틀린 탓인지 구분되지 않는다.
 - **`onset_timeout_sec` 기본값** — 임시 10.0. 로봇 접근·파지·발현 실측 후 조정한다.
+
+
+## 시작 전 페그 초기 등록 (2026-09-22)
+
+`/robot/register_peg` — `RegisterPeg.action`, task_manager → robot_controller.
+
+```text
+uint8 string_number
+---
+bool success
+string message
+---
+```
+
+시작 시 6→5→2→1 순서로 요청하고 전부 성공한 뒤 마이크 측정과 발현을 시작한다.
+로봇은 저장된 유효 각도가 있으면 움직이지 않고 성공하며 미등록 줄만 등록한다.
+실패/시간 초과 시 작업을 PHASE_ERROR로 종료하고 발현하지 않는다.
+줄별 대기시간은 서버 `register_timeout_sec`(180초, 실측 전 임시값)으로 설정한다.
+등록 중 상태는 PHASE_REGISTER_PEG=12로 표시한다. 기존 번호는 바꾸지 않는다.
+기존 AdjustPeg의 미등록 시 등록 동작은 단독 호출·등록 무효화 후 복구용으로 유지한다.
+서버·로봇 PC 모두 tunio_interfaces와 사용하는 노드를 재빌드/재시작해야 한다.
+
+
+## 피크 반환·복귀 및 시간 초과 (2026-09-22)
+
+`/robot/return_home` — `ReturnHome.action`, task_manager/단독 조율 시험 → robot_controller.
+빈 Goal, Result는 `bool success`와 `string message`, 빈 Feedback이다.
+피크를 쥐고 있으면 반환한 뒤 `frames.standby`로 간다. 화음은 연주하지 않는다.
+반환 실패 시 복귀 성공으로 보고하지 않는다. StrumAll의 기존 복귀 동작은 호환을 위해 유지한다.
+
+`adjust_timeout_sec`는 수락 후 요청 1회 기준 120초(임시값)이다.
+로봇 Action 시간 초과 시 `robot_completion_wait_sec`(120초, 임시값)만큼 같은 결과를
+추가로 기다린다. 종료를 확인하면 해당 요청은 실패로 처리하고 기존 다음 줄 정책을 따른다.
+끝내 종료 응답을 못 받거나 Goal 수락 여부를 모르면 PHASE_ERROR로 중단한다.
+이 대기는 정지 명령이 아니다. 실제 움직임을 중지시켰다고 간주하지 않는다.
+
+한 줄 시험 절차는 `docs/1번줄_ROS_통합시험.md`를 따른다.

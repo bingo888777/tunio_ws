@@ -1,0 +1,57 @@
+"""시작 전 등록은 측정과 분리하고, 실패하면 발현에 진입하지 않는다."""
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import pytest
+
+from tunio_server import task_manager as TM
+
+
+@pytest.mark.parametrize('failure', [None, 5])
+def test_registration_precedes_tuning_and_failure_stops_job(failure):
+    calls = []
+
+    def action(client, goal, timeout, name):
+        calls.append(('register', goal.string_number))
+        return SimpleNamespace(success=goal.string_number != failure, message='등록 실패')
+
+    n = SimpleNamespace(
+        job_id='test', cli_register=object(),
+        get_logger=lambda: Mock(), _gate=lambda: None,
+        _set_phase=lambda *args: None,
+        _p=lambda key: 180.0 if key == 'register_timeout_sec' else 0,
+        _run_action=action, _tune_string=lambda no: calls.append(('tune', no)),
+        _verify_pass=lambda: None, _strum=lambda: None, _return_home=lambda: None,
+        _save=lambda: None, _finish_error=lambda: calls.append(('error', 0)))
+    n._register_pegs = lambda: TM.TaskManager._register_pegs(n)
+    TM.TaskManager._run_job(n)
+    if failure:
+        assert calls == [('register', 6), ('register', 5), ('error', 0)]
+    else:
+        assert calls == [(kind, no) for kind in ('register', 'tune') for no in (6, 5, 2, 1)]
+
+
+@pytest.mark.parametrize('ended', [True, False])
+def test_robot_timeout_waits_for_terminal_result_before_continuing(ended):
+    handle = Mock(accepted=True)
+    late = SimpleNamespace(result=SimpleNamespace(success=True)) if ended else None
+    waits = Mock(side_effect=[handle, None, late])
+    n = SimpleNamespace(
+        _wait=waits, _p=lambda key: 120.0, _track=Mock(), _untrack=Mock(),
+        get_logger=lambda: Mock())
+    client = Mock()
+    if ended:
+        # 늦은 성공은 시간 초과였던 이번 요청을 성공으로 바꾸지 않는다.
+        assert TM.TaskManager._run_action(n, client, object(), 120, 'adjust_peg') is None
+    else:
+        with pytest.raises(TM.Aborted, match='동작 종료 불명'):
+            TM.TaskManager._run_action(n, client, object(), 120, 'adjust_peg')
+    assert waits.call_count == 3
+    n._untrack.assert_called_once_with(handle)
+    handle.get_result_async.assert_called_once()
+
+
+def test_unknown_goal_acceptance_does_not_continue():
+    n = SimpleNamespace(_wait=lambda *a: None, _p=lambda key: 5.0)
+    with pytest.raises(TM.Aborted, match='수락 여부 불명'):
+        TM.TaskManager._run_action(n, Mock(), object(), 120, 'adjust_peg')

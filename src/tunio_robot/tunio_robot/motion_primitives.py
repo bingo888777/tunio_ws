@@ -844,6 +844,21 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
+def _check_pick_return_position(target, motion, stage, logger=None):
+    """반환 위치를 못 확인하면 그리퍼를 열지 않는다. mm 단위 임시 허용값."""
+    tolerance = float(motion.get("pick_return_tolerance_mm", 2.0))
+    if not math.isfinite(tolerance) or tolerance <= 0:
+        raise MotionError("pick_return_tolerance_mm 는 유한한 양수여야 한다")
+    actual = _current_xyz()
+    if actual is None or not all(math.isfinite(v) for v in actual):
+        raise MotionError(f"피크 반환 {stage}: 현재 위치를 읽지 못해 중단")
+    error = sum((a - b) ** 2 for a, b in zip(actual, target[:3])) ** 0.5
+    if logger:
+        logger.info(f"피크 반환 {stage}: 목표 {target[:3]}, 실제 {actual}, 오차 {error:.2f}mm")
+    if error > tolerance:
+        raise MotionError(f"피크 반환 {stage}: 위치 오차 {error:.2f}mm > {tolerance:.2f}mm")
+
+
 def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
                 logger=None):
     """
@@ -875,8 +890,10 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
         _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
     else:
         _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
-    _movel_base(contact, v_fine, a_fine)                # 내려가서
-    _release()                                          # 놓는다
+    _check_pick_return_position(above, motion, "거치대 위", logger)
+    _movel_base(contact, v_fine, a_fine)                # 수직으로 내려가서
+    _check_pick_return_position(contact, motion, "반환점", logger)
+    _release()                                          # 위치 확인 후 놓는다
     _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다 (수직)
     if home is not None:
         _movej(home.joints, motion)                     # 홈
@@ -897,7 +914,7 @@ def _movel_base(pos, vel, acc):
     """
     api = _require_api()
     from DR_common2 import posx
-    return _moved(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE),
+    return _moved(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE, radius=0),
                   "movel_base")
 
 

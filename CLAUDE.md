@@ -405,7 +405,7 @@ src/
 - 로봇 제어 PC: tunio_robot (+ 두산 컨트롤러 유선 LAN)
   (`ros2 launch tunio_robot robot.launch.py dry_run:=false`)
 
-**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all` 셋뿐이다.**
+**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다.**
 `/audio/measure_pitch` 는 한 PC 안으로 들어와 왕복이 없어졌다 — 측정 응답 2.2초
 예산에 유리하다. 대신 정정인 PC 한 대에서 노드 4개가 도니 **통합 첫 회차에서
 응답 시간이 2.2초를 넘는지 봐야 한다.**
@@ -682,10 +682,10 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - TCP 기준 — `GripperDA_v1` 하나로 통일 (2026-09-21 합의). 코드가 `connect()` 에서 항상
   켜고 `get_*` 로 확인한다. 발현·거치대의 플랜지 기준 좌표는 `kinematics.shift_tcp` 로
   옮기고 교시점마다 `tcp:` 를 적는다. 근거와 래퍼의 함정은 3.5.1 (#21, #23, #26)
-- Phase 0(페그 손잡이 각 등록) 주체 — **로봇이 스스로 돈다** (2026-09-21, #31).
-  미등록 페그를 만나면 `adjust_peg` goal 안에서 그 자리에 등록한다. 서버는 지시하지
-  않고 인터페이스도 안 바뀐다. 결과는 파일로 남아 노드가 재시작해도 다시 안 돈다.
-  **줄마다 첫 goal 이 훨씬 오래 걸린다** — 서버 타임아웃이 이걸 알아야 한다
+- Phase 0 — 시작 시 서버가 `/robot/register_peg`를 6→5→2→1 순서로 요청한다.
+  로봇은 저장된 유효 각도가 없는 줄만 등록한다. 전부 성공한 뒤 측정을 시작한다.
+  등록 실패/시간 초과 시 발현하지 않고 중단한다 (2026-09-22 사용자 결정).
+  AdjustPeg 내부 등록은 단독 호출과 등록 무효화 후 복구용으로 유지한다.
 - 페그 파지 판정 — **폭으로 한다. 회전 토크로는 안 된다**(2026-09-21 허공 회차로 확정).
   `close`(15mm)로 조여 물림 19.6 / 사점 32.8 / 빈손 13.0mm 를 가른다.
   작업용 `peg`(21mm)로는 손잡이보다 넓어 못 잰다. 근거는 3.6
@@ -746,7 +746,20 @@ colcon test --packages-select tunio_server && colcon test-result --all
   `speed_scale` 2.0 과 손끝 상한 250mm/s, `j1_flip_deg` 120도,
   `standby_skip_mm` 30mm. `pick.holder.sol_by_side` 는 아직 둘 다 null 이라
   거치대 팔 모양이 예전 경로 그대로다
-- **서버의 Action 타임아웃** — `play_timeout_sec` 30 / `adjust_timeout_sec` 60 /
+- **서버의 Action 타임아웃** — `play_timeout_sec` 30 / `adjust_timeout_sec` 120 /
   `strum_timeout_sec` 60, 전부 임시값이다. 줄마다 첫 adjust_peg 는
   안에서 Phase 0 를 돌아 훨씬 오래 걸리는데 그 시간을 아무도 재 본 적이 없다.
   `~/.tunio/robot_data` 의 실행 기록이 다음 실기에서 그 숫자를 낸다 (#58)
+
+
+### 2026-09-22 통합 동작 보완
+- 집기·반환 높이는 사용자 결정으로 `pick_up_mm: 50.0`에 통일한다.
+  반환은 상단과 반환점의 실제 TCP XYZ를 읽어 확인한 뒤 손을 편다.
+  허용 오차 2mm는 실기 검증 전 임시값이며, 피크 안착이나 자세 각도는 감지하지 않는다.
+- 실패한 줄은 다음 줄로 넘기는 정책을 유지한다. 단 로봇 종료 여부가 불명이면
+  다음 요청을 보내지 않고 작업을 중단한다. Action 종료 대기는 정지 명령이 아니다.
+- 6·5번 반대쪽 J1/sol 적용은 보류다. sol_by_side와 발현 자세는 바꾸지 않는다.
+- 피크 반환·복귀 전용 ReturnHome Action을 추가한다. StrumAll의 기존 복귀는
+  호환용으로 유지하고, 한 줄 시험은 화음 없이 ReturnHome으로 끝낸다.
+- `tools/tune_one_string.py`는 실제 서버 조율 로직을 재사용하고 ROS Action으로
+  등록→조율→최종 검증→반환을 수행한다. 실기 명령은 별도 런북 참조.

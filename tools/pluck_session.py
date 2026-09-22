@@ -55,7 +55,7 @@ PLUCK_MOTION = {
     "pluck_retract_tool": [0.0, 0.0, -8.0, 0.0, 0.0, 0.0],
     "pluck_vel_approach": 100, "pluck_acc_approach": 100,
     "pluck_vel_fine": 20, "pluck_acc_fine": 50,
-    "pluck_vel_stroke": 100, "pluck_acc_stroke": 200,
+    "pluck_vel_stroke": 100, "pluck_acc_stroke": 300,  # 6번 줄 시험용 임시값 (줄 공통)
     "pick_up_mm": 50.0,
     "pick_vel_approach": 100, "pick_acc_approach": 100,
     "pick_vel_fine": 30, "pick_acc_fine": 50,

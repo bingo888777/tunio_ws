@@ -1,0 +1,6 @@
+# 미등록 페그만 초기 등록한다. 저장된 유효 각도가 있으면 이동 없이 성공한다.
+uint8 string_number  # 6, 5, 2, 1
+---
+bool success
+string message
+---
