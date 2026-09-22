@@ -22,12 +22,23 @@
   --no-grip 으로 한 번 더 돌려라. 그리퍼를 안 닫고 허공에서 도는 토크가 바닥값이다.
   그 둘이 갈리는 지점이 파지 확인 임계값이다 (CLAUDE.md 3.6).
 
+줄 끊어짐 감지(2026-09-22, 예외처리 B안)를 보려면
+  --string cut 으로 한 번 더 돌려라. 페그는 정상으로 물되(그리퍼는 잡는다),
+  줄이 없거나 장력이 없는 상태(끊어놓은 폐줄 등)로 돈다. 기본값은
+  --string intact(줄 정상)다. 파지 여부(--no-grip)와는 다른 축이라 둘을
+  섞지 말 것 — 줄 유무 비교는 **둘 다 문 상태**에서만 뜻이 있다.
+  같은 페그·방향으로 intact 한 번, cut 한 번 돌리면 자동으로 견줘 준다.
+  이게 CLAUDE.md 3.6의 0.015Nm(계산) 대 0.11Nm(그리퍼 잡음) 비교를
+  조인트 6 경로로 실측하는 것이다 — 계산은 그리퍼 F/T 잡음 기준이라
+  조인트 토크 잡음이 같은지는 이 실측 전까지 아무도 모른다.
+
 쓰는 법
   source /opt/ros/jazzy/setup.bash && source install/setup.bash
   python3 tools/peg_turn_check.py --peg 6                    # 푸는 쪽 20도
   python3 tools/peg_turn_check.py --peg 6 --angle 30 --step 2.5
   python3 tools/peg_turn_check.py --peg 6 --no-grip          # 허공 바닥값
   python3 tools/peg_turn_check.py --peg 6 --direction tighten   # 방향 확인 뒤에만
+  python3 tools/peg_turn_check.py --peg 6 --string cut        # 줄 없이(장력 0) 회전
   python3 tools/peg_turn_check.py --peg 6 --dry-run
 """
 import argparse
@@ -77,6 +88,9 @@ def main():
                          "이동과 따로 둔다")
     ap.add_argument("--no-grip", action="store_true",
                     help="그리퍼를 안 닫고 허공에서 돈다. 토크 바닥값을 얻는다")
+    ap.add_argument("--string", choices=["intact", "cut"], default="intact",
+                    help="줄이 정상(intact)인지 끊겨서 장력이 없는지(cut). "
+                         "--no-grip 과는 다른 축 — 페그를 문 상태에서만 뜻이 있다")
     ap.add_argument("--no-return", action="store_true",
                     help="돌린 만큼 되돌리지 않는다. 기본은 되돌린다")
     ap.add_argument("--preset", default="peg")
@@ -95,6 +109,11 @@ def main():
     route = points.route()
     if route is None:
         raise SystemExit("경유지(routes.transit)가 미교시다")
+
+    if args.no_grip and args.string == "cut":
+        print("--no-grip 과 --string cut 은 같이 못 쓴다. "
+              "줄 유무는 페그를 문 상태에서만 뜻이 있다 (허공은 애초에 줄이 안 걸린다).")
+        return 1
 
     direction = TP.TIGHTEN if args.direction == "tighten" else TP.LOOSEN
     joint, total = points.joint_delta(args.peg, direction, args.angle)
@@ -123,6 +142,8 @@ def main():
           f"회전 속도  {turn['vel']:.2f} deg/s")
     print(f"  관절 변화  {total:+.2f}도 (부호 포함)")
     print(f"  파지       {'안 한다 — 허공 바닥값' if args.no_grip else args.preset}")
+    if not args.no_grip:
+        print(f"  줄         {'정상(intact)' if args.string == 'intact' else '끊음(cut) — 장력 0 기준값'}")
     print(f"  되돌리기   {'안 한다' if args.no_return else '돌린 만큼 되돌린다'}")
     if direction == TP.TIGHTEN:
         print()
@@ -165,6 +186,8 @@ def main():
         "tool": "peg_turn_check", "peg": args.peg, "side": TP.side_of(args.peg),
         "direction": args.direction, "gripped": not args.no_grip,
         "preset": None if args.no_grip else args.preset,
+        "string": None if args.no_grip else args.string,
+        "torque_source": "joint6_external",
         "angle_deg": args.angle, "step_deg": args.step,
         "joint": joint, "turn_sign": peg.turn_sign, "sol": sol,
         "turn_vel": turn["vel"], "travel_vel": motion["vel"],
@@ -292,8 +315,9 @@ def main():
     log["summary"] = {"mean": mean, "spread": spread,
                       "step_from_rest": mean - base_t[joint - 1],
                       "slope": slope}
+    string_tag = "" if args.no_grip or args.string == "intact" else "_stringcut"
     path = runlog.save(f"turn_peg{args.peg}_{args.direction}"
-                       f"{'_air' if args.no_grip else ''}", log, LOG_DIR)
+                       f"{'_air' if args.no_grip else ''}{string_tag}", log, LOG_DIR)
     if path:
         print(f"\n  기록 저장: {os.path.relpath(path)}")
 
@@ -324,6 +348,40 @@ def main():
         print("\n  허공 값이 아직 없다. 같은 각도로 한 번 더 재면 자동으로 견줘 준다 —")
         print(f"    python3 tools/peg_turn_check.py --peg {args.peg} "
               f"--angle {args.angle:g} --no-grip")
+
+    # 줄 끊어짐 감지 (2026-09-22, 예외처리 B안) — 파지는 둘 다 한 상태에서
+    # 줄만 있다/없다를 견준다. get_external_torque() 조인트 6 경로 실측이다.
+    if not args.no_grip:
+        wanted_string = "cut" if args.string == "intact" else "intact"
+        str_other = runlog.latest(LOG_DIR, lambda b: (
+            b.get("tool") == "peg_turn_check" and b.get("peg") == args.peg
+            and b.get("direction") == args.direction and b.get("gripped") is True
+            and b.get("string") == wanted_string and b.get("summary")))[1]
+        if str_other:
+            mine_s = "정상" if args.string == "intact" else "끊음"
+            theirs_s = "끊음" if args.string == "intact" else "정상"
+            a = abs(log["summary"]["step_from_rest"])
+            b = abs(str_other["summary"]["step_from_rest"])
+            print(f"\n{'=' * 70}")
+            print(f"줄 끊어짐 감지 — 줄 {mine_s} vs {theirs_s} "
+                  f"(조인트 6, {str_other.get('saved_at')})")
+            print("=" * 70)
+            print(f"  줄 {mine_s} 단차 {a:.3f}   줄 {theirs_s} 단차 {b:.3f}")
+            gap = abs(a - b)
+            noise = max(log["summary"]["spread"], str_other["summary"]["spread"])
+            print(f"  차이 {gap:.3f}   흩어짐(잡음) {noise:.3f}")
+            if gap > 2 * noise:
+                print(f"  차이가 잡음의 2배를 넘는다. **조인트 6 토크로 줄 끊어짐을 "
+                      f"가릴 수 있다.** 문턱은 그 사이 {(a + b) / 2:.3f} 근처다")
+            else:
+                print("  차이가 잡음에 묻힌다. **이 경로로는 못 가린다** — 그리퍼 "
+                      "F/T 와 같은 결론이다. 다른 감지 수단을 봐야 한다")
+        else:
+            other_flag = "--string cut" if args.string == "intact" else "--string intact"
+            print(f"\n  줄 {'정상' if args.string == 'cut' else '끊음'} 값이 아직 없다. "
+                  f"같은 페그·방향으로 한 번 더 재면 자동으로 견줘 준다 —")
+            print(f"    python3 tools/peg_turn_check.py --peg {args.peg} "
+                  f"--direction {args.direction} --angle {args.angle:g} {other_flag}")
     print()
     print("정밀 백래시는 마이크를 붙이고 tools/peg_cal.py --backlash --step 15")
     return 0
