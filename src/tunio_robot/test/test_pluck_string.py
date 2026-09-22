@@ -317,7 +317,7 @@ def test_pick_return_descent_rejected_does_not_open_the_gripper(fake_api, fake_g
     assert fake_gripper.calls == []                             # 펴지 않았다
 
 
-# ---------------------------------------------------------- 이동 속도 배율 (#56)
+# ---------------------------------------------------------- 이동 속도 배율 (#58)
 def test_speed_scale_multiplies_travel_but_not_the_stroke(fake_api):
     """
     배율은 **이동·접근에만** 걸린다.
@@ -356,7 +356,7 @@ def test_turn_motion_refuses_the_scale():
     assert out["vel"] == 2.0 and out["acc"] == 4.0
 
 
-# ---------------------------------------------------------- 대기 자세 건너뛰기 (#56)
+# ---------------------------------------------------------- 대기 자세 건너뛰기 (#58)
 class PosxApi(FakeApi):
     """get_current_posx 를 흉내 낸다. 두산 래퍼는 (posx, sol) 로 준다."""
 
@@ -418,7 +418,7 @@ def test_standby_skip_can_be_turned_off(monkeypatch, fake_api):
     assert [c[0] for c in api.calls][0] == "movej"
 
 
-# ---------------------------------------------------------- 거치대 팔 모양 (#56)
+# ---------------------------------------------------------- 거치대 팔 모양 (#58)
 ROUTE = TPRoute("routes.transit", [90.0, 0.0, 0.0, 0.0, 0.0, None], True)
 
 
