@@ -70,7 +70,7 @@ ros2 launch m0609_rg2_bringup bringup.launch.py mode:=real host:=192.168.1.100
 # 터미널 2 — 우리 노드
 source /opt/ros/jazzy/setup.bash && source ~/tunio_ws/install/setup.bash
 export ROS_DOMAIN_ID=10
-ros2 launch tunio_robot robot.launch.py dry_run:=false gripper:=rg2
+ros2 launch tunio_robot robot.launch.py dry_run:=false
 ```
 
 ⚠ **`dry_run` 기본값이 true 다.** 안 주면 로봇이 안 움직인다. 일부러 그렇게 뒀다.
@@ -102,6 +102,10 @@ export ROS_DISCOVERY_SERVER=<정정인 PC IP>:11811
 ⚠ `peg_cal.py` 처럼 **직접 두산 API 에 붙는 도구는 디스커버리 서버를 끄고** 써야
 붙는 경우가 있다 (`unset ROS_DISCOVERY_SERVER ROS_SUPER_CLIENT`).
 `docs/페그실측_단독PC_런북.md` 4절 참조.
+
+## 1차 통합
+
+**절차는 `docs/TUNIO_1차통합_가이드.md` 에 있다.** 아래는 뼈대만 남긴다.
 
 ## 1차 통합 점검 순서
 

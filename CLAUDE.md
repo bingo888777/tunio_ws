@@ -403,7 +403,7 @@ src/
 `docs/TUNIO_시스템아키텍처_v3.md`.
 - 정정인 PC: tunio_server + tunio_audio  (`ros2 launch tunio_bringup station.launch.py`)
 - 로봇 제어 PC: tunio_robot (+ 두산 컨트롤러 유선 LAN)
-  (`ros2 launch tunio_robot robot.launch.py dry_run:=false gripper:=rg2`)
+  (`ros2 launch tunio_robot robot.launch.py dry_run:=false`)
 
 **랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all` 셋뿐이다.**
 `/audio/measure_pitch` 는 한 PC 안으로 들어와 왕복이 없어졌다 — 측정 응답 2.2초
@@ -622,6 +622,9 @@ colcon test --packages-select tunio_server && colcon test-result --all
   증상/원인/조치/남은 것으로 나뉘고, **12장에 반복된 패턴 다섯 가지**가 따로 있다.
   개별 항목보다 그쪽이 다음 사고를 막는 데 쓸모 있다
 - docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
+- **docs/TUNIO_시스템아키텍처_v3.md — PC 2대 구성. 6절의 기준본** (2026-09-22)
+- **docs/TUNIO_1차통합_가이드.md — 통합 당일 절차.** 어디까지 갈 수 있는지(0절)부터
+- docs/페그실측_줄별_명령어.md — 줄별 백래시·최소 유효 각도 측정 명령
 - docs/통합_1차_서버DB관제.md — 서버·DB·관제 웹 1차 통합 기록
 - docs/task_manager_구현_브리핑.md — 구현 전 미결 항목 질문 양식 (기록용)
 

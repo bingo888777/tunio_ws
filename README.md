@@ -70,7 +70,7 @@ PC별로 각자 실행:
 # 정정인 PC — 마이크 + 서버 + 관제 웹
 ros2 launch tunio_bringup station.launch.py
 # 로봇 제어 PC
-ros2 launch tunio_robot robot.launch.py dry_run:=false gripper:=rg2
+ros2 launch tunio_robot robot.launch.py dry_run:=false
 ```
 
 ⚠ `robot.launch.py` 는 `dry_run` 기본값이 true 다. 안 주면 로봇이 안 움직인다.
