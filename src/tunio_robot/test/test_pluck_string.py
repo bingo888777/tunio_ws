@@ -747,3 +747,18 @@ def test_반환은_거치대_위에서_수직하강_완료후_놓는다(fake_api
     assert back[1] == above[1]
     assert all(c[2]["radius"] == 0 for c in fake_api.calls)
     assert fake_gripper.calls == ["open"]
+
+
+def test_반환_후에는_페그이동_높이와_모델여유까지_수직상승한다(fake_api, fake_gripper):
+    holder = list(HOLDER)
+    holder[2] = 164.0
+    motion = {"pick_up_mm": 50.0, "pick_to_peg_min_z_mm": 214.0,
+              "pick_to_peg_margin_mm": 5.0}
+    MP.pick_return(Pose("pick.holder", True, task=holder), motion)
+    above, contact, retreat = fake_api.calls
+    assert above[1][2] == 214.0
+    assert contact[1][2] == 164.0
+    assert retreat[1][2] == 224.0
+    assert retreat[1][:2] == holder[:2]
+    assert retreat[1][3:] == holder[3:]
+    assert fake_gripper.calls == ["open"]

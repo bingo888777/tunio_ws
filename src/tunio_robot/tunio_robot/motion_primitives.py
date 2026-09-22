@@ -419,7 +419,7 @@ def _movej(joints, motion, relative=False):
         if capped < vel:
             acc *= capped / vel               # 가속도도 같은 비로 내린다
             vel = capped
-    return _moved(api.movej(posj(list(joints)), vel=vel, acc=acc, mod=mod), "movej")
+    return _moved(api.movej(posj(list(joints)), vel=vel, acc=acc, mod=mod, radius=0), "movej")
 
 
 def _movel(task, motion):
@@ -503,23 +503,141 @@ def goto_route(route, motion):
     _movej(route.resolve(current), motion)
 
 
-def approach_peg_side(side, route, motion, logger=None):
-    """1·2번은 J1=0±30°, 5·6번은 +180±30° 안에서만 경유를 생략한다."""
+def _peg_route_required(j1, side, motion):
     center = {"right": 0.0, "left": 180.0}[side]
     tolerance = float(motion.get("peg_j1_skip_tolerance_deg", 30.0))
     if not math.isfinite(tolerance) or not 0 <= tolerance < 90:
         raise MotionError("peg_j1_skip_tolerance_deg는 0 이상 90 미만이어야 한다")
+    return j1 is None or not math.isfinite(j1) or abs(j1 - center) > tolerance
+
+
+def approach_peg_side(side, route, motion, logger=None):
+    """1·2번은 J1=0±30°, 5·6번은 +180±30° 안에서만 경유를 생략한다."""
     j1 = _current_j1()
-    # -180을 +180으로 환산하지 않는다. 반대 회전 경로는 기타에 부딪힌다.
-    skip = j1 is not None and math.isfinite(j1) and abs(j1 - center) <= tolerance
+    required = _peg_route_required(j1, side, motion)
     if logger:
-        logger.info(f"페그 {side}: J1={j1}, 기준 {center}±{tolerance}도 — "
-                    + ("경유 생략" if skip else "+90도 경유"))
-    if skip:
+        logger.info(f"페그 {side}: J1={j1} — "
+                    + ("+90도 경유" if required else "경유 생략"))
+    if not required:
         return
     if route is None or route.joints[0] != 90.0:
         raise MotionError("페그 접근에는 J1=+90도인 routes.transit이 필요하다")
     goto_route(route, motion)
+
+
+def _peg_transfer_floor(motion):
+    """허용 높이와 모델 여유. 후자는 실기 검증 전 임시값이다."""
+    floor = float(motion.get("pick_to_peg_min_z_mm", 214.0))
+    margin = float(motion.get("pick_to_peg_margin_mm", 5.0))
+    if not all(math.isfinite(v) and v > 0 for v in (floor, margin)):
+        raise MotionError("피크→페그 높이/모델 여유는 유한한 양수여야 한다")
+    return floor, margin
+
+
+def _check_peg_transfer_path(start, goal, floor, margin):
+    """관절 보간 모델의 TCP·J3~J6·손목 케이싱 높이를 검사한다.
+
+    구간 중점과 최대 변위 상한으로 세분화한다. 드라이버의 실제 궤적/링크
+    외형 전체에 대한 충돌 인증은 아니다. 불확실한 구간은 허용하지 않는다.
+    """
+    from . import kinematics as K
+    if any(len(j) != 6 or not all(math.isfinite(v) for v in j) for j in (start, goal)):
+        raise MotionError("피크→페그 경로의 관절각이 유효하지 않다")
+
+    def height(j):
+        f = K.fk(j)
+        points = [f["tcp"], *f["origins"][2:], f["wrist_casing"]]
+        z = min(p[2] for p in points)
+        if not math.isfinite(z) or z < floor + margin:
+            raise MotionError(f"피크→페그 경로 높이 부족: 모델 최저 Z={z:.1f}mm, "
+                              f"필요 {floor + margin:.1f}mm (하한+모델 여유)")
+        return z
+
+    height(start)
+    height(goal)
+    pending = [(start, goal, 0)]
+    while pending:
+        a, b, depth = pending.pop()
+        mid = [(x + y) / 2 for x, y in zip(a, b)]
+        z = height(mid)
+        # URDF 체인 길이+TCP+케이싱 반경보다 큰 1400mm를 회전 반경 상한으로 쓴다.
+        bound = 1400.0 * sum(math.radians(abs(x - y)) for x, y in zip(a, b)) / 2
+        if z - bound >= floor + margin:
+            continue
+        if depth >= 14:
+            raise MotionError("피크→페그 경로 높이 여유를 확인하지 못해 중단")
+        pending.extend(((a, mid, depth + 1), (mid, b, depth + 1)))
+
+
+def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
+    """상승 완료 후 높은 접근점까지 이동하고, 그 자리에서만 수직 하강한다."""
+    api = _require_api()
+    from DR_common2 import posx
+    from . import kinematics as K
+    floor, margin = _peg_transfer_floor(motion)
+    start = _read_peg_joints(motion)
+    current, _ = read_posx()
+    current = [float(v) for v in current]
+    if len(current) != 6 or not all(math.isfinite(v) for v in current):
+        raise MotionError("피크→페그: 현재 TCP를 읽지 못했다")
+    if current[2] < floor:
+        raise MotionError(f"피크→페그: 상승 미완료 Z={current[2]:.1f} < {floor:.1f}mm")
+    if pose.kind != "task" or getattr(pose, "sol", None) is None:
+        raise MotionError("피크→페그: 작업 좌표와 교시된 sol이 필요하다")
+    back = float(motion.get("approach_mm", 100.0))
+    if not math.isfinite(back) or back <= 0:
+        raise MotionError("피크→페그: 접근 거리는 유한한 양수여야 한다")
+    approach = TP.backed_off(pose.task, back)
+    high = list(approach)
+    high[2] = max(current[2], floor + 2 * margin, approach[2])
+    try:
+        goal = [float(v) for v in api.ikin(posx(high), pose.sol)]
+        if len(goal) != 6 or not all(math.isfinite(v) for v in goal):
+            raise ValueError("유한한 관절각 6개가 아니다")
+        error = math.dist(K.fk(goal)["tcp"], high[:3])
+        if error > margin:
+            raise ValueError(f"IK/FK 위치 대조 오차 {error:.1f}mm")
+    except Exception as exc:
+        raise MotionError(f"피크→페그 높은 접근점 IK 실패: {exc}") from exc
+    plan = []
+    if _peg_route_required(start[0], side, motion):
+        if route is None or route.joints[0] != 90.0:
+            raise MotionError("피크→페그: J1=+90도 경유지가 필요하다")
+        plan.append(route.resolve(start))
+    plan.append(goal)
+    # 어떤 이동도 보내기 전에 경유를 포함한 전체 높은 이동 구간을 검사한다.
+    previous = start
+    j5, j6, joint_margin = _peg_joint_limits(motion)
+    for target in plan:
+        if abs(target[4]) > j5 - joint_margin or abs(target[5]) > j6:
+            raise MotionError("피크→페그: 목표 관절각이 J5/J6 제한을 넘는다")
+        if min(previous[0], target[0]) <= -90 <= max(previous[0], target[0]):
+            raise MotionError("피크→페그: J1=-90도 통과 경로는 허용하지 않는다")
+        _check_peg_transfer_path(previous, target, floor, margin)
+        previous = target
+    if logger:
+        logger.info(f"피크→페그: TCP/J3~J6 높이 검사 통과, "
+                    f"상단 Z={high[2]:.1f}mm → 접근점에서만 Z={approach[2]:.1f}mm로 하강")
+    for target in plan:
+        if confirm:
+            confirm(f"높은 경로 관절 이동: {[round(v, 2) for v in target]}")
+        # 직전 실행의 실제 관절각으로 재검사. 실패해도 직행으로 폴백하지 않는다.
+        _check_peg_transfer_path(_read_peg_joints(motion), target, floor, margin)
+        _movej(target, motion)
+        actual = _read_peg_joints(motion)
+        _check_peg_transfer_path(actual, actual, floor, margin)
+        if max(abs(a - b) for a, b in zip(actual, target)) > 1.0:
+            raise MotionError("피크→페그: 경유 관절 위치 미도달")
+    if confirm:
+        confirm(f"페그 앞 XY={approach[:2]}에서 Z={approach[2]:.1f}mm로 수직 하강")
+    actual, _ = read_posx()
+    if len(actual) != 6 or not all(math.isfinite(v) for v in actual):
+        raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
+    if actual[2] < floor or math.dist(actual[:3], high[:3]) > 2.0:
+        raise MotionError("피크→페그: 높은 접근점 미도달, 하강 금지")
+    # XY는 접근점에 도착했고 자세도 높은 곳에서 맞췄다. 여기서만 하강 허용.
+    v, a = _transit_speed(motion)
+    _movel_base(approach, v, a)
 
 
 def _goto_pose(pose, motion):
@@ -894,7 +1012,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
           건너뛸 수 있다. None 이면 지금 팔 모양을 그대로 쓴다.
 
     순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
-          → 그리퍼 열기 → 거치대 위(sol 을 주면 그 팔 모양으로) → (home 이 있으면) 홈 자세
+          → 그리퍼 열기 → 수직 상승/도착 확인 → (home 이 있으면) 홈 자세.
+    pick_to_peg_min_z_mm 설정 시 빈손 상승은 하한+모델 여유 2배 이상으로 한다.
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
@@ -913,7 +1032,12 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
     _movel_base(contact, v_fine, a_fine)                # 수직으로 내려가서
     _check_pick_return_position(contact, motion, "반환점", logger)
     _release()                                          # 위치 확인 후 놓는다
-    _movel_base(above, v_app, a_app)                    # 빈손으로 올라온다 (수직)
+    retreat = list(above)
+    if "pick_to_peg_min_z_mm" in motion:
+        floor, margin = _peg_transfer_floor(motion)
+        retreat[2] = max(retreat[2], floor + 2 * margin)
+    _movel_base(retreat, v_app, a_app)                  # 빈손 수직 상승 후 높이 확보
+    _check_pick_return_position(retreat, motion, "반환 후 상승", logger)
     if home is not None:
         _movej(home.joints, motion)                     # 홈
 
@@ -1183,7 +1307,7 @@ def _cleanup_register(pose, motion, logger, keep_error):
 
 
 def register_peg(pose, motion, handle, read_width, logger=None,
-                 use_force=True, assume_grip=False):
+                 use_force=True, assume_grip=False, from_pick=False, side=None, route=None):
     """
     Phase 0 — 페그를 물어서 손잡이 각을 확정하고 그 각을 돌려준다 (#31).
 
@@ -1232,7 +1356,10 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     _grip("open")
     approach_mm = float(motion.get("approach_mm", 100.0))
     back = TP.backed_off(pose.task, approach_mm)
-    _movejx(back, motion, sol=getattr(pose, "sol", None))
+    if from_pick:
+        _pick_to_peg_approach(pose, side, route, motion, logger)
+    else:
+        _movejx(back, motion, sol=getattr(pose, "sol", None))
 
     # 먼 구간은 **순응을 켜기 전에** 위치 제어로 간다. 순서가 중요하다 —
     # 순응이 켜진 뒤에 위치 명령을 주면 스프링이 흡수해 팔이 그 자리에 선다.
@@ -1375,7 +1502,8 @@ def _prepare_peg_turn(delta_deg, motion):
     _check_peg_turn(actual, delta_deg, motion)
 
 
-def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
+def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
+               from_pick=False, side=None, route=None, logger=None):
     """
     페그 조절. 받은 관절을 받은 각도만큼 돌린다.
 
@@ -1429,11 +1557,16 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0):
     # 폭은 gripper.presets.open 이 정한다(지금 38mm). 더 벌리면 옆 페그 손잡이를
     # 치고, 줄이면 눕힌 손잡이도 못 지난다. 창이 5mm 도 안 된다 (#31)
     _grip("open")
+    if from_pick:
+        _pick_to_peg_approach(entry, side, route, motion, logger)
     if joint == 6:
-        _movejx(TP.backed_off(entry.task, back), motion, sol=getattr(entry, "sol", None))
+        if not from_pick:
+            _movejx(TP.backed_off(entry.task, back), motion, sol=getattr(entry, "sol", None))
         _prepare_peg_turn(delta_deg, motion)        # 접근점에서만 되감기, 파지 전
         _movel(entry.task, motion)
         _check_peg_turn(_read_peg_joints(motion), delta_deg, motion)
+    elif from_pick:
+        _movel(entry.task, motion)
     else:
         _goto_pose(entry, motion)
     _grip("peg")                                    # 여유를 준 폭으로 파지

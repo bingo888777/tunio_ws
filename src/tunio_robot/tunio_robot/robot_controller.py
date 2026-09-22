@@ -162,6 +162,7 @@ class RobotController(Node):
         # (거치대 위가 아닐 수 있다). None 이면 그 대신 멈추고 사람을 부른다
         # (이슈 #34-1).
         self._holding_pick = False
+        self._from_pick = False  # 반환 후에는 높이 검사 경로 필수. 실패 시에도 유지
 
         cb = ReentrantCallbackGroup()
         self.home_srv = ActionServer(
@@ -298,7 +299,8 @@ class RobotController(Node):
             self.points.peg(string_number), self.points.motion,
             self.points.peg_handle(), self._width_reader(),
             logger=self.get_logger(),
-            use_force=bool(self.get_parameter("peg_register_force").value))
+            use_force=bool(self.get_parameter("peg_register_force").value),
+            from_pick=self._from_pick, side=TP.side_of(string_number), route=self.points.route())
         self.pegs.register(string_number, roll)
         self.pegs.save()
         self.get_logger().info(f"{string_number}번 손잡이 각 {roll:+.1f}도 등록")
@@ -351,6 +353,7 @@ class RobotController(Node):
         MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol,
                    route=self.points.route(), logger=self.get_logger())
         self._holding_pick = True
+        self._from_pick = False
         # 경유지를 지나며 팔 모양을 그 쪽으로 맞췄다면 거기 서 있는 셈이다
         if sol is not None:
             self._side = side
@@ -378,6 +381,7 @@ class RobotController(Node):
             MP.pick_return(holder, self.points.motion, via=via, sol=sol,
                            route=self.points.route(), logger=self.get_logger())
         self._holding_pick = False
+        self._from_pick = True
         # 마지막 팔 모양 기록. 페그 경유 판단에는 실제 J1을 사용한다.
         self._side = side if sol is not None else None
 
@@ -388,6 +392,7 @@ class RobotController(Node):
             if not self.dry_run:
                 MP.return_home(self.points.frame("standby"), self.points.motion)
                 self._side = None
+                self._from_pick = False
 
         return self._run("return_home", goal, ReturnHome.Result, work)
 
@@ -403,8 +408,10 @@ class RobotController(Node):
                 return  # 가짜 등록값을 실기 파일에 저장하지 않는다
             side = TP.side_of(no)
             self._release_pick(side)
-            self._cross_to(side)
+            if not self._from_pick:
+                self._cross_to(side)
             self._ensure_registered(no)
+            self._from_pick = False
             self._side = side
 
         return self._run("register_peg", goal, RegisterPeg.Result, work)
@@ -451,11 +458,15 @@ class RobotController(Node):
                     f"[dry_run] {r.string_number}번 페그 J{joint} {delta:+.1f}도{via}")
                 self._side = side
                 return
-            self._cross_to(side)
+            if not self._from_pick:
+                self._cross_to(side)
             # 회전/후퇴 중 실패하면 예전 각을 다시 믿지 않는다. 되감기는 페그를
             # 안 돌리므로 누적량에 넣지 않고, 요청한 delta만 성공 후 확정한다 (#70).
             with self.pegs.turning(r.string_number, delta if joint == 6 else None):
-                MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll)
+                MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll,
+                              from_pick=self._from_pick, side=side, route=self.points.route(),
+                              logger=self.get_logger())
+            self._from_pick = False
             if joint != 6:
                 self.get_logger().warn(
                     f"peg_joint 가 J{joint} 라 손잡이 각을 누적하지 않는다. "

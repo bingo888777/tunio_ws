@@ -688,3 +688,32 @@ def test_미등록_회전요청은_등록이나_피크반환_없이_실패한다
                 operation.assert_not_called()
     finally:
         h.shutdown()
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_반환_후에는_높이검사_경로를_쓰고_실패해도_직행으로_바꾸지_않는다(
+        ros, taught, monkeypatch, tmp_path, fails):
+    from tunio_robot.peg_state import PegState
+    h = Harness(taught)
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(str(tmp_path / "state.json"))
+        n.pegs.register(2, 0.0)
+        n._holding_pick = True
+        monkeypatch.setattr(MP, "pick_return", lambda *a, **k: None)
+
+        def adjust(*a, **kw):
+            assert kw["from_pick"] is True
+            assert kw["side"] == "right"
+            if fails:
+                raise MP.MotionError("경로 높이 부족")
+        monkeypatch.setattr(MP, "adjust_peg", adjust)
+        with mock.patch.object(n, "_cross_to") as cross:
+            result = h.send(AdjustPeg, "/robot/adjust_peg",
+                            AdjustPeg.Goal(string_number=2, direction=1, angle_deg=3.0))
+            assert result.result.success is not fails
+            cross.assert_not_called()
+            assert n._from_pick is fails
+    finally:
+        h.shutdown()
