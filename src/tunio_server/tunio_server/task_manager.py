@@ -153,6 +153,7 @@ class TaskManager(Node):
         self._pause = threading.Event()
         self._cancel = threading.Event()
         self._active_goals = []
+        self._registered_pegs = set()  # 이번 작업에서 성공 Result를 확인한 줄
         self.job_id = ''
         self.measurement_id = 0
         self.phase = TuningState.PHASE_IDLE
@@ -314,6 +315,7 @@ class TaskManager(Node):
             return res
         self._pause.clear()
         self._cancel.clear()
+        self._registered_pegs.clear()
         self._reset_results()
         self.job_id = datetime.now().strftime('%Y%m%d_%H%M%S')
         self.measurement_id = 0
@@ -324,10 +326,11 @@ class TaskManager(Node):
         for f in ('tolerance_cents', 'max_adjust_count', 'max_measure_retry',
                   'measure_timeout_sec', 'onset_timeout_sec'):
             setattr(self.active_settings, f, getattr(self.settings, f))
+        self._set_phase(TuningState.PHASE_REGISTER_PEG, L.STRING_ORDER[0])
         self._worker = threading.Thread(target=self._run_job, name='tuning', daemon=True)
         self._worker.start()
         res.accepted = True
-        res.message = '작업 시작 %s' % self.job_id
+        res.message = '작업 시작 %s — 발현 전 페그 각 등록' % self.job_id
         return res
 
     def _servers_not_ready(self):
@@ -524,6 +527,8 @@ class TaskManager(Node):
         PlayString Result 와 MeasurePitch Result 의 도착 순서는 보장되지 않는다.
         둘 다 받은 뒤에 판정한다.
         """
+        if string_number not in self._registered_pegs:
+            raise Aborted('%d번 페그 각 등록 미완료 — 측정·발현 요청 차단' % string_number)
         target_hz = L.TARGETS[string_number][1]
         self.measurement_id += 1
         mid = self.measurement_id
@@ -688,6 +693,8 @@ class TaskManager(Node):
 
         캘리브레이션 실측 전이면 여기서 Aborted 를 던진다. 임시 계수로 로봇을 돌리지 않는다.
         """
+        if string_number not in self._registered_pegs:
+            raise Aborted('%d번 페그 각 등록 미완료 — 페그 조절 요청 차단' % string_number)
         try:
             cal = self.calibration.get(string_number)
         except PC.CalibrationMissing as exc:
@@ -796,21 +803,27 @@ class TaskManager(Node):
     # ------------------------------------------------------------------ 상태기계 본체
 
     def _register_pegs(self, numbers=None):
-        for no in (L.STRING_ORDER if numbers is None else numbers):
+        numbers = tuple(L.STRING_ORDER if numbers is None else numbers)
+        self._registered_pegs = set()
+        for no in numbers:
             self._gate()
             self._set_phase(TuningState.PHASE_REGISTER_PEG, no)
+            self.get_logger().info('%d번 페그 각 등록 요청 — 완료 전 발현하지 않는다' % no)
             result = self._run_action(
                 self.cli_register, RegisterPeg.Goal(string_number=no),
                 float(self._p('register_timeout_sec')), 'register_peg')
             if result is None or not result.success:
                 why = result.message if result is not None else '응답 없음'
                 raise Aborted(f'{no}번 페그 초기 등록 실패: {why}')
+            self.get_logger().info('%d번 페그 각 등록 확인 완료' % no)
         self._gate()  # 등록 중 취소됐다면 측정을 시작하지 않는다
+        self._registered_pegs.update(numbers)  # 전부 성공한 뒤에만 후속 명령을 허용한다
 
     def _run_job(self):
         self.get_logger().info('작업 %s 시작' % self.job_id)
         try:
             self._register_pegs()  # 마이크 ready/첫 발현보다 먼저 완료한다
+            self.get_logger().info('전체 페그 각 등록 완료 — 발현·측정 시작')
             hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
                 self._gate()
