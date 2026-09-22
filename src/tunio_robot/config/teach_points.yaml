@@ -62,6 +62,23 @@ motion:
   # true면 부족할 때 파지 전에 J6만 ±360도 되감는다. 페그 앞에서는 절대 안 돈다.
   # turn_vel=2일 때 되감기만 약 180초: 서버 adjust_timeout_sec도 실측에 맞춰야 한다.
   peg_unwind_enabled: false
+  # 줄 끊어짐 감지 (예외처리 B안, 2026-09-22). J6 회전을 amovej 로 비동기
+  # 시작하고, 도는 동안 폴링마다 get_external_torque() 를 본다 — 이동 자체는
+  # 안 쪼갠다. 끊어짐이 보이면 MoveStop 서비스로 즉시 멈춘다(두산 강사 지침 —
+  # 정지는 ROS2 서비스로 해야 한다. DSR_ROBOT2.py 에 래퍼가 없어 직접 부른다).
+  # **기본 꺼짐 — 검증됐다고 치고 미리 짜 둔 코드다. 문턱을 실측하기 전엔
+  # 켜지 말 것.** tools/peg_turn_check.py --string cut 으로 조인트 6
+  # 신호·잡음부터 재고(#79/#80), 그 결과로 아래 문턱을 갈아 끼운 뒤에만
+  # true 로 올린다.
+  string_break_enabled: false
+  string_break_poll_sec: 0.2              # 도는 동안 몇 초마다 토크를 볼지. 임시값
+  string_break_torque_threshold_nm: 0.05  # ⚠ 미검증 임시값. 그대로 쓰지 말 것
+  # amovej 는 명령을 넣자마자 돌아온다. 그래서 check_motion() 의 "끝남"을
+  # 그대로 안 믿고 관절각이 목표에 실제로 왔는지 같이 본다(이 허용치 안이면
+  # 도착으로 본다). max_wait_sec 은 무한 대기 방지 — 넘기면 MoveStop 으로
+  # 멈추고 실패로 처리한다.
+  string_break_arrive_tolerance_deg: 0.5
+  string_break_max_wait_sec: 30.0
   # Phase 0 초기 등록에서 시도할 손잡이 회전각 후보 (peg_motion.yaml 초안값).
   # 로봇은 페그가 지금 어느 각도로 서 있는지 모른다
   candidate_rolls_deg: [0.0, 90.0, 45.0, 135.0]

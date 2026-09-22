@@ -1633,6 +1633,159 @@ def _prepare_peg_turn(delta_deg, motion):
     _check_peg_turn(actual, delta_deg, motion)
 
 
+class StringBrokenError(MotionError):
+    """줄 끊어짐으로 보이는 토크 패턴. adjust_peg 가 그 자리에서 회전을 멈춘다."""
+
+
+def read_external_torque():
+    """
+    조인트별 외력 토크 [J1..J6] (get_external_torque, 조인트 6 경로).
+
+    read_force() 가 그리퍼(TCP F/T)를 읽는 것과 다른 센서다. 줄 끊어짐 감지
+    (예외처리 B안, 2026-09-22)는 이쪽을 쓴다 — tools/peg_turn_check.py 가
+    처음부터 써 온 경로와 같다(f788f56). CLAUDE.md 3.6의 회전 중 잡음 실측
+    (0.023Nm 차이, 0.11Nm 잡음)도 이 경로에서 나온 값이다.
+    """
+    api = _require_api()
+    return api.get_external_torque()
+
+
+_move_stop_client = None    # MoveStop 서비스 클라이언트. connect() 가 만든 _node 로 첫 호출 때 연다
+
+
+def _stop_motion(stop_mode=2):
+    """이 함수는 MoveStop 서비스를 **직접** 부른다.
+
+    DSR_ROBOT2.py 에 이걸 부르는 함수가 없다(module 안에 MoveStop 참조가
+    0건 — grep 으로 확인) — 그래서 dsr_msgs2.srv.MoveStop 을 이 파일이
+    직접 쓴다. 나머지 함수(movej 등)는 전부 DSR_ROBOT2.py 를 거치는데
+    이것만 예외다.
+
+    두산 강사 지침 — **정지는 ROS2 서비스 호출로 해야 한다.** 이동을 멈추는
+    수단이 서비스 밖에 따로 없다.
+
+    stop_mode 기본값 2(DR_SSTOP, 소프트 정지). 0(DR_QSTOP_STO)·1(DR_QSTOP)은
+    더 급한 정지이지만 페그를 돌리다 멈추는 상황에 과한지 아직 실기로 확인
+    안 됐다 — 실측 후 바꿀 수 있다.
+
+    이 서비스는 다른 get_* 들과 달리 **success 를 하드코딩하지 않는다**
+    (dsr_controller2.cpp move_stop_cb — `res->success = Drfl->stop(...)` 를
+    그대로 돌려준다, 750행). 그래서 반환을 믿고 실패하면 예외를 던진다.
+    """
+    global _move_stop_client
+    _require_api()                                  # connect() 가 됐는지, _node 가 있는지
+    import rclpy
+    from dsr_msgs2.srv import MoveStop
+    if _move_stop_client is None:
+        _move_stop_client = _node.create_client(MoveStop, "dsr_controller2/motion/move_stop")
+    if not _move_stop_client.wait_for_service(timeout_sec=5.0):
+        raise MotionError("MoveStop 서비스가 안 보인다 — 정지 명령을 보낼 수 없다")
+    req = MoveStop.Request()
+    req.stop_mode = int(stop_mode)
+    future = _move_stop_client.call_async(req)
+    rclpy.spin_until_future_complete(_node, future)
+    result = future.result()
+    if result is None or not result.success:
+        raise MotionError(
+            "MoveStop 서비스 실패 — 로봇이 계속 돌고 있을 수 있다. "
+            "즉시 펜던트로 직접 멈출 것")
+
+
+def _turn_peg_async_with_string_check(delta_deg, motion, pose, joint):
+    """회전을 **비동기**(amovej)로 시작하고, 도는 동안 폴링마다 토크를 본다.
+
+    쪼개서 돌지 않는다 — 기본 이동 자체는 한 번의 연속 동작 그대로다.
+    끊어짐이 보이면 MoveStop 서비스로 즉시 멈춘다(위 _stop_motion).
+
+    ⚠️ **문턱(motion.string_break_torque_threshold_nm)은 실측 전 임시값이다.**
+    검증됐다고 가정하고 미리 짜 둔 것뿐이다 — 그대로 실기에 쓰지 말 것.
+    tools/peg_turn_check.py --string cut 으로 조인트 6 잡음·신호를 먼저 재고
+    갈아 끼운다(#79/#80). 지금 값(0.05Nm)은 CLAUDE.md 3.6의 잡음 0.11Nm 보다
+    작게 잡아 뒀는데, 그 잡음 자체가 파지-허공 비교에서 나온 것이라 줄 유무
+    비교에 그대로 맞는다는 보장이 없다. **문턱이 잡음보다 작으면 오히려
+    오검출이 늘 수 있다** — 실측 전까지는 설계 검증용이지 판정 근거가 아니다.
+
+    check_motion() 은 0=IDLE(끝남) / 1=INIT(계산중) / 2=BUSY(도는 중) 을 그대로
+    돌려준다 — get_* 계열의 뒤집힌 값 함정(CLAUDE.md 3.5.1)이 아니다. **다만
+    amovej 는 명령을 넣자마자 돌아오므로, 로봇이 실제로 움직이기 시작하기
+    전에 첫 폴링이 오면 그 순간엔 아직 IDLE 로 보인다.** 그걸 "다 돌았다"로
+    잘못 믿으면 실제로는 안 돈 채로 다음 단계(파지 해제 등)로 넘어간다.
+    그래서 status==0 을 그대로 안 믿고, **관절각을 직접 읽어 목표에 왔는지**
+    같이 본다 — CLAUDE.md 3.5.1 "판정은 set/상태값이 아니라 get 결과로 한다"
+    와 같은 원칙이다. 목표에 아직 안 왔으면 status==0 이어도 더 기다린다.
+
+    ⚠️ 관절각 확인만으로는 또 뚫린다 — **회전량이 허용 오차(arrive_tol,
+    기본 0.5도)보다 작은 미세 보정**(조율 보정에서 흔하다, 예: 0.3도)이면
+    회전 전 낡은 위치조차 "도착"으로 통과해 버린다. 그래서 **BUSY(2)를
+    실제로 한 번 본 뒤의 IDLE** 이어야 완료로 인정한다(seen_busy). BUSY 를
+    한 번도 못 보면(로봇이 아직 안 돌았거나 폴링 사이로 순간에 끝났거나)
+    IDLE 이 나와도 계속 기다리고, 그래도 안 끝나면 아래 타임아웃이 받는다.
+
+    영원히 안 끝나는 것도 막는다 — motion.string_break_max_wait_sec(기본
+    30초)를 넘기면 MoveStop 을 부르고 MotionError 를 던진다. 이게 없으면
+    로봇이 걸린 채 무한 대기해 이 Action 콜백 전체가 막힌다. BUSY 를 못 보는
+    극단적 경우(초단시간 회전)의 안전망도 이것이다.
+
+    멈추면(정상 완료든 StringBrokenError든) adjust_peg 의 기존 except 절
+    (놓기·후퇴)이 그대로 받는다 — 새 정리 경로를 안 만들어도 된다.
+    """
+    api = _require_api()
+    from DR_common2 import posj
+    poll_sec = float(motion.get("string_break_poll_sec", 0.2))
+    threshold = float(motion.get("string_break_torque_threshold_nm", 0.05))
+    arrive_tol = float(motion.get("string_break_arrive_tolerance_deg", 0.5))
+    max_wait = float(motion.get("string_break_max_wait_sec", 30.0))
+    if poll_sec <= 0:
+        raise MotionError("motion.string_break_poll_sec 는 양수여야 한다")
+
+    turn = turn_motion(motion, pose)
+    vel = _fast(turn, turn.get("vel", 30), SPEED_CAP_JOINT)
+    acc = _fast(turn, turn.get("acc", 30), SPEED_CAP_JOINT * 2)
+    d = [0.0] * 6
+    d[joint - 1] = float(delta_deg)
+
+    start_angle = list(api.get_current_posj())[joint - 1]
+    target_angle = start_angle + float(delta_deg)
+    base = list(read_external_torque())[joint - 1]
+    ret = api.amovej(posj(d), vel=vel, acc=acc, mod=api.DR_MV_MOD_REL)
+    _moved(ret, "amovej")
+
+    waited = 0.0
+    seen_busy = False
+    while True:
+        status = api.check_motion()
+        cur = list(read_external_torque())[joint - 1]
+        if abs(cur - base) < threshold:
+            _stop_motion()
+            raise StringBrokenError(
+                f"J{joint} 회전 중 토크 변화 {cur - base:+.3f}Nm"
+                f" (문턱 {threshold:.3f}Nm 미만) — 줄이 끊어졌을 수 있다. "
+                "MoveStop 으로 멈췄다. 문턱 미검증 상태다(#79/#80 실측 전)")
+        if status not in (0, 1, 2):
+            raise MotionError(f"check_motion 이 알 수 없는 값을 돌려줬다: {status}")
+        if status == 2:
+            seen_busy = True
+        if status == 0 and seen_busy:
+            # 관절각 확인만으로는 부족하다 — 회전량이 허용 오차(arrive_tol)보다
+            # 작으면(미세 보정에서 흔하다) 회전 전 낡은 위치도 "도착"으로
+            # 통과해 버린다. **BUSY 를 한 번은 실제로 본 뒤의 IDLE** 이어야
+            # 이 낡은 값 함정을 피한다. BUSY 를 못 보고 있으면(로봇이 아직
+            # 시작 안 했거나 폴링 사이로 순간에 끝났거나) 아래 max_wait_sec
+            # 타임아웃이 결국 받아 준다 — 무한 대기는 아니다.
+            actual = list(api.get_current_posj())[joint - 1]
+            if abs(actual - target_angle) <= arrive_tol:
+                return
+            # IDLE 인데 목표에 안 왔다 — 시작 전의 낡은 상태를 본 것일 수
+            # 있다. 다시 본다(아래에서 재확인)
+        if waited >= max_wait:
+            _stop_motion()
+            raise MotionError(
+                f"J{joint} 회전이 {max_wait:.0f}초 안에 안 끝났다(status={status}). "
+                "MoveStop 으로 멈췄다")
+        time.sleep(poll_sec)
+        waited += poll_sec
+
+
 def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
                from_pick=False, side=None, route=None, logger=None):
     """
@@ -1652,6 +1805,16 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
     백래시 대응(목표보다 높으면 풀었다 조여 올리기)은 task_manager 가 결정한다
     (명세 9.1 확정). 여기서 조이는 방향 마무리를 덧붙이면 서버가 계산한 각도와
     이중으로 겹쳐 결과가 어긋난다.
+
+    motion.string_break_enabled 가 true 면(기본 false) J6 회전을 amovej 로
+    비동기로 시작하고, 도는 동안 폴링마다 토크를 봐서 줄 끊어짐을 본다
+    (_turn_peg_async_with_string_check, 예외처리 B안). 이동 자체는 쪼개지
+    않는다 — 감지가 기본 동작과 동시에 돈다. 끊어짐이 보이면 MoveStop
+    서비스로 즉시 멈추고(_stop_motion) StringBrokenError(MotionError
+    서브클래스)를 던진다. 아래 except 절이 그대로 놓기·후퇴를 한다 — 서버는
+    다른 로봇 오류와 똑같이 그 줄만 FAIL_ROBOT_ERROR 로 접고 다음 줄로 간다
+    (ADJUST_FAILURE_SKIPS_STRING_ONLY, task_manager.py). 인터페이스 변경
+    없음. **문턱은 실측 전 임시값이다.**
     """
     _require_api()
     ensure_tcp()                                    # 페그 좌표는 robot.tcp 기준이다 (이슈 #21)
@@ -1704,10 +1867,15 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
     try:
         if joint == 6:
             _check_peg_turn(_read_peg_joints(motion), delta_deg, motion)
-        delta = [0.0] * 6
-        delta[joint - 1] = float(delta_deg)
-        # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
-        _movej(delta, turn_motion(motion, pose), relative=True)
+        if joint == 6 and motion.get("string_break_enabled", False):
+            # 줄 끊어짐 감지 (예외처리 B안). 기본은 꺼져 있다 — 문턱 미검증
+            # (#79/#80). 켜져 있을 때만 비동기 이동 + 동시 토크 감시로 간다.
+            _turn_peg_async_with_string_check(float(delta_deg), motion, pose, joint)
+        else:
+            delta = [0.0] * 6
+            delta[joint - 1] = float(delta_deg)
+            # 회전은 이동보다 느리게 간다. 줄에 장력을 거는 구간이다
+            _movej(delta, turn_motion(motion, pose), relative=True)
         if joint == 6:
             _check_peg_turn(_read_peg_joints(motion), 0.0, motion)
     except Exception as exc:
