@@ -119,7 +119,7 @@ SPEC 에 없는 상세가 여기 있으면 그대로 쓰고, 둘이 충돌하면
 
 ## 2. 노드별 제공·사용 목록
 
-### task_manager (서버 PC · 정동휘)
+### task_manager (정정인 PC · 정동휘, 2026-09-22 PC 3대→2대로 이 노드가 도는 PC만 변경)
 
 제공하는 Service
 - `/tuning/start` · `/tuning/pause` · `/tuning/resume` · `/tuning/cancel` (CommandTuning)
@@ -135,7 +135,7 @@ SPEC 에 없는 상세가 여기 있으면 그대로 쓰고, 둘이 충돌하면
 호출하는 Service
 - `/tuning/save_job`
 
-### web_node (서버 PC · 정동휘)
+### web_node (정정인 PC · 정동휘)
 
 구독하는 Topic
 - `/tuning/state`
@@ -143,7 +143,7 @@ SPEC 에 없는 상세가 여기 있으면 그대로 쓰고, 둘이 충돌하면
 호출하는 Service
 - 버튼 4개, 설정 2개, `/tuning/get_history`
 
-### result_store (서버 PC · 정동휘)
+### result_store (정정인 PC · 정동휘)
 
 제공하는 Service
 - `/tuning/get_history` (GetHistory)
@@ -156,7 +156,7 @@ SPEC 에 없는 상세가 여기 있으면 그대로 쓰고, 둘이 충돌하면
 - `/robot/adjust_peg` (정묵)
 - `/robot/strum_all` (공동)
 
-### audio_analyzer (마이크 PC · 정정인)
+### audio_analyzer (정정인 PC · 정정인, 2026-09-22부터 task_manager와 같은 PC — 랜을 안 건넌다)
 
 제공하는 Action
 - `/audio/measure_pitch`
