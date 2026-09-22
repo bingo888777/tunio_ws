@@ -88,6 +88,7 @@ motion:
   # pick_return 도 같은 값을 써서 대칭으로 내려온다 (_pick_points 공용).
   pick_up_mm: 50.0
   # 반환 후 페그까지 이동: TCP와 J3~J6 높이 하한. 접근점 도착 후 하강 허용.
+  # 2026-09-22 2번 실기 경로 확인 후 공통 이동 속도 사용(speed_scale 적용).
   pick_to_peg_min_z_mm: 214.0  # 사용자 지정 하한, 실기 경로 검증 필요
   pick_to_peg_margin_mm: 5.0  # 기구학 모델 여유(임시). 반환 후에는 Z>=224로 상승
   pick_return_tolerance_mm: 2.0  # 반환 위치 확인 허용 오차(mm), 실기 검증 전 임시값

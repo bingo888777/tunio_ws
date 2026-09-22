@@ -569,7 +569,7 @@ def _check_peg_transfer_path(start, goal, floor, margin):
         pending.extend(((a, mid, depth + 1), (mid, b, depth + 1)))
 
 
-def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
+def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, execute=True):
     """상승 완료 후 높은 접근점까지 이동하고, 그 자리에서만 수직 하강한다."""
     api = _require_api()
     from DR_common2 import posx
@@ -588,7 +588,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
     if not math.isfinite(back) or back <= 0:
         raise MotionError("피크→페그: 접근 거리는 유한한 양수여야 한다")
     approach = TP.backed_off(pose.task, back)
-    high = list(approach)
+    high = list(approach[:3]) + current[3:]  # 높은 곳에서는 페그 파지 자세로 꺾지 않는다
     high[2] = max(current[2], floor + 2 * margin, approach[2])
     try:
         goal = [float(v) for v in api.ikin(posx(high), pose.sol)]
@@ -599,6 +599,21 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
             raise ValueError(f"IK/FK 위치 대조 오차 {error:.1f}mm")
     except Exception as exc:
         raise MotionError(f"피크→페그 높은 접근점 IK 실패: {exc}") from exc
+    lower = list(approach[:3]) + current[3:]
+    # 하강/제자리 자세 변경의 끝점도 먼저 검사한다. 제한을 풀어 진행하지 않는다.
+    j5, j6, joint_margin = _peg_joint_limits(motion)
+    for label, task in (("하강", lower), ("페그 앞 자세 변경", approach)):
+        try:
+            joints = [float(v) for v in api.ikin(posx(task), pose.sol)]
+            if len(joints) != 6 or not all(math.isfinite(v) for v in joints):
+                raise ValueError("유효한 관절각이 아니다")
+            if abs(joints[4]) > j5 - joint_margin or abs(joints[5]) > j6:
+                raise ValueError(f"J5={joints[4]:+.2f}(허용 ±{j5 - joint_margin:g}), "
+                                 f"J6={joints[5]:+.2f}(허용 ±{j6:g})")
+            if math.dist(K.fk(joints)["tcp"], task[:3]) > margin:
+                raise ValueError("IK/FK 위치 불일치")
+        except Exception as exc:
+            raise MotionError(f"피크→페그 {label} 목표 검사 실패: {exc}") from exc
     plan = []
     if _peg_route_required(start[0], side, motion):
         if route is None or route.joints[0] != 90.0:
@@ -608,9 +623,16 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
     # 어떤 이동도 보내기 전에 경유를 포함한 전체 높은 이동 구간을 검사한다.
     previous = start
     j5, j6, joint_margin = _peg_joint_limits(motion)
+    if logger:
+        logger.info(f"경로 진단: 현재 TCP={current}, 현재 관절={start}")
+        logger.info(f"경로 진단: 높은 목표 TCP={high}, sol={pose.sol}, IK 관절={goal}")
+        logger.info(f"경로 진단: J5 허용 ±{j5 - joint_margin:g}도, J6 허용 ±{j6:g}도")
     for target in plan:
         if abs(target[4]) > j5 - joint_margin or abs(target[5]) > j6:
-            raise MotionError("피크→페그: 목표 관절각이 J5/J6 제한을 넘는다")
+            raise MotionError(
+                f"피크→페그 목표 관절 제한 초과: J5={target[4]:+.2f}도 "
+                f"(허용 ±{j5 - joint_margin:g}), J6={target[5]:+.2f}도 (허용 ±{j6:g}); "
+                f"목표 Z={high[2]:.2f}mm, sol={pose.sol}. 이동하지 않는다")
         if min(previous[0], target[0]) <= -90 <= max(previous[0], target[0]):
             raise MotionError("피크→페그: J1=-90도 통과 경로는 허용하지 않는다")
         _check_peg_transfer_path(previous, target, floor, margin)
@@ -618,6 +640,9 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
     if logger:
         logger.info(f"피크→페그: TCP/J3~J6 높이 검사 통과, "
                     f"상단 Z={high[2]:.1f}mm → 접근점에서만 Z={approach[2]:.1f}mm로 하강")
+    if not execute:
+        return {"current_tcp": current, "current_joints": start, "high_tcp": high,
+                "approach_tcp": approach, "lower_tcp": lower, "joint_plan": plan}
     for target in plan:
         if confirm:
             confirm(f"높은 경로 관절 이동: {[round(v, 2) for v in target]}")
@@ -635,9 +660,17 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None):
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
     if actual[2] < floor or math.dist(actual[:3], high[:3]) > 2.0:
         raise MotionError("피크→페그: 높은 접근점 미도달, 하강 금지")
-    # XY는 접근점에 도착했고 자세도 높은 곳에서 맞췄다. 여기서만 하강 허용.
+    # 높은 점의 자세 그대로 수직 하강한다. 손목 회전은 페그 앞에서 따로 한다.
     v, a = _transit_speed(motion)
-    _movel_base(approach, v, a)
+    _movel_base(lower, v, a)
+    actual, _ = read_posx()
+    if (len(actual) != 6 or not all(math.isfinite(x) for x in actual)
+            or math.dist(actual[:3], lower[:3]) > 2.0):
+        raise MotionError("피크→페그 하강 미도달: 자세 변경 금지")
+    if confirm:
+        confirm("페그 앞 접근점에서 TCP 위치를 고정하고 페그 파지 자세로 회전")
+    # 이동용 배율과 분리한 저속 자세 회전(임시 5도/s, 10도/s²).
+    _movel_base(approach, [v, 5.0], [a, 10.0])
 
 
 def _goto_pose(pose, motion):

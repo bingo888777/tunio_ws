@@ -42,16 +42,24 @@ def transfer(monkeypatch):
     back = TP.backed_off(pose.task, 100)
     high = list(back)
     high[2] = 224
+    high[3:] = [0, 180, 0]
     sim = SimpleNamespace(joints=[0] * 6, tcp=[400, 0, 224, 0, 180, 0], calls=[])
-    goal = [20, 10, 10, 10, 90, 0]
+    solutions = {}
+
+    def ikin(task, sol):
+        key = tuple(task)
+        if key not in solutions:
+            solutions[key] = [20, len(solutions) + 1, 10, 10, 90, 0]
+        return list(solutions[key])
     monkeypatch.setitem(sys.modules, "DR_common2", SimpleNamespace(posx=list))
     monkeypatch.setattr(MP, "_api", SimpleNamespace(
-        get_current_posj=lambda: list(sim.joints), ikin=lambda p, sol: list(goal)))
+        get_current_posj=lambda: list(sim.joints), ikin=ikin))
     monkeypatch.setattr(MP, "read_posx", lambda: (list(sim.tcp), 2))
 
     def fk(j):
         f = geometry(224)
-        f["tcp"] = high[:3]
+        f["tcp"] = next((list(task[:3]) for task, joints in solutions.items()
+                         if joints == list(j)), high[:3])
         return f
     monkeypatch.setattr(K, "fk", fk)
 
@@ -60,17 +68,21 @@ def transfer(monkeypatch):
         sim.joints = list(j)
         sim.tcp = list(high)
     monkeypatch.setattr(MP, "_movej", movej)
-    monkeypatch.setattr(MP, "_movel_base", lambda p, v, a: sim.calls.append(("down", list(p))))
+
+    def movel(p, v, a):
+        sim.calls.append(("down" if p[3:] == sim.tcp[3:] else "orient", list(p)))
+        sim.tcp = list(p)
+    monkeypatch.setattr(MP, "_movel_base", movel)
     return sim, pose, back
 
 
 def test_높은_접근점_도착_후에만_수직_하강한다(transfer):
     sim, pose, back = transfer
     MP._pick_to_peg_approach(pose, "right", None, {})
-    assert [c[0] for c in sim.calls] == ["high", "down"]
+    assert [c[0] for c in sim.calls] == ["high", "down", "orient"]
     assert sim.calls[-1][1] == back
     assert sim.tcp[:2] == back[:2]
-    assert sim.tcp[2] == 224
+    assert sim.tcp[2] == 108
 
 
 @pytest.mark.parametrize("failure", ["height", "ik", "joint", "late_segment"])
@@ -113,3 +125,50 @@ def test_하강_확인을_거부하면_높은_접근점에_남는다(transfer):
         MP._pick_to_peg_approach(pose, "right", None, {}, confirm=confirm)
     assert [c[0] for c in sim.calls] == ["high"]
     assert sim.tcp[2] == 224
+
+
+def test_실기진단은_검사를_통과해도_이동하지_않는다(transfer):
+    sim, pose, _ = transfer
+    plan = MP._pick_to_peg_approach(pose, "right", None, {}, execute=False)
+    assert plan["high_tcp"][2] == 224
+    assert sim.calls == []
+
+
+def test_목표_관절_초과_메시지에_실제값과_허용범위가_있다(transfer, monkeypatch):
+    sim, pose, _ = transfer
+    monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [0, 0, 0, 0, 140, 0])
+    with pytest.raises(MP.MotionError, match=r"J5=\+140.00.*±130.*J6=\+0.00.*±360"):
+        MP._pick_to_peg_approach(pose, "right", None, {}, execute=False)
+    assert sim.calls == []
+
+
+def test_높은_위치에서는_페그_자세_IK를_요청하지_않는다(transfer, monkeypatch):
+    sim, pose, _ = transfer
+    original = MP._api.ikin
+    requests = []
+
+    def ikin(task, sol):
+        requests.append(list(task))
+        if task[2] > 214 and task[3:] == pose.task[3:]:
+            raise RuntimeError("높은 곳에서 페그 자세로 꺾으면 J5 한계")
+        return original(task, sol)
+    monkeypatch.setattr(MP._api, "ikin", ikin)
+    MP._pick_to_peg_approach(pose, "right", None, {})
+    assert requests[0][3:] == [0, 180, 0]
+    assert sim.calls[-2][1][3:] == [0, 180, 0]
+    assert sim.calls[-1][1][3:] == pose.task[3:]
+
+
+def test_반환후_접근도_공통_이동속도배율을_사용한다(transfer, monkeypatch):
+    sim, pose, _ = transfer
+    original = MP._movej
+    seen = []
+
+    def movej(joints, motion):
+        seen.append(motion["speed_scale"])
+        return original(joints, motion)
+    monkeypatch.setattr(MP, "_movej", movej)
+    motion = {"speed_scale": 2.0}
+    MP._pick_to_peg_approach(pose, "right", None, motion)
+    assert seen == [2.0]
+    assert motion["speed_scale"] == 2.0

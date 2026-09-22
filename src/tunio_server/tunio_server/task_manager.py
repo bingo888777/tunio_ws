@@ -13,6 +13,7 @@ from datetime import datetime
 import threading
 import time
 
+from action_msgs.msg import GoalStatus
 from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 import rclpy
 from rclpy.action import ActionClient
@@ -49,11 +50,11 @@ STATE_QOS = QoSProfile(
 # 기획 2.4 "측정 재시도와 페그 조절 횟수는 별도로 관리한다" 를 따라 리셋으로 뒀다.
 MEASURE_RETRY_RESET_AFTER_ADJUST = True
 
-# B2-1. PlayString 이 실패했을 때. True 면 측정 재시도 1회로 치고 같은 줄을 다시 시도한다.
-PLAY_FAILURE_COUNTS_AS_MEASURE_RETRY = True
+# 2026-09-22 사용자 결정: 로봇 실패는 측정 재시도로 넘기지 않고 작업 중단.
+PLAY_FAILURE_COUNTS_AS_MEASURE_RETRY = False
 
-# B3-1. AdjustPeg 이 실패했을 때. True 면 그 줄만 FAIL_ROBOT_ERROR 로 접고 다음 줄로 간다.
-ADJUST_FAILURE_SKIPS_STRING_ONLY = True
+# 2026-09-22 사용자 결정: 성공 Result 없이 다음 줄의 로봇 명령을 보내지 않는다.
+ADJUST_FAILURE_SKIPS_STRING_ONLY = False
 
 # C2-1. 검증 패스에서 '측정 자체가' 실패했을 때 (허용 센트를 벗어난 게 아니라).
 # True 면 Phase 1 판정을 유지하고 has_verified_hz=false 로만 남긴다.
@@ -452,29 +453,32 @@ class TaskManager(Node):
                 self.get_logger().warning('취소 요청 실패: %s' % exc)
 
     def _run_action(self, client, goal, timeout, what, feedback_cb=None):
-        """Goal 을 보내고 수락과 결과를 기다린다. 실패하면 None."""
+        """성공 Result를 확인해야 반환한다. 실패/거부/종료 불명은 작업 중단."""
         send = client.send_goal_async(goal, feedback_callback=feedback_cb)
         handle = self._wait(send, float(self._p('goal_response_sec')), '%s 수락' % what)
         if handle is None:
             raise Aborted('%s 수락 여부 불명 — 후속 동작 중단' % what)
         if not handle.accepted:
-            self.get_logger().error('%s goal 거부' % what)
-            return None
+            raise Aborted('%s goal 거부 — 후속 동작 중단' % what)
         self._track(handle)
         try:
             future = handle.get_result_async()
             wrapped = self._wait(future, timeout, '%s 결과' % what)
             if wrapped is None:
                 # 취소 수락만으로 실제 팔 정지가 보장되지 않는다. 결과를 확인해야
-                # 다음 줄을 요청할 수 있다. 늦게 성공해도 이번 요청은 실패로 처리한다.
+                # 다음 동작을 요청할 수 있다. 추가 대기 중 받은 성공도 그대로 반영한다.
                 self.get_logger().warning('%s 시간 초과 — 로봇 종료 응답을 기다린다' % what)
-                ended = self._wait(future, float(self._p('robot_completion_wait_sec')),
-                                   '%s 종료 확인' % what)
-                if ended is None:
+                wrapped = self._wait(future, float(self._p('robot_completion_wait_sec')),
+                                     '%s 종료 확인' % what)
+                if wrapped is None:
                     raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
-        return wrapped.result if wrapped is not None else None
+        if wrapped.status != GoalStatus.STATUS_SUCCEEDED or not wrapped.result.success:
+            raise Aborted('%s 실패(status=%s): %s — 후속 동작 중단'
+                          % (what, wrapped.status, wrapped.result.message))
+        self.get_logger().info('%s 성공 Result 확인' % what)
+        return wrapped.result
 
     # ------------------------------------------------------------------ 단계 경계
 
@@ -755,11 +759,8 @@ class TaskManager(Node):
         self._set_phase(TuningState.PHASE_STRUM, 0)
         goal = StrumAll.Goal()
         goal.string_numbers = [int(n) for n in (self._p('strum_string_numbers') or [])]
-        res = self._run_action(self.cli_strum, goal,
-                               float(self._p('strum_timeout_sec')), 'strum_all')
-        if res is None or not res.success:
-            # 연출 동작이다. 실패해도 조율 결과에는 영향을 주지 않는다
-            self.get_logger().warning('화음 마무리 실패. 결과 판정에는 반영하지 않는다')
+        self._run_action(self.cli_strum, goal,
+                         float(self._p('strum_timeout_sec')), 'strum_all')
 
     def _return_home(self):
         """피크 반환과 복귀는 미구현 화음의 성공 여부와 분리한다."""
