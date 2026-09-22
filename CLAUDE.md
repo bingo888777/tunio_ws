@@ -300,7 +300,9 @@
   - 녹음 길이는 줄마다 다르게 잡는다. 고음 1.5초, 저음 2.0초
     (안정화 판정이 겹치는 창 3개를 쓰므로 고음도 1.0초로는 부족하다.
      실측 스윕은 src/tunio_audio/tunio_audio/audio_analyzer.py 주석)
-  - 통신 지연(ROS Action 왕복 + 3 PC Wi-Fi)은 아직 미포함. 통합 후 측정
+  - 통신 지연(ROS Action 왕복 + Wi-Fi)은 아직 미포함. 통합 후 측정.
+    2026-09-22 에 PC 2대가 되면서 `/audio/measure_pitch` 는 한 PC 안으로 들어왔다 —
+    이 예산에는 더 이상 Wi-Fi 왕복이 없다 (6절)
   - **타임아웃 카운트 시작은 마이크가 onset을 검출한 시점**이다
 - onset 제한 시간 10초 (임시값). 이 안에 소리가 안 들어오면 '소리 부족'으로 처리한다.
   이 상한이 없으면 발현이 실패했을 때 측정이 끝나지 않는다
@@ -395,10 +397,19 @@ src/
 - 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
   작업 진행 여부를 아는 유일한 노드라 '작업 중 변경 거부'를 스스로 판단)
 
-### 3 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID)
-- 서버 PC: tunio_server
+### 2 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID) — 2026-09-22 변경
+**PC 3대에서 2대로 줄었다.** 마이크와 서버를 한 대로 합쳤다. 노드도 인터페이스도
+그대로고 **어느 PC 에서 도는가만 바뀌었다.** 자세한 것은
+`docs/TUNIO_시스템아키텍처_v3.md`.
+- 정정인 PC: tunio_server + tunio_audio  (`ros2 launch tunio_bringup station.launch.py`)
 - 로봇 제어 PC: tunio_robot (+ 두산 컨트롤러 유선 LAN)
-- 마이크 PC: tunio_audio
+  (`ros2 launch tunio_robot robot.launch.py dry_run:=false`)
+
+**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all` 셋뿐이다.**
+`/audio/measure_pitch` 는 한 PC 안으로 들어와 왕복이 없어졌다 — 측정 응답 2.2초
+예산에 유리하다. 대신 정정인 PC 한 대에서 노드 4개가 도니 **통합 첫 회차에서
+응답 시간이 2.2초를 넘는지 봐야 한다.**
+Discovery Server 를 띄우는 자리도 서버 PC 에서 **정정인 PC** 로 옮겨졌다.
 
 ---
 
@@ -611,6 +622,9 @@ colcon test --packages-select tunio_server && colcon test-result --all
   증상/원인/조치/남은 것으로 나뉘고, **12장에 반복된 패턴 다섯 가지**가 따로 있다.
   개별 항목보다 그쪽이 다음 사고를 막는 데 쓸모 있다
 - docs/TUNIO_관제웹_구현.md — 관제 웹 실행법·구조·주의점 (팀 공유용)
+- **docs/TUNIO_시스템아키텍처_v3.md — PC 2대 구성. 6절의 기준본** (2026-09-22)
+- **docs/TUNIO_1차통합_가이드.md — 통합 당일 절차.** 어디까지 갈 수 있는지(0절)부터
+- docs/페그실측_줄별_명령어.md — 줄별 백래시·최소 유효 각도 측정 명령
 - docs/통합_1차_서버DB관제.md — 서버·DB·관제 웹 1차 통합 기록
 - docs/task_manager_구현_브리핑.md — 구현 전 미결 항목 질문 양식 (기록용)
 
@@ -654,7 +668,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - 브릿지핀 안착 확인 — 범위 제외
 - 완료 결과 저장 — task_manager가 result_store에 save_job 호출.
   4줄을 완주했으면 PARTIAL·FAILED 도 저장한다(중간에 끊긴 작업만 제외)
-- UI — 관제 웹(rclpy 노드 안 http.server, 서버 PC localhost 전용). PyQt 대체
+- UI — 관제 웹(rclpy 노드 안 http.server, 정정인 PC localhost 전용). PyQt 대체
 - 피크 — 거치대에서 집었다 반환. 시점은 로봇이 판단하고 서버는 지시하지 않는다
 - 대기 자세 복귀 — 전용 Action 없이 strum_all 이 책임진다. **화음이 실패해도 복귀는
   한다** — 복귀를 먼저 하고 원래 예외를 올린다 (2026-09-21, #58). 근거는 5절 Phase 2

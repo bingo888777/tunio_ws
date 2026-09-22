@@ -17,9 +17,13 @@
    tunio_robot 의 config/teach_points.yaml 에서 쓰려는 자세들의 taught 가 true 여야
    한다. 피크 거치대(pick.holder), 페그 4개, 발현 자세 4개, frames.standby 가 필요하다.
 
-3. 그리퍼 인수를 줬는가
-   gripper:=rg2 를 반드시 준다. 기본값이 rg6 라서 한계값이 120N·160mm 로 잡히고
-   RG2 가 못 내는 값을 걸러 주지 못한다 (CLAUDE.md 3.6).
+3. ⚠ gripper 인수는 지금 아무 일도 하지 않는다 (2026-09-22 확인)
+   robot_controller 가 'gripper' 파라미터를 선언하지도 읽지도 않는다. 그리퍼
+   한계값·프리셋은 teach_points.yaml 의 gripper 절에서 온다. 예전에 여기 적혀
+   있던 '반드시 rg2 를 준다, 기본값 rg6 는 위험하다'는 **틀린 안내였다** —
+   준 적이 없어도 rg6 로 돌지 않는다. 인수는 남겨 두되 믿지 말 것.
+   확인할 것은 teach_points.yaml 의 gripper.presets 가 웹에서 설정한 값과
+   같은지다 (CLAUDE.md 3.6).
 
 4. 마이크 향상 기능을 껐는가
    OS 의 노이즈 제거·자동 음량·에코 제거를 전부 끈다 (기획 2.6).
@@ -29,9 +33,11 @@
 ⚠ dry_run 기본값이 true 다. 로봇을 실제로 움직이려면 dry_run:=false 를 줘야 한다.
   실수로 켜자마자 움직이는 것보다 안 움직이는 쪽이 안전하기 때문이다.
 
-⚠ 3 PC 분산이 본래 구성이다. 이 파일은 한 PC 에 다 물렸을 때 쓴다.
-  분산할 때는 각 PC 에서 server.launch.py / robot.launch.py / audio.launch.py 를
-  따로 띄운다. ROS_DOMAIN_ID 를 맞추는 것을 잊지 말 것.
+⚠ 2 PC 분산이 본래 구성이다 (2026-09-22 변경, 이전에는 3대). 이 파일은 한 PC 에
+  다 물렸을 때 쓴다. 분산할 때는 —
+    정정인 PC     ros2 launch tunio_bringup station.launch.py   (마이크+서버+웹)
+    로봇 제어 PC  ros2 launch tunio_robot robot.launch.py
+  ROS_DOMAIN_ID 를 맞추는 것을 잊지 말 것. docs/TUNIO_시스템아키텍처_v3.md 참조.
 
 옵션
   dry_run:=false  실제로 로봇을 움직인다 (기본 true — 움직이지 않는다)

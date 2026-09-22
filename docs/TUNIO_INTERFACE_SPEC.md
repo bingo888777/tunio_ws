@@ -4,7 +4,10 @@
 아래 정의와 실제 파일이 다르면 **이 문서 쪽이 기준**이다.
 
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
-PC 3대가 ROS 2 Jazzy로 통신한다. 서버(task_manager, web_node, result_store) / 로봇(robot_controller) / 마이크(audio_analyzer).
+PC 2대가 ROS 2 Jazzy로 통신한다(2026-09-22, PC 3대에서 축소). 정정인 PC(task_manager,
+web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). 랜을 건너는
+인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all` 셋뿐이다 — `measure_pitch`는
+정정인 PC 한 대 안에서 돈다. 근거는 `CLAUDE.md` 6절.
 
 ---
 

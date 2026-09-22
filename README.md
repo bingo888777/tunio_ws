@@ -8,15 +8,16 @@
 
 ## 구성 (ROS 2 Jazzy / Ubuntu 24.04)
 
-3대의 PC가 동일 Wi-Fi에서 ROS 2로 통신한다.
+2대의 PC가 동일 Wi-Fi에서 ROS 2로 통신한다 (2026-09-22 변경, 이전에는 3대).
+마이크와 서버를 한 대로 합쳤다. 자세한 것은 `docs/TUNIO_시스템아키텍처_v3.md`.
 
 | 패키지 | 실행 PC | 담당 | 역할 |
 |---|---|---|---|
 | `tunio_interfaces` | 공용 | 전원 | msg / srv / action 정의 |
-| `tunio_server` | 서버 | 정동휘 | task_manager, web_node(관제 웹), result_store(SQLite) |
-| `tunio_robot` | 로봇 제어 | 정묵·성현 | robot_controller (두산 API) |
-| `tunio_audio` | 마이크 | 정정인 | audio_analyzer (녹음·주파수 분석) |
-| `tunio_bringup` | - | 공용 | 통합 런치 (단일 PC 테스트용) |
+| `tunio_server` | 정정인 PC | 정동휘 | task_manager, web_node(관제 웹), result_store(SQLite) |
+| `tunio_robot` | 로봇 제어 PC | 정묵·성현 | robot_controller (두산 API) |
+| `tunio_audio` | 정정인 PC | 정정인 | audio_analyzer (녹음·주파수 분석) |
+| `tunio_bringup` | - | 공용 | 통합 런치 (station / 단일 PC 테스트) |
 
 ## 노드 관계
 
@@ -66,13 +67,13 @@ source install/setup.bash
 PC별로 각자 실행:
 
 ```bash
-# 서버 PC
-ros2 launch tunio_server server.launch.py
+# 정정인 PC — 마이크 + 서버 + 관제 웹
+ros2 launch tunio_bringup station.launch.py
 # 로봇 제어 PC
-ros2 launch tunio_robot robot.launch.py
-# 마이크 PC
-ros2 launch tunio_audio audio.launch.py
+ros2 launch tunio_robot robot.launch.py dry_run:=false
 ```
+
+⚠ `robot.launch.py` 는 `dry_run` 기본값이 true 다. 안 주면 로봇이 안 움직인다.
 
 단일 PC 테스트:
 
@@ -80,7 +81,9 @@ ros2 launch tunio_audio audio.launch.py
 ros2 launch tunio_bringup all_in_one.launch.py
 ```
 
-세 PC는 같은 `ROS_DOMAIN_ID`를 export 해야 서로 보인다.
+두 PC는 같은 `ROS_DOMAIN_ID`를 export 해야 서로 보인다. 강의실 Wi-Fi가
+멀티캐스트를 막으면 Fast DDS Discovery Server를 쓴다 — 서버는 **정정인 PC**에서
+띄운다 (`docs/TUNIO_시스템아키텍처_v3.md`).
 
 ## 테스트
 
