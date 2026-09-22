@@ -30,6 +30,15 @@ def test_저장소_교시점_파일이_구조검증을_통과한다():
     tp.load(CONFIG)
 
 
+@pytest.mark.parametrize("key", ["turn_vel", "turn_acc"])
+@pytest.mark.parametrize("value", [0, -1, float("nan"), float("inf"), "3", True])
+def test_줄별_회전속도는_유한한_양수만_받는다(key, value):
+    data = _data()
+    data["pegs"][6][key] = value
+    with pytest.raises(tp.TeachPointsError, match=key):
+        tp.TeachPoints(data)
+
+
 def test_교시_전에는_자세_조회를_거부한다():
     """
     좌표가 들어 있어도 taught 가 false 면 거부한다.

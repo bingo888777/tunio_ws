@@ -118,6 +118,8 @@ def main():
     peg = points.peg(args.peg)
     motion = dict(points.motion)
     if args.speed:
+        motion.pop("transit_tcp_vel", None)
+        motion.pop("transit_tcp_acc", None)
         motion["vel"] = args.speed
 
     print(f"\n{'=' * 66}")

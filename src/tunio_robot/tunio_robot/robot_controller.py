@@ -439,15 +439,11 @@ class RobotController(Node):
             self._cross_to(side)
             # 손잡이 각을 모르면 돌리지 않는다. 미등록이면 여기서 Phase 0 를 돈다 (#31)
             roll = self._ensure_registered(r.string_number)
-            MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll)
-            # 돌린 만큼 손잡이도 돌아갔다. **성공한 뒤에만** 적는다 —
-            # 중간에 실패하면 얼마나 돌았는지 모르므로 누적하면 더 틀어진다
-            # J6 일 때만 누적한다. 관절 회전량이 곧 손목 롤(posx 의 C)인 건 J6 뿐이라,
-            # 다른 관절 값을 각으로 쌓으면 다음 진입이 틀린 방향으로 돈다 (#31)
-            if joint == 6:
-                self.pegs.add_turn(r.string_number, delta)
-                self.pegs.save()
-            else:
+            # 회전/후퇴 중 실패하면 예전 각을 다시 믿지 않는다. 되감기는 페그를
+            # 안 돌리므로 누적량에 넣지 않고, 요청한 delta만 성공 후 확정한다 (#70).
+            with self.pegs.turning(r.string_number, delta if joint == 6 else None):
+                MP.adjust_peg(pose, joint, delta, self.points.motion, roll_deg=roll)
+            if joint != 6:
                 self.get_logger().warn(
                     f"peg_joint 가 J{joint} 라 손잡이 각을 누적하지 않는다. "
                     "각 추적은 J6 전용이다 (#31)")

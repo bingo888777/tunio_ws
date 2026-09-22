@@ -69,6 +69,9 @@ class _Api:
         self.pushing = False
         return 0
 
+    def get_current_posj(self):
+        return [0.0] * 6
+
 
 @pytest.fixture
 def spy(monkeypatch):

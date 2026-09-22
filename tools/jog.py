@@ -66,6 +66,8 @@ def main():
     if args.approach is None:
         args.approach = points.motion.get("approach_mm", 100.0)
     motion = dict(points.motion)
+    motion.pop("transit_tcp_vel", None)  # 수동 조그의 --speed를 우선
+    motion.pop("transit_tcp_acc", None)
     scale = max(0.05, args.speed / 100.0)
     motion["vel"] = points.motion.get("vel", 30) * scale
     motion["acc"] = points.motion.get("acc", 30) * scale

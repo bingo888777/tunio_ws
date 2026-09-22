@@ -118,6 +118,8 @@ def main():
             handle[key] = v
     motion = dict(points.motion)
     if args.speed:
+        motion.pop("transit_tcp_vel", None)
+        motion.pop("transit_tcp_acc", None)
         motion["vel"] = args.speed
     state = PS.PegState(path=args.state or PS.DEFAULT_PATH).load()
     if args.fresh:
@@ -224,11 +226,10 @@ def main():
                     f"J{joint} 를 {delta:+.1f}도 돌린다.\n"
                     f"    들어갈 때 손목이 {before:+.1f}도 돌아간 채인지 눈으로 보라. "
                     "세로로 정렬해 들어가면 그게 되돌림이다.")
-            MP.adjust_peg(peg, joint, delta, motion, roll_deg=before)
-            state.add_turn(no, delta)
-            state.save()
+            with state.turning(no, delta if joint == 6 else None):
+                MP.adjust_peg(peg, joint, delta, motion, roll_deg=before)
             after = state.roll_of(no)
-            print(f"    ✓ 손잡이 각 {before:+.1f} -> {after:+.1f}도")
+            print(f"    ✓ 손잡이 각 {before:+.1f} -> {after}도")
             rec["attempts"].append({"cycle": c, "before": before,
                                     "joint_delta": delta, "after": after})
         log["results"][no] = rec

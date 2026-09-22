@@ -69,6 +69,8 @@ def main():
     route_j1 = route.joints[0]
 
     motion = dict(points.motion)
+    motion.pop("transit_tcp_vel", None)  # 경로 점검의 --speed를 우선
+    motion.pop("transit_tcp_acc", None)
     scale = max(0.05, args.speed / 100.0)
     for key, default in (("vel", 30), ("acc", 30)):
         motion[key] = points.motion.get(key, default) * scale

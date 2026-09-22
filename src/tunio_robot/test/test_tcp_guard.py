@@ -129,7 +129,9 @@ class _Peg:
 def test_adjust_peg_가_움직이기_전에_TCP_를_켠다(api, monkeypatch):
     """순서가 중요하다. 켜기가 goto 보다 **뒤**면 첫 직선 진입이 틀린 기준으로 나간다."""
     order = []
-    monkeypatch.setattr(MP, "_goto_pose", lambda *a: order.append("goto"))
+    monkeypatch.setattr(api, "get_current_posj", lambda: [0.0] * 6, raising=False)
+    monkeypatch.setattr(MP, "_movejx", lambda *a, **k: order.append("approach"))
+    monkeypatch.setattr(MP, "_movel", lambda *a: order.append("entry"))
     monkeypatch.setattr(MP, "_grip", lambda *a: order.append("grip"))
     monkeypatch.setattr(MP, "_release", lambda *a: order.append("release"))
     monkeypatch.setattr(MP, "_retreat", lambda *a: order.append("retreat"))
@@ -139,7 +141,7 @@ def test_adjust_peg_가_움직이기_전에_TCP_를_켠다(api, monkeypatch):
     MP.adjust_peg(_Peg(), 6, -5.0, {})
     assert order[0] == "tcp"                     # 어떤 움직임보다도 먼저
     # 진입 전에 30mm 로 연다(#31). 그다음 이동, 그다음 파지
-    assert order[:4] == ["tcp", "grip", "goto", "grip"]
+    assert order[:5] == ["tcp", "grip", "approach", "entry", "grip"]
 
 
 def test_TCP_가_거부되면_페그로_안_간다(api, monkeypatch):

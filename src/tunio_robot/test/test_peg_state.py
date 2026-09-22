@@ -6,6 +6,7 @@
 페그가 그리퍼 쪽으로 끌려오면서 **직전 회전이 그대로 롤백된다.**
 """
 import os
+from types import SimpleNamespace
 
 import pytest
 from tunio_robot import kinematics as K
@@ -197,7 +198,7 @@ def spy(monkeypatch):
     """MP 의 저수준 동작을 기록만 하도록 바꾼다. 로봇을 안 부른다."""
     from tunio_robot import motion_primitives as MP
     log = []
-    monkeypatch.setattr(MP, "_api", object())
+    monkeypatch.setattr(MP, "_api", SimpleNamespace(get_current_posj=lambda: [0.0] * 6))
     monkeypatch.setattr(MP, "ensure_tcp", lambda *a, **k: None)
     monkeypatch.setattr(MP, "_grip", lambda name: log.append(("grip", name)))
     monkeypatch.setattr(MP, "_release", lambda: log.append(("release",)))
@@ -266,9 +267,12 @@ def test_다_돌면_돌아간_자세로_나온다(spy):
     assert retreat[1][5] == pytest.approx(TAUGHT_C + 40.0 - 30.0)
 
 
-def test_돌다가_실패하면_들어온_자세로_나온다(spy, monkeypatch):
-    """얼마나 돌았는지 모른다. 들어온 자세가 그나마 아는 값이다."""
+def test_돌다가_실패하면_현재_자세로_나온다(spy, monkeypatch):
+    """부분 회전 후 교시 방향으로 되돌리지 않는다 (#70)."""
     MP, log = spy
+    current = list(PEG6)
+    current[5] += 25.0                             # 40도에서 -15도만 회전하고 실패
+    monkeypatch.setattr(MP, "read_posx", lambda: (current, 7))
 
     def boom(*a, **k):
         raise MP.MotionError("회전 실패")
@@ -278,7 +282,7 @@ def test_돌다가_실패하면_들어온_자세로_나온다(spy, monkeypatch):
         MP.adjust_peg(_Peg(PEG6), 6, -30.0, {}, roll_deg=40.0)
     assert [e for e in log if e[0] == "release"]        # 실패해도 놓는다
     retreat = [e for e in log if e[0] == "movel"][-1]
-    assert retreat[1][5] == pytest.approx(TAUGHT_C + 40.0)
+    assert retreat[1][5] == pytest.approx(TAUGHT_C + 25.0)
 
 
 def test_들어가기_전에_연다(spy):
@@ -337,3 +341,21 @@ def test_거부되면_움직이지_않는다(spy):
     with pytest.raises(MP.MotionError):
         MP.adjust_peg(_Peg(PEG6), 5, -30.0, {}, roll_deg=40.0)
     assert not [e for e in log if e[0] in ("movejx", "movel", "movej")]
+
+
+@pytest.mark.parametrize("no,expected", [
+    (6, (3.0, 6.0)), (5, (3.0, 6.0)), (2, (3.0, 6.0)), (1, (2.0, 4.0)),
+])
+def test_줄별_속도는_페그_회전에만_적용된다(spy, monkeypatch, no, expected):
+    from tunio_robot import teach_points as TP
+    MP, _ = spy
+    points = TP.load(os.path.join(os.path.dirname(__file__), "..", "config", "teach_points.yaml"))
+    before = dict(points.motion)
+    calls = []
+    monkeypatch.setattr(MP, "_movej", lambda j, m, relative=False:
+                        calls.append((m["vel"], m["acc"], m["speed_scale"], relative)))
+    MP.adjust_peg(points.peg(no), 6, -30, points.motion, roll_deg=20.0)
+    assert calls == [(expected[0], expected[1], 1.0, True)]
+    unwind = MP.turn_motion(points.motion)
+    assert (unwind["vel"], unwind["acc"]) == (2.0, 4.0)
+    assert points.motion == before
