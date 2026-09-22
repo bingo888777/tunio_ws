@@ -1,0 +1,12 @@
+{
+  "tool": "pluck_session",
+  "strings": [
+    6
+  ],
+  "repeat": 1,
+  "gap_sec": 4.0,
+  "dy_mm": 0.0,
+  "started_at": "2026-09-22 11:39:11",
+  "plucks": [],
+  "ended_at": "2026-09-22 11:39:57"
+}
