@@ -2,7 +2,7 @@
 2단계 · 마이크만 진짜 — 사람이 직접 줄을 튕겨 측정을 검증한다.
 
 USB 마이크로 실제 소리를 재고, 실제 판정 로직이 돈다. 로봇만 가짜다.
-로봇 동작(pluck_string, strum_all)이 아직 구현 전이라 이 단계가 필요하다.
+로봇 동작(pluck_string, wipe_strings)이 아직 구현 전이라 이 단계가 필요하다.
 
   진짜: audio_analyzer · task_manager · result_store · web_node
   가짜: fake_hardware (serve_measure=false — 로봇 자리만 대신한다)
@@ -65,7 +65,7 @@ def generate_launch_description():
              parameters=[{'serve_measure': False, 'serve_robot': True,
                           'prepare_delay_sec': LaunchConfiguration('prepare_delay_sec'),
                           'play_delay_sec': 1.0, 'adjust_delay_sec': 2.0,
-                          'strum_delay_sec': 1.0}]),
+                          'wipe_delay_sec': 1.0}]),
 
         Node(package='tunio_server', executable='task_manager', name='task_manager',
              output='screen', parameters=[{'peg_calibration_file': sim_cal}]),

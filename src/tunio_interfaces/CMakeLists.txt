@@ -14,7 +14,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/PlayString.action"
   "action/PreparePluck.action"
   "action/AdjustPeg.action"
-  "action/StrumAll.action"
+  "action/WipeStrings.action"
   "action/RegisterPeg.action"
   "action/ReturnHome.action"
   "msg/TuningSettings.msg"

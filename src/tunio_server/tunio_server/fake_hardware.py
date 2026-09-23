@@ -48,7 +48,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
 from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, PreparePluck,
-                                     RegisterPeg, ReturnHome, StrumAll)
+                                     RegisterPeg, ReturnHome, WipeStrings)
 from tunio_interfaces.srv import SaveJob
 
 # mode 파라미터 값
@@ -82,7 +82,7 @@ class FakeHardware(Node):
         self._registered_strings = set()
         self.declare_parameter('play_delay_sec', 3.0)      # 피크 집기+접근+발현+후퇴 (추정)
         self.declare_parameter('adjust_delay_sec', 4.0)    # 피크 반환+페그 파지+회전+해제 (추정)
-        self.declare_parameter('strum_delay_sec', 3.0)     # 화음 훑기+대기 자세 복귀 (추정)
+        self.declare_parameter('wipe_delay_sec', 3.0)       # 넥 닦기+대기 자세 복귀 (추정, 옛 strum_delay_sec)
         # result_store 를 같이 띄우면 그쪽이 /tuning/save_job 을 제공하므로 꺼 둔다.
         # 저장까지 가짜로 때우고 싶을 때만 켠다
         self.declare_parameter('serve_save_job', False)
@@ -122,7 +122,7 @@ class FakeHardware(Node):
                        (RegisterPeg, '/robot/register_peg', self.on_register),
                        (PlayString, '/robot/play_string', self.on_play),
                        (AdjustPeg, '/robot/adjust_peg', self.on_adjust),
-                       (StrumAll, '/robot/strum_all', self.on_strum)]
+                       (WipeStrings, '/robot/wipe_strings', self.on_wipe)]
         if not wanted:
             raise RuntimeError(
                 'serve_measure 와 serve_robot 이 둘 다 false 다. 대신할 게 없으면 띄울 이유가 없다')
@@ -346,11 +346,10 @@ class FakeHardware(Node):
                self._sim_get(req.string_number)))
         return AdjustPeg.Result(success=True, message='')
 
-    def on_strum(self, goal):
+    def on_wipe(self, goal):
         self._prepared_pluck = None
-        nums = list(goal.request.string_numbers)
-        return self._simple(goal, StrumAll.Result, 'strum_delay_sec',
-                            '화음 %s + 대기 자세 복귀' % (nums if nums else '전체'))
+        return self._simple(goal, WipeStrings.Result, 'wipe_delay_sec',
+                            '넥 닦기 + 대기 자세 복귀')
 
     # ------------------------------------------------------------------ 저장 대역
 

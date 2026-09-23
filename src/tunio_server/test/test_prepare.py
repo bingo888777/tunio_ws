@@ -81,7 +81,7 @@ def test_start_never_registers_even_if_registration_would_fail(failure):
         _set_phase=lambda *args: None,
         _p=lambda key: 180.0 if key == 'register_timeout_sec' else 0,
         _run_action=action, _tune_string=lambda no: calls.append(('tune', no)),
-        _verify_pass=lambda: None, _strum=lambda: None, _return_home=lambda: None,
+        _verify_pass=lambda: None, _wipe=lambda: None, _return_home=lambda: None,
         _save=lambda: None, _finish_error=lambda: calls.append(('error', 0)))
     n._register_pegs = lambda: TM.TaskManager._register_pegs(n)
     TM.TaskManager._run_job(n)
@@ -203,7 +203,7 @@ def test_adjust_success_remeasures_same_string():
 
 
 @pytest.mark.parametrize('home_ok', [True, False])
-def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(home_ok):
+def test_job_skips_unenabled_wipe_and_requires_home_success_before_save(home_ok):
     from tunio_interfaces.msg import TuningState
 
     calls = []
@@ -217,7 +217,7 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
         _register_pegs=lambda: calls.append('register'),
         _tune_string=lambda no: calls.append(('tune', no)),
         _verify_pass=lambda: calls.append('verify'),
-        _strum=Mock(side_effect=NotImplementedError('화음 미구현')),
+        _wipe=Mock(side_effect=NotImplementedError('화음 미구현')),
         _set_phase=lambda phase, no: phases.append(phase),
         cli_home=Mock(), _wait=Mock(side_effect=[handle, wrapped]),
         _cancel=threading.Event(), _pause=threading.Event(),
@@ -230,7 +230,7 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
         TM.TaskManager._return_home(n)
     n._return_home = home
     TM.TaskManager._run_job(n)
-    n._strum.assert_not_called()
+    n._wipe.assert_not_called()
     n.cli_home.send_goal_async.assert_called_once()
     assert calls == [*[('tune', no) for no in (6, 5, 2, 1)],
                      'verify', 'home', 'save' if home_ok else 'error']

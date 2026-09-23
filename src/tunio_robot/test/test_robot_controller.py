@@ -13,7 +13,7 @@ import pytest
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import MultiThreadedExecutor
-from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
+from tunio_interfaces.action import AdjustPeg, PlayString, WipeStrings
 from tunio_robot import motion_primitives as MP
 from tunio_robot.robot_controller import RobotController
 from tunio_robot.teach_points import Pose
@@ -340,10 +340,10 @@ def test_dry_run이면_MP를_안_부르고도_상태는_바뀐다(monkeypatch):
     assert node2._side is None
 
 
-def test_strum_all은_미구현_상태라_ensure_pick을_안_부른다(ros, taught):
-    """
-    이슈 #34-3. strum_all() 미구현 상태라 _ensure_pick() 을 안 부르는지 확인한다.
+def test_wipe_strings는_dry_run에서_ensure_pick을_안_부른다(ros, taught):
+    """이슈 #34-3. dry_run 경로는 _release_pick()/MP.wipe_strings() 를 안 탄다.
 
+    2026-09-23, 화음 자리를 물려받으며 그 전제도 같이 옮겨졌다.
     dry_run 이 아닌 실기에서 그 앞에 _ensure_pick() 이 있으면 예외로 죽기
     *전에* 진짜로 피크를 집어버려, 로봇이 피크를 쥔 채 반환도 못 하고
     멈춘다. dry_run 경로에서 _holding_pick 이 그대로인지로 확인한다.
@@ -351,20 +351,20 @@ def test_strum_all은_미구현_상태라_ensure_pick을_안_부른다(ros, taug
     h = Harness(taught)
     try:
         assert h.node._holding_pick is False
-        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal(string_numbers=[]))
+        handle = h.send(WipeStrings, "/robot/wipe_strings", WipeStrings.Goal())
         assert handle.result.success is True
         assert h.node._holding_pick is False    # _ensure_pick() 이 안 불렸다
     finally:
         h.shutdown()
 
 
-def test_strum_all_실기에서도_미리_쥔_피크는_반환한다(ros, taught, monkeypatch):
-    """
-    PR #38 리뷰 ③. strum_all() 이 예외를 던지기 전에 _release_pick() 을 부른다.
+def test_wipe_strings_실기에서도_미리_쥔_피크는_반환한다(ros, taught, monkeypatch):
+    """PR #38 리뷰 ③, 2026-09-23 화음 자리를 물려받으며 이어짐.
 
-    play_string 이 앞서 쥐어 놓은 피크는 strum_all() 이 NotImplementedError 로
-    죽기 전에 반환돼야 한다. 반환을 strum_all() 뒤에 두면 예외로 도달하지
-    않는다 — 실기 경로(dry_run 아님)로 확인한다.
+    wipe_strings() 가 예외를 던지기 전에 _release_pick() 을 부른다.
+    play_string 이 앞서 쥐어 놓은 피크는, wipe 교시점이 없어 wipe_strings() 가
+    TeachPointsError 로 죽기 전에 반환돼야 한다. 반환을 그 뒤에 두면 예외로
+    도달하지 않는다 — 실기 경로(dry_run 아님)로 확인한다.
     """
     h = Harness(taught)
     try:
@@ -373,9 +373,9 @@ def test_strum_all_실기에서도_미리_쥔_피크는_반환한다(ros, taught
         pick_return = mock.MagicMock()
         monkeypatch.setattr(MP, "pick_return", pick_return)
 
-        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal(string_numbers=[]))
+        handle = h.send(WipeStrings, "/robot/wipe_strings", WipeStrings.Goal())
 
-        assert handle.result.success is False    # strum_all() 미구현이라 여전히 실패
+        assert handle.result.success is False    # wipe 교시점이 없어 여전히 실패
         pick_return.assert_called_once()          # 그래도 반환은 이미 됐다
         assert h.node._holding_pick is False
     finally:
@@ -562,46 +562,46 @@ def test_힘_제어는_기본으로_꺼져_있다(ros):
 
 
 # ------------------------------------------------------------ 복귀 보장 (#58)
-def test_화음이_실패해도_복귀는_한다(ros, taught, monkeypatch):
+def test_넥닦기가_실패해도_복귀는_한다(ros, taught, monkeypatch):
     """
-    Strum_all 이 예외를 던져도 return_home 은 돈다.
+    wipe_strings 가 예외를 던져도 return_home 은 돈다 (2026-09-23, 화음 자리를 물려받음).
 
     전에는 바로 다음 줄인데도 안 돌았다 — 예외가 거기서 함수를 끝냈기 때문이다.
-    서버는 화음 실패를 "연출이라 결과에 영향 없다" 며 경고로만 넘기므로 화면에는
-    '조율 완료' 가 뜨는데, 실물은 팔이 마지막 페그 앞에 남았다. 아무도 모른다.
+    서버는 마무리 동작 실패를 "연출이라 결과에 영향 없다" 며 경고로만 넘기므로
+    화면에는 '조율 완료' 가 뜨는데, 실물은 팔이 마지막 페그 앞에 남았다. 아무도 모른다.
     """
     seen = []
 
     def 터진다(*a, **k):
-        raise NotImplementedError("성현 담당 — 훑기 동작 교시 후 구현")
+        raise MP.MotionError("wipe 절이 없다")
 
-    monkeypatch.setattr(MP, "strum_all", 터진다)
+    monkeypatch.setattr(MP, "wipe_strings", 터진다)
     monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
 
     h = Harness(taught)
     try:
         h.node.dry_run = False
         h.node._holding_pick = False
-        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal())
+        handle = h.send(WipeStrings, "/robot/wipe_strings", WipeStrings.Goal())
         assert seen == ["home"]                     # 복귀했다
         assert handle.result.success is False       # 그러면서 실패는 실패로 보고한다
-        assert "NotImplementedError" in handle.result.message
+        assert "wipe 절이 없다" in handle.result.message
     finally:
         h.shutdown()
 
 
-def test_화음이_되면_복귀도_그대로_한다(ros, taught, monkeypatch):
-    """구현이 들어온 뒤에도 순서는 같다 — 화음 다음 복귀."""
+def test_넥닦기가_되면_복귀도_그대로_한다(ros, taught, monkeypatch):
+    """구현이 들어온 뒤에도 순서는 같다 — 닦기 다음 복귀."""
     seen = []
-    monkeypatch.setattr(MP, "strum_all", lambda *a, **k: seen.append("strum"))
+    monkeypatch.setattr(MP, "wipe_strings", lambda *a, **k: seen.append("wipe"))
     monkeypatch.setattr(MP, "return_home", lambda *a, **k: seen.append("home"))
 
     h = Harness(taught)
     try:
         h.node.dry_run = False
         h.node._holding_pick = False
-        handle = h.send(StrumAll, "/robot/strum_all", StrumAll.Goal())
-        assert seen == ["strum", "home"]
+        handle = h.send(WipeStrings, "/robot/wipe_strings", WipeStrings.Goal())
+        assert seen == ["wipe", "home"]
         assert handle.result.success is True
     finally:
         h.shutdown()

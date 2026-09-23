@@ -1,7 +1,7 @@
 """
 robot_controller — 발현·페그 조절·화음 Action 서버. 두산 API 연동.
 
-여섯 Action(prepare_pluck / register_peg / play_string / adjust_peg / strum_all / return_home)은
+여섯 Action(prepare_pluck / register_peg / play_string / adjust_peg / wipe_strings / return_home)은
 같은 팔을 쓰므로
 동시에 실행되면 안 된다. 하나가 도는 동안 들어온 goal 은 REJECT 한다
 (audio_analyzer 의 동시 요청 거부와 같은 방식).
@@ -34,7 +34,7 @@ from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import JointState
 
 from tunio_interfaces.action import (AdjustPeg, PlayString, PreparePluck, RegisterPeg,
-                                     ReturnHome, StrumAll)
+                                     ReturnHome, WipeStrings)
 from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
@@ -269,9 +269,9 @@ class RobotController(Node):
             self, AdjustPeg, "/robot/adjust_peg",
             self.on_adjust, goal_callback=self.on_goal,
             cancel_callback=self.on_cancel, callback_group=cb)
-        self.strum_srv = ActionServer(
-            self, StrumAll, "/robot/strum_all",
-            self.on_strum_all, goal_callback=self.on_goal,
+        self.wipe_srv = ActionServer(
+            self, WipeStrings, "/robot/wipe_strings",
+            self.on_wipe_strings, goal_callback=self.on_goal,
             cancel_callback=self.on_cancel, callback_group=cb)
         self.get_logger().info("robot_controller 시작")
 
@@ -1042,45 +1042,31 @@ class RobotController(Node):
 
         return self._run("adjust_peg", goal, AdjustPeg.Result, work)
 
-    def on_strum_all(self, goal):
-        numbers = list(goal.request.string_numbers) or list(TP.STRINGS)
-
+    def on_wipe_strings(self, goal):
         def work():
-            # 화음 연출 직후 대기 자세로 복귀한다. PHASE_RETURN 을 호출할 전용
-            # Action 이 인터페이스 13개에 없어서 이 Action 이 복귀까지 책임진다
-            # (2026-09-19 결정). 정상 완료 경로에만 있다.
+            # 마무리 동작(안경닦이로 넥 닦기) 직후 대기 자세로 복귀한다.
+            # PHASE_RETURN 을 호출할 전용 Action 이 인터페이스에 없어서 이 Action이
+            # 복귀까지 책임진다 (2026-09-19 결정, 화음 자리를 물려받음).
             standby = self.points.frame("standby")
-            # TODO(성현, 이슈 #34-3): strum_all 이 구현되면 여기 _ensure_pick() 을
-            # 다시 넣는다 — 화음도 발현이라 피크가 필요하다. 지금 넣어두면
-            # motion_primitives.strum_all() 이 NotImplementedError 를 던지기
-            # *전에* 실제로 피크를 집어버려서, dry_run 이 아닌 실기에서 로봇이
-            # 피크를 쥔 채 반환도 못 하고 멈춘다. 미구현 상태에선 빼 둔다.
-            # (반환 쪽은 그대로 둔다 — play_string 이 앞서 쥐어 놨을 수 있어서다)
             if self.dry_run:
                 self.get_logger().info(
-                    f"[dry_run] 화음 훑기 {numbers} -> 대기 자세 복귀 {standby.joints}")
+                    f"[dry_run] 넥 닦기 -> 대기 자세 복귀 {standby.joints}")
                 return
-            # strum_all() 이 아직 NotImplementedError 를 던지므로, 반환을 그 뒤에
-            # 두면 절대 안 탄다 (PR #38 리뷰 ③). play_string 이 앞서 쥐어 놨을
-            # 피크를 반환하려면 여기서 먼저 해야 한다 — 미구현 상태라 앞에 둬도
-            # 잃는 게 없다.
+            # 기타 피크를 쥐고 있었으면 먼저 반환한다 — 안경닦이를 집으려면
+            # 그리퍼가 비어 있어야 한다. play_string 이 앞서 쥐어 놨을 수 있다.
             self._release_pick()
-            # strum_all() 은 아직 NotImplementedError 를 던진다. 그대로 두면 **복귀가
-            # 통째로 안 돈다** — 바로 다음 줄인데 예외가 여기서 함수를 끝내기 때문이다.
-            # 서버는 화음 실패를 "연출이라 결과에 영향 없다" 며 경고로만 넘기므로
-            # 화면에는 '조율 완료' 가 뜨는데, 실물은 팔이 마지막 페그 앞에 남는다.
-            # 아무도 그 사실을 모른다.
-            #
-            # 복귀는 화음과 달리 연출이 아니다. 무슨 일이 있어도 돌아가야 한다.
+            # 마무리 동작(닦기)과 복귀는 성격이 다르다(CLAUDE.md 5절, #58) — 닦기는
+            # 연출성 마무리라 실패해도 서버가 경고로 넘기지만, 복귀는 무슨 일이
+            # 있어도 한다. 닦기가 실패해도 복귀를 먼저 하고 원래 예외를 올린다.
             try:
-                MP.strum_all(numbers, self.points)
+                MP.wipe_strings(self.points, self.points.motion, logger=self.get_logger())
             except Exception as exc:               # noqa: B902 — 복귀가 먼저다
-                self.get_logger().warn(f"화음 훑기 실패 — {exc}. 복귀는 그대로 한다")
+                self.get_logger().warn(f"넥 닦기 실패 — {exc}. 복귀는 그대로 한다")
                 MP.return_home(standby, self.points.motion)
                 raise
             MP.return_home(standby, self.points.motion)
 
-        return self._run("strum_all", goal, StrumAll.Result, work)
+        return self._run("wipe_strings", goal, WipeStrings.Result, work)
 
 
 def main():

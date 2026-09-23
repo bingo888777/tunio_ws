@@ -360,7 +360,7 @@ class MockState(Node):
 
             self._verify_pass()
 
-            self._set_phase(TuningState.PHASE_STRUM)
+            self._set_phase(TuningState.PHASE_WIPE)
             self._sleep(1.5)
             self._set_phase(TuningState.PHASE_RETURN)
             self._sleep(1.5)

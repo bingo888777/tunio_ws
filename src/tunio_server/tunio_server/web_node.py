@@ -68,7 +68,7 @@ PHASE_LABELS = {
     TuningState.PHASE_ANALYZE: '분석',
     TuningState.PHASE_ADJUST_PEG: '페그 조절',
     TuningState.PHASE_VERIFY: '최종 검증',
-    TuningState.PHASE_STRUM: '화음 마무리',
+    TuningState.PHASE_WIPE: '넥 닦기',
     TuningState.PHASE_RETURN: '대기 자세 복귀',
     TuningState.PHASE_DONE: '완료',
     TuningState.PHASE_PAUSED: '일시정지',
