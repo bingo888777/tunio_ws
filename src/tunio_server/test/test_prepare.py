@@ -7,6 +7,12 @@ import pytest
 from tunio_server import task_manager as TM
 
 
+@pytest.fixture(autouse=True)
+def four_string_scenario(monkeypatch):
+    # 현장 시험용 STRING_ORDER 변경과 별개로 네 줄 등록 시나리오를 검증한다.
+    monkeypatch.setattr(TM.L, 'STRING_ORDER', [6, 5, 2, 1])
+
+
 @pytest.mark.parametrize('registration_ok', [True, False])
 def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
     import threading
