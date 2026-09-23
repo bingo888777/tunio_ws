@@ -183,23 +183,16 @@ def main():
     print("\n==== 로봇 상태 (이동·설정 변경 없음) ====")
     start_mode = read_mode(api)
     print(f"get_robot_mode() = {start_mode}  ({mode_name(start_mode)})")
-    for name in ("get_robot_state", "get_last_alarm", "get_control_mode",
-                 "get_control_space"):
-        try:
-            print(f"{name}() = {getattr(api, name)()}")
-        except Exception as e:                                   # noqa: BLE001
-            print(f"{name}() 실패: {e}")
+    # get_robot_state/get_last_alarm/get_control_mode/get_control_space/
+    # get_current_posx 는 뺐다 — spin_until_future_complete 에 타임아웃이 없어(#31)
+    # 이 현장에서 매번 다른 호출이 무작위로 멈춘다(2026-09-23 실기, get_last_alarm
+    # 도 한 번은 되고 한 번은 멈췄다). 핵심 질문(모드가 set_tool/set_tcp 거부의
+    # 원인인가)과 무관한 진단성 출력이라 전부 뺀다 — 남는 호출 수를 줄이는 게
+    # 곧 멈출 확률을 줄이는 길이다.
 
     print("\n==== 현재 등록된 tool/tcp (변경 전) ====")
     print(f"get_tool() = '{api.get_tool()}'")
     print(f"get_tcp()  = '{api.get_tcp()}'")
-
-    print("\n==== 위치 조회만 (이동 아님, 서비스가 살아있는지) ====")
-    try:
-        posx, sol = api.get_current_posx(api.DR_BASE)
-        print(f"get_current_posx() = {[round(v, 1) for v in posx]} sol={sol}")
-    except Exception as e:                                       # noqa: BLE001
-        print(f"get_current_posx() 실패: {e}")
 
     before = try_settings(api, f"현재 모드 — {mode_name(start_mode)}")
     after = None
