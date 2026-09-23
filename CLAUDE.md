@@ -789,3 +789,12 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - PHASE_PREPARE_PLUCK=13을 뒤에 추가했다. prepare_timeout_sec=30초는 실측 전 임시값이며
   기존 로봇 완료 확인 추가 대기 정책을 따른다. 오디오 두 제한 시간과는 별개다.
 - 양쪽 PC의 인터페이스 재빌드·노드 재시작이 필요하다. 실물 경로 검증은 아직 남아 있다.
+
+### 2026-09-23 #94 페그 재등록
+
+- `/tuning/reregister_pegs`는 CommandTuning 빈 요청으로 현재 STRING_ORDER를 재등록하고
+  복귀한다. 조율·측정·DB 저장은 하지 않는다. 웹 연결 계약은 인터페이스 명세 참조.
+- 기존 시작은 캐시를 재사용한다. RegisterPeg의 force=true일 때만 해당 줄의 이전 값을
+  디스크까지 무효화한 후 재등록하며, 실패하면 이전 각도로 돌아가지 않는다.
+- 작업 중에는 시작·재등록을 서로 배제한다. 성공은 복귀 후 IDLE/빈 job_id,
+  실패는 ERROR, 취소는 CANCELED다. 인터페이스 변경으로 양쪽 PC 재빌드가 필요하다.

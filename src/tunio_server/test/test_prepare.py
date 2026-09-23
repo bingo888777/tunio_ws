@@ -14,7 +14,8 @@ def four_string_scenario(monkeypatch):
 
 
 @pytest.mark.parametrize('registration_ok', [True, False])
-def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
+@pytest.mark.parametrize('reregister', [False, True])
+def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregister):
     import threading
 
     calls = []
@@ -24,6 +25,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
 
     def action(client, goal, timeout, name):
         calls.append((name, goal.string_number))
+        assert goal.force is reregister
         if goal.string_number == 1:
             registering.set()
             assert release.wait(3)
@@ -35,17 +37,17 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
         _pause=threading.Event(), _cancel=threading.Event(),
         settings=TM.TuningSettings(), cli_register=object(),
         _registered_pegs={6, 5, 2, 1},  # 이전 작업의 완료 상태도 시작할 때 지워야 한다
-        _servers_not_ready=lambda: [], _reset_results=lambda: None,
+        _servers_not_ready=lambda **kw: [], _reset_results=lambda: None,
         get_logger=lambda: Mock(), _gate=lambda: None,
         _p=lambda key: {'register_timeout_sec': 180}.get(key, 0),
         _set_phase=lambda phase, no: phases.append((phase, no)),
         _run_action=action, _tune_string=lambda no: calls.append(('tune', no)),
         _verify_pass=lambda: None, _return_home=lambda: None, _save=lambda: None,
         _finish_error=lambda: calls.append(('error', 0)))
-    for name in ('_running', '_do_start', '_run_job', '_register_pegs'):
+    for name in ('_running', '_do_start', '_run_job', '_run_reregister', '_register_pegs'):
         setattr(n, name, getattr(TM.TaskManager, name).__get__(n))
 
-    response = TM.TaskManager.on_start(n, None, SimpleNamespace())
+    response = TM.TaskManager.on_start(n, None, SimpleNamespace(), reregister=reregister)
     try:
         assert response.accepted
         assert phases[0] == (TM.TuningState.PHASE_REGISTER_PEG, 6)
@@ -62,7 +64,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
     assert not n._worker.is_alive()
     expected = ([('tune', no) for no in (6, 5, 2, 1)] if registration_ok
                 else [('error', 0)])
-    assert calls[4:] == expected
+    assert calls[4:] == ([] if reregister else expected)
     assert n._registered_pegs == ({6, 5, 2, 1} if registration_ok else set())
 
 
@@ -233,3 +235,65 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
     assert calls == ['register', *[('tune', no) for no in (6, 5, 2, 1)],
                      'verify', 'home', 'save' if home_ok else 'error']
     assert (TuningState.PHASE_DONE in phases) is home_ok
+
+
+@pytest.mark.parametrize('failure', [None, 'register', 'home', 'cancel'])
+def test_reregister_forces_each_peg_and_never_tunes_or_saves(failure):
+    calls = []
+    phases = []
+
+    def action(client, goal, timeout, name):
+        calls.append((goal.string_number, goal.force))
+        if failure == 'cancel':
+            raise TM.Cancelled()
+        return SimpleNamespace(success=failure != 'register', message='등록 실패')
+
+    def home():
+        calls.append('home')
+        if failure == 'home':
+            raise TM.Aborted('복귀 실패')
+
+    n = SimpleNamespace(
+        job_id='registration', cli_register=object(), get_logger=lambda: Mock(),
+        _gate=lambda: None, _p=lambda key: 180, _run_action=action,
+        _set_phase=lambda phase, no: phases.append(phase), _return_home=home,
+        _tune_string=Mock(), _save=Mock())
+    n._register_pegs = lambda **kw: TM.TaskManager._register_pegs(n, **kw)
+    TM.TaskManager._run_reregister(n)
+    assert calls == ([(6, True)] if failure in ('register', 'cancel') else
+                     [(no, True) for no in (6, 5, 2, 1)] + ['home'])
+    expected = (TM.TuningState.PHASE_CANCELED if failure == 'cancel' else
+                TM.TuningState.PHASE_ERROR if failure else TM.TuningState.PHASE_IDLE)
+    assert phases[-1] == expected
+    n._tune_string.assert_not_called()
+    n._save.assert_not_called()
+    if failure is None:
+        assert n.job_id == ''
+
+
+@pytest.mark.parametrize('busy,starting', [(True, False), (False, True), (False, False)])
+def test_reregister_uses_start_exclusion(busy, starting):
+    import threading
+
+    n = SimpleNamespace(_lock=threading.Lock(), _running=lambda: busy,
+                        _starting=starting, _do_start=Mock(return_value='accepted'))
+    n.on_start = TM.TaskManager.on_start.__get__(n)
+    response = TM.TaskManager.on_reregister_pegs(n, None, SimpleNamespace())
+    if busy or starting:
+        assert not response.accepted
+        n._do_start.assert_not_called()
+    else:
+        assert response == 'accepted'
+        assert n._do_start.call_args.kwargs == {'reregister': True}
+        assert not n._starting
+
+
+def test_reregister_readiness_does_not_require_audio_or_pluck():
+    n = SimpleNamespace(_p=lambda key: 0)
+    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust'):
+        setattr(n, 'cli_' + name, Mock())
+    n.cli_home.wait_for_server.return_value = True
+    n.cli_register.wait_for_server.return_value = False
+    assert TM.TaskManager._servers_not_ready(n, registration_only=True) == ['robot/register_peg']
+    for name in ('prepare', 'measure', 'play', 'adjust'):
+        getattr(n, 'cli_' + name).wait_for_server.assert_not_called()

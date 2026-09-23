@@ -410,11 +410,15 @@ class RobotController(Node):
 
         def work():
             self.points.peg(no)  # 줄 번호와 교시 여부 검증
-            if self.pegs.roll_of(no) is not None:
+            if not goal.request.force and self.pegs.roll_of(no) is not None:
                 return
             if self.dry_run:
-                self.get_logger().info(f"[dry_run] {no}번 페그 초기 등록")
+                self.get_logger().info(f"[dry_run] {no}번 페그 등록 (force={goal.request.force})")
                 return  # 가짜 등록값을 실기 파일에 저장하지 않는다
+            if goal.request.force:
+                # 접근 실패나 재시작 후에도 이전 각도를 다시 사용하지 않는다.
+                self.pegs.forget(no)
+                self.pegs.save()
             side = TP.side_of(no)
             self._release_pick(side)
             if not self._from_pick:

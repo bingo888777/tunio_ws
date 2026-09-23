@@ -1,5 +1,6 @@
 # 작업 제어 버튼 공용 Service.
 # /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel 네 개가 이 타입을 공유한다.
+# /tuning/reregister_pegs도 공유한다: 조율 없이 대상 페그 재등록·복귀만 실행.
 # 요청에 필드가 없다 (어느 이름으로 불렸는지가 곧 명령).
 # 접수 여부만 응답하고, 실제 진행 상황은 /tuning/state 로 알린다.
 
