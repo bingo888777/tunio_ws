@@ -34,6 +34,7 @@ TODO(정묵·성현):
   - 파지 확인 — RG2 의 grip detected 를 이 ROS 2 패키지가 토픽으로 안 내보낸다
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
 """
+import copy
 import math
 import time
 
@@ -43,6 +44,8 @@ from tunio_robot import teach_points as TP
 _api = None
 _node = None
 _gripper = None
+_j6_motion = None       # 실제 노드가 감시 설정을 연결한다. 단독 도구는 기존 경로 유지
+_j6_sample = None       # (수신 monotonic 시각, J6). joint_states 콜백만 갱신
 _robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
@@ -495,10 +498,41 @@ def _fast(motion, value, cap):
     return min(float(value) * s, cap)
 
 
+def _guard_j6_goal(joints):
+    """미리 계산한 목표 검사. 모션 중 실제 관절값은 joint_states 구독으로 받는다."""
+    if not _j6_motion or not _j6_motion.get("j6_recovery_enabled", False):
+        return
+    sample = _j6_sample
+    max_age = float(_j6_motion.get("j6_sample_max_age_sec", 1.0))
+    if not math.isfinite(max_age) or max_age <= 0:
+        raise MotionError("J6 감시 수신 허용 지연은 유한한 양수여야 한다")
+    if sample is None or time.monotonic() - sample[0] > max_age:
+        raise MotionError("J6 상시 감시 응답이 없거나 오래됐다 — 이동 중단")
+    if len(joints) != 6 or not all(math.isfinite(v) for v in joints):
+        raise MotionError("J6 목표 관절각을 확인할 수 없다")
+    if abs(joints[5]) >= _j6_threshold(_j6_motion):
+        raise MotionError(f"J6 목표 {joints[5]:.1f}도가 회복 기준에 도달한다 — 이동 거부")
+
+
+def _guard_j6_task(task, sol=None):
+    if not _j6_motion or not _j6_motion.get("j6_recovery_enabled", False):
+        return
+    from DR_common2 import posx
+    api = _require_api()
+    if sol is None:
+        sol = api.get_current_solution_space()
+    _guard_j6_goal(list(api.ikin(posx(list(task)), sol)))
+
+
 def _movej(joints, motion, relative=False):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
+    if relative and _j6_motion:
+        current = list(api.get_current_posj())
+        _guard_j6_goal([a + b for a, b in zip(current, joints)])
+    elif not relative:
+        _guard_j6_goal(joints)
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
     vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT)
     acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2)
@@ -524,6 +558,7 @@ def _movel(task, motion):
     v = _fast(motion, motion.get("travel_vel", [50.0, 30.0]), caps)
     a = _fast(motion, motion.get("travel_acc", [100.0, 60.0]),
               tuple(c * 2 for c in caps))
+    _guard_j6_task(task)
     return _moved(api.movel(posx(list(task)), vel=v, acc=a), "movel")
 
 
@@ -555,6 +590,7 @@ def _movejx(task, motion, sol=None):
         except Exception:
             goal = None
         vel, acc = _transit_joint_speed(goal, motion, SPEED_CAP_JOINT_BLIND)
+    _guard_j6_task(task, sol)
     return _moved(api.movejx(posx(list(task)), vel=vel, acc=acc, sol=sol), "movejx")
 
 
@@ -596,15 +632,21 @@ def goto_route(route, motion):
 
 
 def _peg_route_required(j1, side, motion):
-    center = {"right": 0.0, "left": 180.0}[side]
-    tolerance = float(motion.get("peg_j1_skip_tolerance_deg", 30.0))
-    if not math.isfinite(tolerance) or not 0 <= tolerance < 90:
-        raise MotionError("peg_j1_skip_tolerance_deg는 0 이상 90 미만이어야 한다")
-    return j1 is None or not math.isfinite(j1) or abs(j1 - center) > tolerance
+    defaults = {"right": [-60.0, 80.0], "left": [100.0, 240.0]}
+    bounds = motion.get(f"peg_j1_skip_{side}_deg", defaults[side])
+    try:
+        low, high = map(float, bounds)
+        if not (math.isfinite(low) and math.isfinite(high) and low < high):
+            raise ValueError()
+        if (side == "right" and high >= 90) or (side == "left" and low <= 90):
+            raise ValueError()
+    except (TypeError, ValueError) as exc:
+        raise MotionError(f"페그 {side} J1 생략 범위 오류: {bounds}") from exc
+    return j1 is None or not math.isfinite(j1) or not low <= j1 <= high
 
 
 def approach_peg_side(side, route, motion, logger=None):
-    """1·2번은 J1=0±30°, 5·6번은 +180±30° 안에서만 경유를 생략한다."""
+    """실제 J1이 해당 쪽의 설정 범위 안일 때만 경유를 생략한다."""
     j1 = _current_j1()
     required = _peg_route_required(j1, side, motion)
     if logger:
@@ -635,6 +677,10 @@ def _check_peg_transfer_path(start, goal, floor, margin):
     from . import kinematics as K
     if any(len(j) != 6 or not all(math.isfinite(v) for v in j) for j in (start, goal)):
         raise MotionError("피크→페그 경로의 관절각이 유효하지 않다")
+    # 사용자 지정: -60→-90→-120(방향상 +240)의 짧은 쪽에 기타 헤드가 있다.
+    # 실제 절대 관절각을 환산하지 않는다. movej 보간 전체가 이 구간 안이어야 한다.
+    if not all(-60.0 <= q[0] <= 240.0 for q in (start, goal)):
+        raise MotionError("피크→페그 J1은 -60~240도 안에서만 이동해야 한다")
 
     def height(j):
         f = K.fk(j)
@@ -680,7 +726,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     if not math.isfinite(back) or back <= 0:
         raise MotionError("피크→페그: 접근 거리는 유한한 양수여야 한다")
     approach = TP.backed_off(pose.task, back)
-    high = list(approach[:3]) + current[3:]  # 높은 곳에서는 페그 파지 자세로 꺾지 않는다
+    high = list(approach)  # 높은 이동 중 파지 방향을 만든다. 검사 실패 시 직행하지 않는다
     high[2] = max(current[2], floor + 2 * margin, approach[2])
     try:
         goal = [float(v) for v in api.ikin(posx(high), pose.sol)]
@@ -691,17 +737,18 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             raise ValueError(f"IK/FK 위치 대조 오차 {error:.1f}mm")
     except Exception as exc:
         raise MotionError(f"피크→페그 높은 접근점 IK 실패: {exc}") from exc
-    lower = list(approach[:3]) + current[3:]
-    # 하강/제자리 자세 변경의 끝점도 먼저 검사한다. 제한을 풀어 진행하지 않는다.
-    j5, j6, joint_margin = _peg_joint_limits(motion)
-    for label, task in (("하강", lower), ("페그 앞 자세 변경", approach)):
+    lower = list(approach)
+    # 하강 끝점도 먼저 검사한다. 제한을 풀어 진행하지 않는다.
+    j6, _ = _peg_joint_limits(motion)
+    for label, task in (("하강", lower),):
         try:
             joints = [float(v) for v in api.ikin(posx(task), pose.sol)]
             if len(joints) != 6 or not all(math.isfinite(v) for v in joints):
                 raise ValueError("유효한 관절각이 아니다")
-            if abs(joints[4]) > j5 - joint_margin or abs(joints[5]) > j6:
-                raise ValueError(f"J5={joints[4]:+.2f}(허용 ±{j5 - joint_margin:g}), "
-                                 f"J6={joints[5]:+.2f}(허용 ±{j6:g})")
+            if motion.get("j6_recovery_enabled", False):
+                _check_peg_turn(joints, 0.0, motion)
+            if abs(joints[5]) > j6:
+                raise ValueError(f"J6={joints[5]:+.2f}(허용 ±{j6:g})")
             if math.dist(K.fk(joints)["tcp"], task[:3]) > margin:
                 raise ValueError("IK/FK 위치 불일치")
         except Exception as exc:
@@ -714,19 +761,18 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     plan.append(goal)
     # 어떤 이동도 보내기 전에 경유를 포함한 전체 높은 이동 구간을 검사한다.
     previous = start
-    j5, j6, joint_margin = _peg_joint_limits(motion)
+    j6, _ = _peg_joint_limits(motion)
     if logger:
         logger.info(f"경로 진단: 현재 TCP={current}, 현재 관절={start}")
         logger.info(f"경로 진단: 높은 목표 TCP={high}, sol={pose.sol}, IK 관절={goal}")
-        logger.info(f"경로 진단: J5 허용 ±{j5 - joint_margin:g}도, J6 허용 ±{j6:g}도")
+        logger.info(f"경로 진단: J6 허용 ±{j6:g}도")
     for target in plan:
-        if abs(target[4]) > j5 - joint_margin or abs(target[5]) > j6:
+        if motion.get("j6_recovery_enabled", False):
+            _check_peg_turn(target, 0.0, motion)
+        if abs(target[5]) > j6:
             raise MotionError(
-                f"피크→페그 목표 관절 제한 초과: J5={target[4]:+.2f}도 "
-                f"(허용 ±{j5 - joint_margin:g}), J6={target[5]:+.2f}도 (허용 ±{j6:g}); "
+                f"피크→페그 목표 관절 제한 초과: J6={target[5]:+.2f}도 (허용 ±{j6:g}); "
                 f"목표 Z={high[2]:.2f}mm, sol={pose.sol}. 이동하지 않는다")
-        if min(previous[0], target[0]) <= -90 <= max(previous[0], target[0]):
-            raise MotionError("피크→페그: J1=-90도 통과 경로는 허용하지 않는다")
         _check_peg_transfer_path(previous, target, floor, margin)
         previous = target
     if logger:
@@ -752,17 +798,13 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
     if actual[2] < floor or math.dist(actual[:3], high[:3]) > 2.0:
         raise MotionError("피크→페그: 높은 접근점 미도달, 하강 금지")
-    # 높은 점의 자세 그대로 수직 하강한다. 손목 회전은 페그 앞에서 따로 한다.
+    # 이미 높은 이동에서 파지 방향을 맞췄으므로 그 자세로 수직 하강한다.
     v, a = _transit_speed(motion)
     _movel_base(lower, v, a)
     actual, _ = read_posx()
     if (len(actual) != 6 or not all(math.isfinite(x) for x in actual)
             or math.dist(actual[:3], lower[:3]) > 2.0):
         raise MotionError("피크→페그 하강 미도달: 자세 변경 금지")
-    if confirm:
-        confirm("페그 앞 접근점에서 TCP 위치를 고정하고 페그 파지 자세로 회전")
-    # 이동용 배율과 분리한 저속 자세 회전(임시 5도/s, 10도/s²).
-    _movel_base(approach, [v, 5.0], [a, 10.0])
 
 
 def _goto_pose(pose, motion):
@@ -829,6 +871,7 @@ def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=Fal
     """
     _require_api()
     ensure_tcp()                                        # 발현 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
+    pose, half_turn = _j6_pose(pose, motion)
     x = getattr(pose, "task", None)
     if not x or len(x) != 6:
         raise MotionError(f"{pose.name}: 발현 자세는 x(Base posx 6개)로 적어야 한다. "
@@ -841,6 +884,9 @@ def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=Fal
         raise MotionError(f"{pose.name}: stroke_sign 은 +1 또는 -1 이어야 한다 (지금 {sign!r})")
     stroke = [float(v) * sign for v in stroke[:3]] + [float(v) for v in stroke[3:]]
     retract = list(motion.get("pluck_retract_tool", [0.0, 0.0, -8.0, 0.0, 0.0, 0.0]))
+    if half_turn:
+        stroke[:2] = [-v for v in stroke[:2]]
+        retract[:2] = [-v for v in retract[:2]]
     v_app, a_app = _transit_speed(motion, "pluck_vel_approach", "pluck_acc_approach")
     v_fine, a_fine = motion.get("pluck_vel_fine", 20), motion.get("pluck_acc_fine", 50)
     v_str, a_str = motion.get("pluck_vel_stroke", 1000), motion.get("pluck_acc_stroke", 2000)
@@ -876,6 +922,7 @@ def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=Fal
         raise
 
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
+    _recover_j6(motion)
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 
 
@@ -1090,6 +1137,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
+    holder, _ = _j6_pose(holder, motion)
     contact, above = _pick_points(holder, motion)
     preset = getattr(holder, "grip_preset", None) or motion.get("pick_preset", "close")
     v_app, a_app = _transit_speed(motion)
@@ -1108,6 +1156,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     _grip(preset)                                       # 집는다
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
     _movel_base(above, v_app, a_app)                    # 들어 올린다
+    _recover_j6(motion)
     if standby is not None:
         _movej(standby.joints, motion)                  # 기타 위 대기
 
@@ -1148,6 +1197,7 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
+    holder, _ = _j6_pose(holder, motion)
     contact, above = _pick_points(holder, motion)
     v_app, a_app = _transit_speed(motion)
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
@@ -1169,6 +1219,7 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
         retreat[2] = max(retreat[2], floor + 2 * margin)
     _movel_base(retreat, v_app, a_app)                  # 빈손 수직 상승 후 높이 확보
     _check_pick_return_position(retreat, motion, "반환 후 상승", logger)
+    _recover_j6(motion)
     if home is not None:
         _movej(home.joints, motion)                     # 홈
 
@@ -1188,6 +1239,7 @@ def _movel_base(pos, vel, acc):
     """
     api = _require_api()
     from DR_common2 import posx
+    _guard_j6_task(pos)
     return _moved(api.movel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE, radius=0),
                   "movel_base")
 
@@ -1240,8 +1292,8 @@ def _rolled(pose, roll_deg):
             f"{pose.name} 이 관절각으로 적혀 있어 손잡이 각을 못 반영한다. "
             "페그 자세는 작업 좌표(x)여야 한다 (#31)")
     from tunio_robot.kinematics import roll_about_tool_z
-    turned = TP.Pose(pose.name, pose.taught,
-                     task=roll_about_tool_z(pose.task, roll_deg), tcp=pose.tcp)
+    turned = copy.copy(pose)
+    turned.task = roll_about_tool_z(pose.task, roll_deg)
     turned.sol = getattr(pose, "sol", None)
     return turned
 
@@ -1484,6 +1536,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     thresholds = handle["thresholds_mm"]
     from tunio_robot.grip_width import classify
 
+    pose, _ = _j6_pose(pose, motion)
     _grip("open")
     approach_mm = float(motion.get("approach_mm", 100.0))
     back = TP.backed_off(pose.task, approach_mm)
@@ -1550,35 +1603,33 @@ def register_peg(pose, motion, handle, read_width, logger=None,
         return 0.0
     finally:
         _cleanup_register(pose, motion, logger, keep_error=failed)
+        if not failed:
+            _recover_j6(motion)
 
 
 def _peg_joint_limits(motion):
-    """현장 제한과 임시 여유각. J5 ±135는 TP 기본값이지 기구 한계가 아니다 (#70)."""
+    """J6 현장 제한과 임시 여유각. J5 소프트웨어 제한은 사용자 요청으로 제거."""
     try:
-        j5 = float(motion.get("peg_j5_limit_deg", 135.0))
         j6 = float(motion.get("peg_j6_limit_deg", 360.0))
         margin = float(motion.get("peg_joint_margin_deg", 5.0))
-        if not all(math.isfinite(v) for v in (j5, j6, margin)):
+        if not all(math.isfinite(v) for v in (j6, margin)):
             raise ValueError("유한한 숫자가 아니다")
-        if not (0 < j5 <= 360 and 0 < j6 <= 360 and 0 < margin < min(j5, j6)):
+        if not (0 < j6 <= 360 and 0 < margin < j6):
             raise ValueError("제한은 0~360도, 여유는 제한보다 작은 양수여야 한다")
     except (TypeError, ValueError) as exc:
         raise MotionError(f"페그 관절 제한 설정 오류: {exc}") from exc
-    return j5, j6, margin
+    return j6, margin
 
 
 def _read_peg_joints(motion):
     """관절값을 모르면 움직이지 않는다. 한계 밖에서의 자동 복구도 하지 않는다."""
-    j5, j6, margin = _peg_joint_limits(motion)
+    j6, _ = _peg_joint_limits(motion)
     try:
         joints = [float(v) for v in _require_api().get_current_posj()]
         if len(joints) != 6 or not all(math.isfinite(v) for v in joints):
             raise ValueError("유한한 관절각 6개가 아니다")
     except Exception as exc:
         raise MotionError(f"페그 관절각 읽기 실패 — 이동 중단: {exc}") from exc
-    if abs(joints[4]) > j5 - margin:
-        raise MotionError(f"J5 여유 부족: {joints[4]:+.1f}도, "
-                          f"허용 ±{j5 - margin:.1f}도. 접근 자세를 확인하라")
     if abs(joints[5]) > j6:
         raise MotionError(f"J6 {joints[5]:+.1f}도가 한계 ±{j6:g}도 밖이다. "
                           "자동 되감기 대신 현장에서 복구하라")
@@ -1587,15 +1638,89 @@ def _read_peg_joints(motion):
 
 def _check_peg_turn(joints, delta_deg, motion):
     """현재 J6와 요청 후 J6를 함께 검사한다. 페그 근처에서는 되감지 않는다."""
-    _, limit, margin = _peg_joint_limits(motion)
+    limit, margin = _peg_joint_limits(motion)
     end = joints[5] + delta_deg
+    if motion.get("j6_recovery_enabled", False):
+        if max(abs(joints[5]), abs(end)) >= _j6_threshold(motion):
+            raise MotionError("J6 회복 기준에 도달한다 — 접촉 전에 회복해야 한다")
     if max(abs(joints[5]), abs(end)) > limit - margin:
         raise MotionError(f"J6 회전 여유 부족: {joints[5]:+.1f} → {end:+.1f}도, "
                           f"허용 ±{limit - margin:.1f}도. 접근점에서 되감기가 필요하다")
 
 
+def _j6_threshold(motion):
+    value = float(motion.get("j6_recover_at_deg", 280.0))
+    if not math.isfinite(value) or not 180 < value < 300:
+        raise MotionError("J6 회복 기준은 180도 초과 300도 미만이어야 한다")
+    return value
+
+
+def _recover_j6(motion, delta_deg=0.0):
+    """호출자는 접촉에서 벗어났음을 보장한다. 콜백에서는 절대 호출하지 않는다."""
+    if not motion.get("j6_recovery_enabled", False):
+        return 0.0
+    joints = _read_peg_joints(motion)
+    threshold = _j6_threshold(motion)
+    if max(abs(joints[5]), abs(joints[5] + delta_deg)) < threshold:
+        return 0.0
+    candidates = [offset for offset in (-180.0, 180.0)
+                  if max(abs(joints[5] + offset), abs(joints[5] + offset + delta_deg)) < threshold]
+    if not candidates:
+        raise MotionError("180도 회복으로 J6 여유를 확보할 수 없다")
+    offset = min(candidates, key=lambda x: abs(joints[5] + x))
+    target = list(joints)
+    target[5] += offset
+    recovery = dict(motion, vel=float(motion.get("j6_recovery_vel", 30.0)),
+                    acc=float(motion.get("j6_recovery_acc", 60.0)), speed_scale=1.0)
+    if not all(math.isfinite(recovery[key]) and recovery[key] > 0 for key in ("vel", "acc")):
+        raise MotionError("J6 회복 속도·가속도는 유한한 양수여야 한다")
+    recovery.pop("transit_tcp_vel", None)
+    recovery.pop("transit_tcp_acc", None)
+    tolerance = float(motion.get("peg_unwind_tolerance_deg", 1.0))
+    if not math.isfinite(tolerance) or not 0 < tolerance <= 5:
+        raise MotionError("J6 회복 도달 허용치 오류")
+    _movej(target, recovery)
+    actual = _read_peg_joints(motion)
+    if max(abs(a - b) for a, b in zip(actual, target)) > tolerance:
+        raise MotionError("J6 180도 회복 미도달")
+    if _node is not None:
+        _node.get_logger().info(f"J6 180도 회복: {joints[5]:.1f} → {actual[5]:.1f}도")
+    return offset
+
+
+def _j6_pose(pose, motion, delta_deg=0.0):
+    """180도 대칭인 그리퍼/피크의 목표 중 현재 J6에서 가까운 유효 자세를 고른다."""
+    if not motion.get("j6_recovery_enabled", False):
+        return pose, 0.0
+    from DR_common2 import posx
+    api = _require_api()
+    current = _read_peg_joints(motion)
+    threshold = _j6_threshold(motion)
+    sol = getattr(pose, "sol", None)
+    if sol is None:
+        sol = api.get_current_solution_space()
+    candidates = []
+    for offset in (0.0, -180.0, 180.0):
+        candidate = _rolled(pose, offset)
+        try:
+            joints = list(api.ikin(posx(candidate.task), sol))
+            if len(joints) != 6 or not all(math.isfinite(v) for v in joints):
+                continue
+            if max(abs(joints[5]), abs(joints[5] + delta_deg)) >= threshold:
+                continue
+            candidates.append((abs(joints[5] - current[5]), candidate, offset))
+        except Exception:
+            continue
+    if not candidates:
+        raise MotionError("J6 회전 여유가 있는 대칭 목표 자세가 없다")
+    _, candidate, offset = min(candidates, key=lambda item: item[0])
+    return candidate, offset
+
+
 def _prepare_peg_turn(delta_deg, motion):
     """페그에서 떨어진 접근점 전용. J6만 360도 되감아 같은 끝 자세를 유지한다."""
+    if motion.get("j6_recovery_enabled", False):
+        return _recover_j6(motion, delta_deg)
     try:
         tolerance = float(motion.get("peg_unwind_tolerance_deg", 1.0))
         if not math.isfinite(tolerance) or not 0 < tolerance <= 5.0:
@@ -1676,12 +1801,12 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
             raise MotionError("페그 접근 거리는 양수여야 한다")
         _read_peg_joints(motion)                    # 이미 한계 밖이면 첫 이동도 금지
 
-    entry = _rolled(pose, roll_deg)                 # 손잡이가 돌아가 있으면 맞춰 들어간다 (#31)
+    entry, half_turn = _j6_pose(_rolled(pose, roll_deg), motion, delta_deg)
     # 돌리고 나면 손목이 그만큼 더 돌아가 있다. 나올 때 원래 자세로 되돌리면
     # 손목이 역회전하면서 아직 손가락 사이에 있는 페그를 다시 돌려 버린다.
     # J6 이 아니면 C 가 안 바뀌므로 들어온 자세 그대로 나간다
     c_delta = delta_deg if joint == 6 else 0.0
-    exit_ = _rolled(pose, roll_deg + c_delta)
+    exit_ = _rolled(pose, roll_deg + half_turn + c_delta)
 
     # 들어가기 전에 반드시 연다. 직전 동작이 피크를 물고 있었으면 15mm 인 채로
     # 들어가 손잡이를 정면으로 들이받는다. 나올 때는 _release() 가 같은 폭으로 연다.
@@ -1693,7 +1818,9 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
     if joint == 6:
         if not from_pick:
             _movejx(TP.backed_off(entry.task, back), motion, sol=getattr(entry, "sol", None))
-        _prepare_peg_turn(delta_deg, motion)        # 접근점에서만 되감기, 파지 전
+        recovered = _prepare_peg_turn(delta_deg, motion) or 0.0
+        entry = _rolled(entry, recovered)
+        exit_ = _rolled(exit_, recovered)
         _movel(entry.task, motion)
         _check_peg_turn(_read_peg_joints(motion), delta_deg, motion)
     elif from_pick:
@@ -1728,6 +1855,7 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
     else:
         _release()                                  # 열기가 실패하면 강제 후퇴하지 않는다
         _retreat(exit_, motion)                     # 돌아간 자세로 나와 페그를 되돌리지 않는다
+        _recover_j6(motion)                          # 페그와 분리된 뒤에만
 
 
 def strum_all(string_numbers, points):
