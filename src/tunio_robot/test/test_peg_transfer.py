@@ -42,7 +42,6 @@ def transfer(monkeypatch):
     back = TP.backed_off(pose.task, 100)
     high = list(back)
     high[2] = 224
-    high[3:] = [0, 180, 0]
     sim = SimpleNamespace(joints=[0] * 6, tcp=[400, 0, 224, 0, 180, 0], calls=[])
     solutions = {}
 
@@ -72,6 +71,7 @@ def transfer(monkeypatch):
     def movel(p, v, a):
         sim.calls.append(("down" if p[3:] == sim.tcp[3:] else "orient", list(p)))
         sim.tcp = list(p)
+        sim.last_speed = (v, a)
     monkeypatch.setattr(MP, "_movel_base", movel)
     return sim, pose, back
 
@@ -79,7 +79,7 @@ def transfer(monkeypatch):
 def test_높은_접근점_도착_후에만_수직_하강한다(transfer):
     sim, pose, back = transfer
     MP._pick_to_peg_approach(pose, "right", None, {})
-    assert [c[0] for c in sim.calls] == ["high", "down", "orient"]
+    assert [c[0] for c in sim.calls] == ["high", "down"]
     assert sim.calls[-1][1] == back
     assert sim.tcp[:2] == back[:2]
     assert sim.tcp[2] == 108
@@ -94,9 +94,9 @@ def test_경로_검사_실패시_첫_이동도_하지_않는다(transfer, monkey
     elif failure == "ik":
         monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [float("nan")] * 6)
     elif failure == "joint":
-        monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [0, 0, 0, 0, 140, 0])
+        monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [0, 0, 0, 0, 0, 361])
     else:
-        sim.joints[0] = 60  # +90 경유가 필요한 출발점
+        sim.joints[0] = 85  # +90 경유가 필요한 출발점
 
         def check(start, goal, floor, margin):
             if start[0] == 90:
@@ -136,27 +136,22 @@ def test_실기진단은_검사를_통과해도_이동하지_않는다(transfer)
 
 def test_목표_관절_초과_메시지에_실제값과_허용범위가_있다(transfer, monkeypatch):
     sim, pose, _ = transfer
-    monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [0, 0, 0, 0, 140, 0])
-    with pytest.raises(MP.MotionError, match=r"J5=\+140.00.*±130.*J6=\+0.00.*±360"):
+    monkeypatch.setattr(MP._api, "ikin", lambda p, sol: [0, 0, 0, 0, 0, 361])
+    with pytest.raises(MP.MotionError, match=r"J6=\+361.00.*±360"):
         MP._pick_to_peg_approach(pose, "right", None, {}, execute=False)
     assert sim.calls == []
 
 
-def test_높은_위치에서는_페그_자세_IK를_요청하지_않는다(transfer, monkeypatch):
+def test_높은_파지방향_목표가_불가능하면_이동하지_않는다(transfer, monkeypatch):
     sim, pose, _ = transfer
-    original = MP._api.ikin
-    requests = []
 
     def ikin(task, sol):
-        requests.append(list(task))
-        if task[2] > 214 and task[3:] == pose.task[3:]:
-            raise RuntimeError("높은 곳에서 페그 자세로 꺾으면 J5 한계")
-        return original(task, sol)
+        assert task[3:] == pose.task[3:]
+        raise RuntimeError("IK 해 없음")
     monkeypatch.setattr(MP._api, "ikin", ikin)
-    MP._pick_to_peg_approach(pose, "right", None, {})
-    assert requests[0][3:] == [0, 180, 0]
-    assert sim.calls[-2][1][3:] == [0, 180, 0]
-    assert sim.calls[-1][1][3:] == pose.task[3:]
+    with pytest.raises(MP.MotionError, match="IK 실패"):
+        MP._pick_to_peg_approach(pose, "right", None, {})
+    assert sim.calls == []
 
 
 def test_반환후_접근도_공통_이동속도배율을_사용한다(transfer, monkeypatch):
@@ -172,3 +167,13 @@ def test_반환후_접근도_공통_이동속도배율을_사용한다(transfer,
     MP._pick_to_peg_approach(pose, "right", None, motion)
     assert seen == [2.0]
     assert motion["speed_scale"] == 2.0
+
+
+@pytest.mark.parametrize("start,end", [(-61, -59), (239, 241), (-60, -120), (300, 350)])
+def test_헤드쪽_짧은_J1_구간은_90도를_안지나도_거부한다(start, end):
+    with pytest.raises(MP.MotionError, match="J1은 -60~240"):
+        MP._check_peg_transfer_path([start, 0, 0, 0, 0, 0], [end, 0, 0, 0, 0, 0], 214, 5)
+
+
+def test_J1_긴_방향은_끝점_포함_허용한다():
+    MP._check_peg_transfer_path([-60, 0, 0, 0, 0, 0], [240, 0, 0, 0, 0, 0], 214, 5)

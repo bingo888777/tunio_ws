@@ -354,6 +354,8 @@ def test_줄별_속도는_페그_회전에만_적용된다(spy, monkeypatch, no,
     calls = []
     monkeypatch.setattr(MP, "_movej", lambda j, m, relative=False:
                         calls.append((m["vel"], m["acc"], m["speed_scale"], relative)))
+    # 이 테스트는 줄별 회전 속도 전달만 검사한다. IK 대역은 별도 회복 테스트에 있다.
+    monkeypatch.setattr(MP, "_j6_pose", lambda pose, motion, delta_deg=0: (pose, 0.0))
     MP.adjust_peg(points.peg(no), 6, -30, points.motion, roll_deg=20.0)
     assert calls == [(expected[0], expected[1], 1.0, True)]
     unwind = MP.turn_motion(points.motion)

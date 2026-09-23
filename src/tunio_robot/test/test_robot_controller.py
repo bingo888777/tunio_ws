@@ -665,14 +665,15 @@ def test_복귀_Action은_피크_반환후_대기로_간다(ros, taught, monkeyp
 
 
 @pytest.mark.parametrize("side,j1,skip", [
-    ("right", -30.0, True), ("right", 30.0, True),
-    ("right", -30.01, False), ("right", 30.01, False),
-    ("left", 150.0, True), ("left", 210.0, True),
-    ("left", 149.99, False), ("left", 210.01, False),
+    ("right", -60.0, True), ("right", 80.0, True),
+    ("right", -60.01, False), ("right", 80.01, False),
+    ("left", 100.0, True), ("left", 240.0, True),
+    ("left", 99.99, False), ("left", 240.01, False),
+    ("left", 122.68, True), ("right", 57.70, True),
     ("left", -180.0, False), ("left", 0.0, False),
     ("right", None, False), ("left", float("nan"), False),
 ])
-def test_페그_경유는_실제_J1과_30도_경계로_결정한다(monkeypatch, side, j1, skip):
+def test_페그_경유는_실제_J1과_쪽별_경계로_결정한다(monkeypatch, side, j1, skip):
     went = []
     route = TPRoute("transit", [90, 0, 0, 0, 0, None], True)
     monkeypatch.setattr(MP, "_current_j1", lambda: j1)
@@ -1136,3 +1137,40 @@ def test_adjust_invalidates_preparation_and_requires_new_pick(ros, taught):
             string_number=6, preparation_id=prepared.preparation_id)).result.success
     finally:
         h.shutdown()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_강제재등록은_이전각도를_디스크에서도_지우고_실행한다(ros, taught, monkeypatch, tmp_path, fail):
+    from tunio_interfaces.action import RegisterPeg
+    from tunio_robot.peg_state import PegState
+
+    h = Harness(taught)
+    path = str(tmp_path / "pegs.json")
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(path)
+        n.pegs.register(6, 12.0)
+        n.pegs.save()
+        monkeypatch.setattr(n, "_cross_to", lambda side: None)
+
+        def register(*args, **kwargs):
+            assert n.pegs.roll_of(6) is None
+            assert PegState(path).load().roll_of(6) is None
+            if fail:
+                raise MP.MotionError("등록 실패")
+            return 30.0
+        monkeypatch.setattr(MP, "register_peg", register)
+        result = h.send(RegisterPeg, "/robot/register_peg",
+                        RegisterPeg.Goal(string_number=6, force=True))
+        assert result.result.success is not fail
+        assert n.pegs.roll_of(6) == (None if fail else 30.0)
+        assert PegState(path).load().roll_of(6) == (None if fail else 30.0)
+    finally:
+        h.shutdown()
+
+
+@pytest.mark.parametrize("bounds", [[0, 90], [80, -60], [0, float("nan")], [0], None])
+def test_잘못된_경유범위는_거부한다(bounds):
+    with pytest.raises(MP.MotionError, match="생략 범위 오류"):
+        MP._peg_route_required(0, "right", {"peg_j1_skip_right_deg": bounds})

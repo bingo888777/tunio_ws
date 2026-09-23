@@ -392,7 +392,8 @@ uint8 OVERALL_FAILED=3
 
 ### srv/CommandTuning.srv
 
-`/tuning/start`, `/tuning/pause`, `/tuning/resume`, `/tuning/cancel` 네 개가 이 타입을 공유한다.
+`/tuning/start`, `/tuning/pause`, `/tuning/resume`, `/tuning/cancel`,
+`/tuning/reregister_pegs`가 이 타입을 공유한다.
 요청에 필드가 없다. 어느 이름으로 불렸는지가 곧 명령이다.
 
 ```
@@ -549,13 +550,16 @@ ament_export_dependencies(rosidl_default_runtime)
 
 ```text
 uint8 string_number
+bool force  # 기본 false. true면 저장값을 무효화하고 재등록
 ---
 bool success
 string message
 ---
 ```
 
-시작 시 6→5→2→1 순서로 요청하고 전부 성공한 뒤 마이크 측정과 발현을 시작한다.
+별도 페그 재등록 요청에서만 설정된 STRING_ORDER 순서로 등록한다.
+시작(`/tuning/start`)에서는 RegisterPeg를 호출하지 않는다. 로봇은 각 줄의
+PreparePluck에서 저장된 유효 등록값을 이동 전에 확인하고, 없으면 재등록 안내와 함께 실패한다.
 로봇은 저장된 유효 각도가 있으면 움직이지 않고 성공하며 미등록 줄만 등록한다.
 실패/시간 초과 시 작업을 PHASE_ERROR로 종료하고 발현하지 않는다.
 줄별 대기시간은 서버 `register_timeout_sec`(180초, 실측 전 임시값)으로 설정한다.
@@ -564,6 +568,46 @@ AdjustPeg는 등록을 수행하지 않는다. 미등록이면 이동 전에 실
 등록 무효화 후에도 RegisterPeg를 명시적으로 완료한 뒤 AdjustPeg를 요청한다.
 서버·로봇 PC 모두 tunio_interfaces와 사용하는 노드를 재빌드/재시작해야 한다.
 
+
+### 페그 재등록 — 웹 연결 계약 (#94, 2026-09-23)
+
+웹은 **`/tuning/reregister_pegs` (`tunio_interfaces/srv/CommandTuning`)**를 빈 요청으로 호출한다.
+`/tuning/start`는 기존 유효 등록값만 사용하며 자동 등록하지 않는다.
+재등록은 별도 버튼으로 요청한다. 시작에는 RegisterPeg 서버 연결이 필요하지 않다.
+이 PR은 서버·로봇 인터페이스를 제공하며 웹 버튼/HTTP 경로는 웹 담당자가 연결한다.
+
+- 대상은 서버의 현재 `tuning_logic.STRING_ORDER` 전체이며 그 순서를 따른다.
+  기본은 6→5→2→1이고, 현장 설정이 `[2, 1]`이면 두 줄만 재등록한다.
+- `accepted=true`는 **접수**이지 등록 완료가 아니다. `false`면 `message`를 표시한다.
+- 조율·재등록 실행 중(일시정지 포함) 또는 시작 준비 중이면 새 시작·재등록을 거부한다.
+  재등록에는 RegisterPeg와 ReturnHome 서버만 필요하며, 마이크 연결은 요구하지 않는다.
+- 각 줄에 `RegisterPeg(force=true)`를 요청한다. 로봇은 해당 줄의 이전 각도를 메모리와
+  파일에서 지운 뒤 실제 등록한다. 등록 성공 시 새 값을 저장한다. 실패한 줄은
+  미등록으로 남으며, 아직 요청하지 않은 줄의 저장값은 변경하지 않는다.
+- 모든 줄 등록 후 ReturnHome 성공까지 확인한다. 발현·측정·페그 조율·DB 저장은 하지 않는다.
+  `save_on_error_exit=true`여도 재등록 회차는 조율 결과로 저장하지 않는다.
+- `dry_run=true`는 동작 확인용 성공이며 실제 등록 파일을 갱신/삭제하지 않는다.
+
+웹 상태 표시(`/tuning/state`, 기존 QoS 유지):
+
+1. 접수 시 새 `job_id`, `PHASE_REGISTER_PEG=12`와 현재 줄 번호를 발행한다.
+2. 재등록 완료 후 `PHASE_RETURN=7`로 복귀한다.
+3. 복귀까지 성공하면 **`PHASE_IDLE=0`, 빈 job_id**로 돌아온다. 웹은 재등록 요청 접수부터
+   상태를 추적해 '재등록 완료'로 표시한다. 기존 대기 상태만 보고 완료로 판정하면 안 된다.
+   구독을 먼저 연결하고 응답 대기 중 도착한 상태도 처리한다.
+4. 실패·거부·동작 종료 불명은 `PHASE_ERROR=11`, 단계 경계에서 취소되면
+   `PHASE_CANCELED=10`이다. 실패/취소 시 후속 등록·자동 복귀는 하지 않는다.
+   취소는 즉시 물리 정지를 보장하지 않는다. 일시정지·재개·취소는 기존 서비스로 요청한다.
+
+`results`는 판정 전이며 `overall_result`도 OVERALL_PENDING이다. 조율 성공으로 표시하지 않는다.
+사람이 페그를 만진 뒤 재등록을 요청하고, 성공 후 별도로 조율을 시작한다.
+
+```bash
+ros2 service call /tuning/reregister_pegs tunio_interfaces/srv/CommandTuning '{}'
+```
+
+**배포:** RegisterPeg Goal에 필드를 추가했으므로 서버·로봇·웹 PC의 `tunio_interfaces`를
+같은 버전으로 빌드하고 관련 노드를 재시작한다. 기존 바이너리와 혼용하지 않는다.
 
 ## 피크 반환·복귀 및 시간 초과 (2026-09-22)
 

@@ -48,7 +48,8 @@ def rig(monkeypatch):
         else:
             assert sim.at == "approach" and sim.grip == "open"
             assert target[:5] == sim.joints[:5]
-            assert abs(target[5] - sim.joints[5]) == 360.0
+            assert abs(target[5] - sim.joints[5]) == (
+                180.0 if motion.get("j6_recovery_enabled") else 360.0)
             sim.events.append("unwind")
             if not sim.ignore_unwind:
                 sim.joints[:] = target
@@ -89,7 +90,7 @@ def test_여유가_있으면_되감지_않는다(rig):
     assert sim.peg_angle == -60
 
 
-@pytest.mark.parametrize("failure", ["disabled", "read", "nan", "j5", "j6", "unreached"])
+@pytest.mark.parametrize("failure", ["disabled", "read", "nan", "nan_j5", "j6", "unreached"])
 def test_불확실하거나_한계_밖이면_물거나_돌리지_않는다(rig, monkeypatch, failure):
     sim, pose, motion = rig
     if failure == "disabled":
@@ -98,8 +99,8 @@ def test_불확실하거나_한계_밖이면_물거나_돌리지_않는다(rig, 
         monkeypatch.setattr(MP._api, "get_current_posj", lambda: -1)
     elif failure == "nan":
         sim.joints[5] = float("nan")
-    elif failure == "j5":
-        sim.joints[4] = 132.0
+    elif failure == "nan_j5":
+        sim.joints[4] = float("nan")
     elif failure == "j6":
         sim.joints[5] = -363.3
     else:
@@ -196,3 +197,23 @@ def test_저장_실패는_동작전_차단하거나_미등록으로_남긴다(tm
     assert bool(moved) == (fail_at == 2)
     assert st.roll_of(1) is None
     assert PS.PegState(path).load().roll_of(1) == (10.0 if fail_at == 1 else None)
+
+
+def test_180도_회복을_진입후퇴에_반영하고_페그회전량에는_넣지_않는다(rig, monkeypatch):
+    sim, pose, motion = rig
+    motion.update(j6_recovery_enabled=True, peg_j6_limit_deg=300.0)
+    sim.joints[5] = 285.0
+    monkeypatch.setattr(MP, "_j6_pose", lambda pose, motion, delta_deg=0: (pose, 0.0))
+    tasks = []
+    original = MP._movel
+
+    def movel(task, motion):
+        tasks.append(list(task))
+        original(task, motion)
+    monkeypatch.setattr(MP, "_movel", movel)
+    MP.adjust_peg(pose, 6, 60, motion)
+    assert sim.peg_angle == 60
+    assert sim.joints[5] == 165
+    assert sim.events.count("unwind") == 1
+    assert tasks[0][5] == pytest.approx(-180)
+    assert tasks[-1][5] == pytest.approx(-120)

@@ -183,7 +183,7 @@ class TaskManager(Node):
 
         self.pub_state = self.create_publisher(TuningState, '/tuning/state', STATE_QOS)
 
-        # 명령 서비스. 네 개가 CommandTuning 타입을 공유하며
+        # 명령 서비스. 시작·재등록·일시정지·재개·취소가 CommandTuning 타입을 공유하며
         # 어느 이름으로 불렸는지가 곧 명령이다 (명세 6절).
         #
         # 서비스마다 MutuallyExclusiveCallbackGroup 을 따로 준다. Reentrant 로 묶으면
@@ -193,6 +193,7 @@ class TaskManager(Node):
         # (start 가 서버를 기다리는 동안에도 cancel 이 들어와야 한다).
         for srv_type, name, handler in (
                 (CommandTuning, '/tuning/start', self.on_start),
+                (CommandTuning, '/tuning/reregister_pegs', self.on_reregister_pegs),
                 (CommandTuning, '/tuning/pause', self.on_pause),
                 (CommandTuning, '/tuning/resume', self.on_resume),
                 (CommandTuning, '/tuning/cancel', self.on_cancel),
@@ -315,7 +316,10 @@ class TaskManager(Node):
     def _running(self):
         return self._worker is not None and self._worker.is_alive()
 
-    def on_start(self, req, res):
+    def on_reregister_pegs(self, req, res):
+        return self.on_start(req, res, reregister=True)
+
+    def on_start(self, req, res, reregister=False):
         # 검사와 스레드 생성 사이에 다른 start 가 끼어들면 작업 스레드가 둘 생긴다
         with self._lock:
             if self._running() or self._starting:
@@ -324,12 +328,12 @@ class TaskManager(Node):
                 return res
             self._starting = True
         try:
-            return self._do_start(res)
+            return self._do_start(res, reregister=reregister)
         finally:
             self._starting = False
 
-    def _do_start(self, res):
-        missing = self._servers_not_ready()
+    def _do_start(self, res, reregister=False):
+        missing = self._servers_not_ready(registration_only=reregister)
         if missing:
             res.accepted = False
             res.message = '노드 준비 안 됨: %s' % ', '.join(missing)
@@ -348,14 +352,17 @@ class TaskManager(Node):
         for f in ('tolerance_cents', 'max_adjust_count', 'max_measure_retry',
                   'measure_timeout_sec', 'onset_timeout_sec'):
             setattr(self.active_settings, f, getattr(self.settings, f))
-        self._set_phase(TuningState.PHASE_REGISTER_PEG, L.STRING_ORDER[0])
-        self._worker = threading.Thread(target=self._run_job, name='tuning', daemon=True)
+        self._set_phase(TuningState.PHASE_REGISTER_PEG if reregister
+                        else TuningState.PHASE_PREPARE_PLUCK, L.STRING_ORDER[0])
+        target = self._run_reregister if reregister else self._run_job
+        self._worker = threading.Thread(target=target, name='tuning', daemon=True)
         self._worker.start()
         res.accepted = True
-        res.message = '작업 시작 %s — 발현 전 페그 각 등록' % self.job_id
+        res.message = ('페그 재등록 접수 %s — 조율 없이 등록·복귀만 실행' if reregister
+                       else '작업 시작 %s — 기존 페그 등록값으로 조율') % self.job_id
         return res
 
-    def _servers_not_ready(self):
+    def _servers_not_ready(self, registration_only=False):
         """서버가 떠 있는지 확인한다. 브리핑 B6 — 존재 확인까지만 한다."""
         wait = float(self._p('node_wait_sec'))
         missing = []
@@ -365,6 +372,10 @@ class TaskManager(Node):
                           ('audio/measure_pitch', self.cli_measure),
                           ('robot/play_string', self.cli_play),
                           ('robot/adjust_peg', self.cli_adjust)):
+            if not registration_only and cli is self.cli_register:
+                continue
+            if registration_only and cli not in (self.cli_home, self.cli_register):
+                continue
             if not cli.wait_for_server(timeout_sec=wait):
                 missing.append(name)
         return missing
@@ -551,8 +562,6 @@ class TaskManager(Node):
         PlayString Result 와 MeasurePitch Result 의 도착 순서는 보장되지 않는다.
         둘 다 받은 뒤에 판정한다.
         """
-        if string_number not in self._registered_pegs:
-            raise Aborted('%d번 페그 각 등록 미완료 — 측정·발현 요청 차단' % string_number)
         # #89: 피크 집기·이동을 완료한 뒤 마이크 타이머를 시작한다.
         self._gate()
         self._set_phase(TuningState.PHASE_PREPARE_PLUCK, string_number)
@@ -759,8 +768,6 @@ class TaskManager(Node):
 
         캘리브레이션 실측 전이면 여기서 Aborted 를 던진다. 임시 계수로 로봇을 돌리지 않는다.
         """
-        if string_number not in self._registered_pegs:
-            raise Aborted('%d번 페그 각 등록 미완료 — 페그 조절 요청 차단' % string_number)
         try:
             cal = self.calibration.get(string_number)
         except PC.CalibrationMissing as exc:
@@ -872,7 +879,7 @@ class TaskManager(Node):
 
     # ------------------------------------------------------------------ 상태기계 본체
 
-    def _register_pegs(self, numbers=None):
+    def _register_pegs(self, numbers=None, force=False):
         numbers = tuple(L.STRING_ORDER if numbers is None else numbers)
         self._registered_pegs = set()
         for no in numbers:
@@ -880,7 +887,7 @@ class TaskManager(Node):
             self._set_phase(TuningState.PHASE_REGISTER_PEG, no)
             self.get_logger().info('%d번 페그 각 등록 요청 — 완료 전 발현하지 않는다' % no)
             result = self._run_action(
-                self.cli_register, RegisterPeg.Goal(string_number=no),
+                self.cli_register, RegisterPeg.Goal(string_number=no, force=force),
                 float(self._p('register_timeout_sec')), 'register_peg')
             if result is None or not result.success:
                 why = result.message if result is not None else '응답 없음'
@@ -889,11 +896,24 @@ class TaskManager(Node):
         self._gate()  # 등록 중 취소됐다면 측정을 시작하지 않는다
         self._registered_pegs.update(numbers)  # 전부 성공한 뒤에만 후속 명령을 허용한다
 
+    def _run_reregister(self):
+        """재등록만 실행한다. 성공·실패 모두 조율 결과로 저장하지 않는다."""
+        try:
+            self._register_pegs(force=True)
+            self._return_home()
+            self.job_id = ''
+            self._set_phase(TuningState.PHASE_IDLE, 0)
+            self.get_logger().info('페그 재등록·복귀 완료')
+        except Cancelled:
+            self._set_phase(TuningState.PHASE_CANCELED, 0)
+        except Exception as exc:                          # noqa: BLE001
+            self.get_logger().error('페그 재등록 중단: %s' % exc)
+            self._set_phase(TuningState.PHASE_ERROR, 0)
+
     def _run_job(self):
         self.get_logger().info('작업 %s 시작' % self.job_id)
         try:
-            self._register_pegs()  # 마이크 ready/첫 발현보다 먼저 완료한다
-            self.get_logger().info('전체 페그 각 등록 완료 — 발현·측정 시작')
+            self.get_logger().info('기존 페그 등록값으로 조율 시작 — 자동 등록 없음')
             hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
                 self._gate()
