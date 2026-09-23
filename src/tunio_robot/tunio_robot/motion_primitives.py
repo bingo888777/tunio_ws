@@ -714,7 +714,7 @@ def _release():
     return _grip("open")
 
 
-def pluck_string(pose, motion, standby=None):
+def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=False):
     """
     줄 튕기기 1차 구현 (위치 제어만). 힘 제어·피크 집기는 2단계에서 붙인다.
 
@@ -727,6 +727,9 @@ def pluck_string(pose, motion, standby=None):
               (기본값은 pluck_test.py 에서 검증한 값).
     standby — 기타 위 대기 자세(Pose, joints 또는 task). 주면 발현 전후에 들른다.
               joints 면 movej, task(x) 면 Base 직선(movel)으로 간다.
+
+    prepare_only: 줄 위 접근점까지만 이동하며 접촉·발현하지 않는다.
+    prepared: 준비 Action 성공 후 대기 자세 경유를 생략한다. 접근점은 다시 명령한다.
 
     순서 (성현 2026-09-19, 2026-09-21 대기 자세 좌표화):
       대기 자세 → 접촉점 위 pluck_up_mm → 접촉점(느리게) → 옆으로 스트로크
@@ -757,8 +760,11 @@ def pluck_string(pose, motion, standby=None):
     above = list(x)
     above[2] += up_mm                                   # Base +Z
 
-    _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
+    if not prepared:
+        _goto_standby(standby, motion, v_app, a_app)    # 기타 위 대기
     _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
+    if prepare_only:
+        return  # 마이크 ready 전에는 접촉점으로 내려가지 않는다
     _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
 
     # 스트로크·후퇴는 **피크가 줄에 닿아 있는 유일한 구간**이다. 이제 이동 거부를

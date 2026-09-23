@@ -762,3 +762,22 @@ def test_반환_후에는_페그이동_높이와_모델여유까지_수직상승
     assert retreat[1][:2] == holder[:2]
     assert retreat[1][3:] == holder[3:]
     assert fake_gripper.calls == ["open"]
+
+
+def test_prepare_only_stops_above_string_without_contact_or_stroke(fake_api):
+    MP.pluck_string(_pose_x(CONTACT), {}, prepare_only=True)
+    assert len(fake_api.calls) == 1
+    assert fake_api.calls[0][1][2] == pytest.approx(CONTACT[2] + 20)
+    assert fake_api.calls[0][2]['ref'] == 'BASE'
+
+
+def test_prepared_play_skips_standby_before_single_stroke(fake_api):
+    standby = Pose('frames.standby', True, joints=[0, 0, 75, 0, 100, 0])
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=standby, prepare_only=True)
+    fake_api.calls.clear()
+    MP.pluck_string(_pose_x(CONTACT), {}, standby=standby, prepared=True)
+    assert fake_api.calls[0][0] == 'movel'  # 처음 대기 자세 경유는 생략
+    assert fake_api.calls[-1][0] == 'movej'  # 발현 후 복귀는 유지
+    relative = [c for c in fake_api.calls if c[2].get('mod') == 'REL']
+    assert len(relative) == 2  # 스트로크 한 번 + 즉시 후퇴 한 번
+    assert relative[0][1][:3] == [-8.0, 0.0, 0.0]

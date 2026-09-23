@@ -7,7 +7,8 @@
 
 const PHASE = {
   IDLE: 0, MEASURE_READY: 1, PLUCK: 2, ANALYZE: 3, ADJUST_PEG: 4,
-  VERIFY: 5, STRUM: 6, RETURN: 7, DONE: 8, PAUSED: 9, CANCELED: 10, ERROR: 11, REGISTER_PEG: 12,
+  VERIFY: 5, STRUM: 6, RETURN: 7, DONE: 8, PAUSED: 9, CANCELED: 10, ERROR: 11,
+  REGISTER_PEG: 12, PREPARE_PLUCK: 13,
 };
 
 // 대상 줄과 이름 (CLAUDE.md 4절). 6→5→2→1 순서로 처리한다.
@@ -163,7 +164,8 @@ function toast(message, ok) {
 function isRunning(state) {
   if (!state) return false;
   return (state.phase >= PHASE.MEASURE_READY && state.phase <= PHASE.RETURN)
-      || state.phase === PHASE.PAUSED || state.phase === PHASE.REGISTER_PEG;
+      || state.phase === PHASE.PAUSED || state.phase === PHASE.REGISTER_PEG
+      || state.phase === PHASE.PREPARE_PLUCK;
 }
 
 // 센트 오차 = 1200 * log2(측정 / 목표) (CLAUDE.md 4절)
