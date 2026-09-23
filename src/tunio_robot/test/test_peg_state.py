@@ -350,6 +350,9 @@ def test_줄별_속도는_페그_회전에만_적용된다(spy, monkeypatch, no,
     from tunio_robot import teach_points as TP
     MP, _ = spy
     points = TP.load(os.path.join(os.path.dirname(__file__), "..", "config", "teach_points.yaml"))
+    # 이 테스트는 줄별 회전 속도값만 본다 — 줄끊어짐 감지(비동기 amovej 경로)는
+    # test_string_break.py 몫이라 여기선 꺼서 기존 동기 _movej 경로로 보낸다.
+    points.motion["string_break_enabled"] = False
     before = dict(points.motion)
     calls = []
     monkeypatch.setattr(MP, "_movej", lambda j, m, relative=False:

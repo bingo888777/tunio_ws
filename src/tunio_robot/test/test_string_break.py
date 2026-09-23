@@ -62,7 +62,12 @@ def rig(monkeypatch):
     monkeypatch.setattr(MP, "time", SimpleNamespace(sleep=lambda s: None))
     stop_calls = []
     monkeypatch.setattr(MP, "_stop_motion", lambda *a, **kw: stop_calls.append(1))
-    return api, pose, torque, stop_calls
+    # 실제 ~/.tunio/robot_data 에 쓰지 않는다 — 폴링 기록을 남기지만 테스트가
+    # 사람 실측 폴더를 더럽히면 안 된다. 호출 자체는 기록해서 저장이 시도됐는지 본다
+    saved = []
+    monkeypatch.setattr(MP.runlog, "save",
+                        lambda name, payload, out_dir: saved.append((name, payload, out_dir)))
+    return api, pose, torque, stop_calls, saved
 
 
 BASE_MOTION = {"string_break_enabled": True, "string_break_poll_sec": 0.001,
@@ -73,7 +78,7 @@ BASE_MOTION = {"string_break_enabled": True, "string_break_poll_sec": 0.001,
 
 def test_기본값은_꺼져있어_amovej를_안_쓰고_한_번에_돈다(rig):
     """string_break_enabled 가 없으면(기본) adjust_peg 의 옛 분기(_movej) 그대로다."""
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     motion = {"approach_mm": 100.0}
     assert motion.get("string_break_enabled", False) is False
     if motion.get("string_break_enabled", False):
@@ -84,7 +89,7 @@ def test_기본값은_꺼져있어_amovej를_안_쓰고_한_번에_돈다(rig):
 
 def test_켜져있으면_amovej로_비동기_시작하고_폴링마다_토크를_본다(rig):
     """정상(줄 있음) 패턴 — BUSY 한 번 보고 나서 목표 각도에 온 IDLE 로 끝난다."""
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     torque.readings = iter([[0.0] * 6, [0.0] * 5 + [0.3], [0.0] * 5 + [0.3]])
     api.motion_status = iter([2, 0])                 # 1번째 BUSY, 2번째 IDLE(진짜 끝)
     api.joints = iter([[0.0] * 6, [0.0] * 5 + [20.0]])  # 시작각, IDLE 때 도착 확인
@@ -99,7 +104,7 @@ def test_켜져있으면_amovej로_비동기_시작하고_폴링마다_토크를
 
 def test_토크가_baseline에서_안_벗어나면_MoveStop을_부르고_예외를_던진다(rig):
     """줄 끊어짐 패턴 — 폴링 값이 baseline 근처(문턱 미만)면 즉시 멈춘다."""
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     torque.readings = iter([[0.0] * 6, [0.0] * 5 + [0.01]])
     api.motion_status = iter([2])
     api.joints = iter([[0.0] * 6])                   # 시작각만 읽는다(도착 확인까진 못 감)
@@ -118,7 +123,7 @@ def test_낡은_IDLE는_BUSY를_못_봤으니_관절각도_안_보고_그냥_기
     "실제로는 안 돈 채로 다음 단계로 넘어간다" 문제가 그대로 남는다
     (관절각 확인만으로는 미세 보정에서 또 뚫린다 — 아래 다른 테스트 참고).
     """
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     torque.readings = iter([[0.0] * 6, [0.0] * 5 + [0.3], [0.0] * 5 + [0.3],
                             [0.0] * 5 + [0.3]])
     api.motion_status = iter([0, 2, 0])  # 낡은 IDLE(무시됨) -> BUSY -> 진짜 IDLE
@@ -141,7 +146,7 @@ def test_회전량이_허용오차보다_작으면_BUSY_없이는_안_끝난_걸
     낡은 IDLE 이 나오는 순간 위치상 이미 "도착"처럼 보여도(0.3도 이내라)
     seen_busy 가 없으면 넘어가지 않는 것을 확인한다.
     """
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     torque.readings = iter([[0.0] * 6, [0.0] * 5 + [0.3], [0.0] * 5 + [0.3],
                             [0.0] * 5 + [0.3]])
     api.motion_status = iter([0, 2, 0])  # 낡은 IDLE(위치상 오판 유발) -> BUSY -> 진짜 IDLE
@@ -160,7 +165,7 @@ def test_회전량이_허용오차보다_작으면_BUSY_없이는_안_끝난_걸
 
 def test_영원히_안_끝나면_타임아웃으로_MoveStop을_부르고_실패한다(rig):
     """무한 대기를 막는다 — max_wait_sec 을 넘기면 멈추고 실패로 던진다."""
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
 
     def torque_gen():
         yield [0.0] * 6                  # base(정지) — 낮다
@@ -183,7 +188,7 @@ def test_영원히_안_끝나면_타임아웃으로_MoveStop을_부르고_실패
 
 def test_amovej가_거부되면_MotionError(rig):
     """Amovej 반환이 -1 이면(순응제어 켜진 채 위치 명령 등) 폴링 없이 바로 실패한다."""
-    api, pose, torque, stop_calls = rig
+    api, pose, torque, stop_calls, saved = rig
     api.amovej = lambda pos, vel=None, acc=None, mod=None: -1
     torque.readings = iter([[0.0] * 6])
     api.joints = iter([[0.0] * 6])
@@ -191,6 +196,65 @@ def test_amovej가_거부되면_MotionError(rig):
     with pytest.raises(MP.MotionError, match="거부"):
         MP._turn_peg_async_with_string_check(20.0, dict(BASE_MOTION), pose, 6)
     assert stop_calls == []
+
+
+def test_초반_유격_구간은_ignore_deg_동안_판정을_건너뛴다(rig):
+    """string_break_ignore_deg 동안은 토크가 낮아도(끊어짐 패턴) 안 멈춘다.
+
+    그 구간이 지나야 같은 저토크 값으로 판정이 걸린다. api.motion_status 를
+    정확히 3개(전부 BUSY)만 줘서, 그보다 먼저(1·2번째 폴링) 걸리면 StopIteration
+    없이 통과하지 못하게 해 "정말 3번째에야 걸렸다"를 이터레이터 소진으로도 확인한다.
+    """
+    api, pose, torque, stop_calls, saved = rig
+    torque.readings = iter([[0.0] * 6] + [[0.0] * 5 + [0.01]] * 3)
+    api.motion_status = iter([2, 2, 2])           # 도착 분기는 안 탄다
+    api.joints = iter([[0.0] * 6])                # 시작각만
+
+    motion = dict(BASE_MOTION)
+    motion["string_break_poll_sec"] = 0.1
+    motion["string_break_ignore_deg"] = 4.5       # vel 30deg/s 기준 ignore_sec=0.15초
+
+    with pytest.raises(MP.StringBrokenError, match="MoveStop"):
+        MP._turn_peg_async_with_string_check(20.0, motion, pose, 6)
+
+    assert stop_calls == [1]
+
+
+def test_낮은_토크_한_번으로는_안_멈추고_연속되어야_확정한다(rig):
+    """string_break_confirm_polls(3)이면 저토크 1·2번째는 넘기고 3번째에 확정한다.
+
+    2026-09-23 실기 오탐(정상 줄인데 낱개 샘플 하나로 즉시 멈춤) 이후 추가한 동작.
+    motion_status 를 정확히 3개만 줘서, 1·2번째에 걸리면 StopIteration 으로 드러난다.
+    """
+    api, pose, torque, stop_calls, saved = rig
+    torque.readings = iter([[0.0] * 6] + [[0.0] * 5 + [0.01]] * 3)
+    api.motion_status = iter([2, 2, 2])
+    api.joints = iter([[0.0] * 6])
+
+    motion = dict(BASE_MOTION)
+    motion["string_break_confirm_polls"] = 3
+
+    with pytest.raises(MP.StringBrokenError, match="연속 3회"):
+        MP._turn_peg_async_with_string_check(20.0, motion, pose, 6)
+
+    assert stop_calls == [1]
+
+
+def test_중간에_정상값이_끼면_연속_카운트가_리셋된다(rig):
+    """저토크 2번 뒤 정상값 1번이 끼면 그 뒤로 다시 3번 연속 낮아야 확정한다."""
+    api, pose, torque, stop_calls, saved = rig
+    low, ok = [0.0] * 5 + [0.01], [0.0] * 5 + [0.3]
+    torque.readings = iter([[0.0] * 6, low, low, ok, low, low, low])
+    api.motion_status = iter([2, 2, 2, 2, 2, 2])
+    api.joints = iter([[0.0] * 6])
+
+    motion = dict(BASE_MOTION)
+    motion["string_break_confirm_polls"] = 3
+
+    with pytest.raises(MP.StringBrokenError, match="연속 3회"):
+        MP._turn_peg_async_with_string_check(20.0, motion, pose, 6)
+
+    assert stop_calls == [1]
 
 
 def test_StringBrokenError는_MotionError라서_기존_정리_경로를_그대로_탄다():

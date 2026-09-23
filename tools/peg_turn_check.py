@@ -56,6 +56,7 @@
 import argparse
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..",
                                 "src", "tunio_robot"))
@@ -105,6 +106,15 @@ def main():
                          "--no-grip 과는 다른 축 — 페그를 문 상태에서만 뜻이 있다")
     ap.add_argument("--no-return", action="store_true",
                     help="돌린 만큼 되돌리지 않는다. 기본은 되돌린다")
+    ap.add_argument("--continuous", action="store_true",
+                    help="끊어서(movej) 돌리지 않고 실제 운영 코드처럼 amovej 로 "
+                         "한 번에 연속으로 돌면서 폴링마다 토크를 읽는다. "
+                         "2026-09-23 실기에서 끊어서 잰 문턱(0.25Nm)이 연속회전 "
+                         "실측(diff 0.05~0.12)과 3~6배 차이나서 추가함 — "
+                         "_turn_peg_async_with_string_check 와 같은 방식으로 재야 "
+                         "그 코드가 실제로 쓸 문턱이 나온다")
+    ap.add_argument("--poll-sec", type=float, default=0.2,
+                    help="--continuous 일 때 폴링 간격(초). motion.string_break_poll_sec 기본값과 맞춘다")
     ap.add_argument("--preset", default="peg")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--id", default="dsr01")
@@ -179,8 +189,9 @@ def main():
     from tunio_robot import arm_pose
     from tunio_robot import motion_primitives as MP
     MP.connect(points.robot, points.gripper)
-    from DR_common2 import posx
-    from DSR_ROBOT2 import get_current_posj, get_external_torque, ikin
+    from DR_common2 import posj, posx
+    from DSR_ROBOT2 import (amovej, check_motion, get_current_posj,
+                            get_external_torque, ikin)
 
     # 팔 모양을 안 고르면 경유지(특이점)의 모호한 현재 자세를 따라가 매번 달라진다
     sol = peg.sol
@@ -202,6 +213,7 @@ def main():
         "preset": None if args.no_grip else args.preset,
         "string": None if args.no_grip else args.string,
         "torque_source": "joint6_external",
+        "continuous": args.continuous,
         "angle_deg": args.angle, "step_deg": args.step,
         "joint": joint, "turn_sign": peg.turn_sign, "sol": sol,
         "turn_vel": turn["vel"], "travel_vel": motion["vel"],
@@ -229,21 +241,60 @@ def main():
         print("\n  줄 소리를 들어라. 음이 내려가면 turn_sign 이 맞는 것이다.")
         confirm(f"\n{args.angle:.1f}도를 {abs(step_signed):.2f}도씩 돌린다.")
 
-        print(f"\n  {'누적각':>8}  {'실제 J':>8}  {'토크':>8}  {'바닥대비':>8}")
-        for i in range(1, n_steps + 1):
+        if args.continuous:
+            # 끊어서 움직이지 않는다 — 운영 코드(motion_primitives.py
+            # _turn_peg_async_with_string_check)와 같은 방식: amovej 로 전체
+            # 각도를 한 번에 걸고, 도는 동안 폴링마다(끊지 않은 채로) 토크를 읽는다.
+            # 문턱은 여기서 안 판정한다 — 그냥 있는 그대로 기록만 한다.
+            print(f"\n  {'t(s)':>8}  {'토크':>8}  {'바닥대비':>8}  상태")
             d = [0.0] * 6
-            d[joint - 1] = step_signed
-            MP._movej(d, turn, relative=True)
-            j = list(get_current_posj())
-            t = list(get_external_torque())
-            moved = j[joint - 1] - base_j[joint - 1]
-            tq = t[joint - 1]
-            rows.append((i * step_signed, moved, tq, tq - base_t[joint - 1]))
-            log["steps"].append({"commanded_deg": i * step_signed,
-                                 "moved_deg": moved, "torque": tq,
-                                 "torque_all": t, "joints": j})
-            print(f"  {i * step_signed:8.2f}  {moved:8.2f}  {tq:+8.2f}  "
-                  f"{tq - base_t[joint - 1]:+8.2f}")
+            d[joint - 1] = total
+            target_angle = base_j[joint - 1] + total
+            ret = amovej(posj(d), vel=turn["vel"], acc=turn["acc"],
+                        mod=MP._api.DR_MV_MOD_REL)
+            MP._moved(ret, "amovej")
+            waited = 0.0
+            seen_busy = False
+            arrive_tol = points.motion.get("string_break_arrive_tolerance_deg", 0.5)
+            max_wait = points.motion.get("string_break_max_wait_sec", 30.0)
+            while True:
+                status = check_motion()
+                j = list(get_current_posj())
+                t = list(get_external_torque())
+                moved = j[joint - 1] - base_j[joint - 1]
+                tq = t[joint - 1]
+                diff = tq - base_t[joint - 1]
+                rows.append((waited, moved, tq, diff))
+                log["steps"].append({"t": round(waited, 3), "moved_deg": moved,
+                                     "torque": tq, "torque_all": t, "joints": j,
+                                     "status": status})
+                print(f"  {waited:8.2f}  {tq:+8.2f}  {diff:+8.2f}  {status}")
+                if status not in (0, 1, 2):
+                    raise SystemExit(f"check_motion 이 알 수 없는 값: {status}")
+                if status == 2:
+                    seen_busy = True
+                if status == 0 and seen_busy and abs(j[joint - 1] - target_angle) <= arrive_tol:
+                    break
+                if waited >= max_wait:
+                    raise SystemExit(f"{max_wait:.0f}초 안에 안 끝났다 — 직접 확인할 것")
+                time.sleep(args.poll_sec)
+                waited += args.poll_sec
+        else:
+            print(f"\n  {'누적각':>8}  {'실제 J':>8}  {'토크':>8}  {'바닥대비':>8}")
+            for i in range(1, n_steps + 1):
+                d = [0.0] * 6
+                d[joint - 1] = step_signed
+                MP._movej(d, turn, relative=True)
+                j = list(get_current_posj())
+                t = list(get_external_torque())
+                moved = j[joint - 1] - base_j[joint - 1]
+                tq = t[joint - 1]
+                rows.append((i * step_signed, moved, tq, tq - base_t[joint - 1]))
+                log["steps"].append({"commanded_deg": i * step_signed,
+                                     "moved_deg": moved, "torque": tq,
+                                     "torque_all": t, "joints": j})
+                print(f"  {i * step_signed:8.2f}  {moved:8.2f}  {tq:+8.2f}  "
+                      f"{tq - base_t[joint - 1]:+8.2f}")
 
         print("\n  다 돌았다.")
         heard = input("  소리가 어떻게 됐나? (내려감 / 올라감 / 모르겠음) ").strip()
@@ -287,10 +338,20 @@ def main():
         print("  회전 기록 없음")
         return 0
 
-    lag = sum(1 for _, moved, _, _ in rows if abs(moved) < 0.1)
-    print(f"  관절은 명령대로 움직였다 (마지막 {rows[-1][1]:+.2f}도 / "
-          f"명령 {rows[-1][0]:+.2f}도)" if lag == 0 else
-          f"  ⚠️ 관절이 명령만큼 안 움직인 구간이 {lag}개 있다")
+    if args.continuous:
+        # 연속회전은 moved 가 0에서 total 까지 점점 커지는 게 정상이라
+        # 이산 스텝용 "칸마다 0.1도 이상 움직였나" 검사는 안 맞는다.
+        # 마지막 폴링(도착 확인을 이미 통과한 시점)만 목표와 견준다
+        arrive_ok = abs(rows[-1][1] - total) <= points.motion.get(
+            "string_break_arrive_tolerance_deg", 0.5)
+        print(f"  관절은 명령대로 움직였다 (마지막 {rows[-1][1]:+.2f}도 / "
+              f"명령 {total:+.2f}도)" if arrive_ok else
+              f"  ⚠️ 마지막 폴링이 목표 각도 근처가 아니다 (마지막 {rows[-1][1]:+.2f}도 / 명령 {total:+.2f}도)")
+    else:
+        lag = sum(1 for _, moved, _, _ in rows if abs(moved) < 0.1)
+        print(f"  관절은 명령대로 움직였다 (마지막 {rows[-1][1]:+.2f}도 / "
+              f"명령 {rows[-1][0]:+.2f}도)" if lag == 0 else
+              f"  ⚠️ 관절이 명령만큼 안 움직인 구간이 {lag}개 있다")
 
     # 정지 상태와 도는 중의 차이가 후보 신호다. 도는 순간 한 번 바뀌고
     # 그 뒤로 평평하면 그건 마찰이고, 각도에 따라 커지면 장력이다
@@ -310,7 +371,8 @@ def main():
                      if abs(r[2]) > abs(sum(head) / k) + 0.5 * slope), None)
         print(f"  각도가 커질수록 저항이 늘었다 (뒤쪽이 {slope:+.3f} 더 크다)")
         if knee:
-            print(f"  꺾이는 지점 약 {abs(knee[0]):.2f}도 — 헛돎(백래시) 대략치다")
+            unit = "초" if args.continuous else "도"
+            print(f"  꺾이는 지점 약 {abs(knee[0]):.2f}{unit} — 헛돎(백래시) 대략치다")
     else:
         print(f"  **기울기 없음.** 앞뒤 차이 {slope:+.3f} 가 흩어짐 {spread:.3f} 안에 있다.")
         print("  각도가 늘어도 저항이 안 는다는 뜻이다. 두 가지로 읽힌다 —")
@@ -330,8 +392,9 @@ def main():
                       "step_from_rest": mean - base_t[joint - 1],
                       "slope": slope}
     string_tag = "" if args.no_grip or args.string == "intact" else "_stringcut"
+    cont_tag = "_continuous" if args.continuous else ""
     path = runlog.save(f"turn_peg{args.peg}_{args.direction}"
-                       f"{'_air' if args.no_grip else ''}{string_tag}", log, LOG_DIR)
+                       f"{'_air' if args.no_grip else ''}{string_tag}{cont_tag}", log, LOG_DIR)
     if path:
         print(f"\n  기록 저장: {os.path.relpath(path)}")
 

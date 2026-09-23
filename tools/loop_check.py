@@ -19,8 +19,14 @@ loop_check — 조율 루프 한 바퀴를 Action 으로 돌려 본다. 정묵·
       ros2 run tunio_robot robot_controller --ros-args
           -p dry_run:=false -p peg_register_force:=false
   · 거치대에 피크가 있어야 한다
-  · Phase 0 등록이 끝나 있어야 한다 (tools/peg_register.py)
   · 펜던트에서 GripperDA_v1 · Tool Weight 켜 둘 것
+
+Phase 0 (페그 등록)
+  2026-09-23 부터 이 도구가 **매번 자동으로** register_peg 를 먼저 보낸다
+  (task_manager._register_pegs() 와 같은 방식 — 요청은 항상 보내고, 이미
+  등록돼 있으면 robot_controller 가 조용히 통과시킨다). 등록이 안 돼 있으면
+  여기서 Phase 0 를 그 자리에서 돈다. tools/peg_register.py 를 먼저 안
+  돌려도 된다 — 다만 처음 등록이면 시간이 훨씬 걸린다(실측·파지 확인 포함).
 
 안전
   · 기본 3도만 **푸는 쪽**으로 돌린다. 조이는 쪽은 줄이 끊어질 수 있다
@@ -38,7 +44,7 @@ import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, PlayString, StrumAll
+from tunio_interfaces.action import AdjustPeg, PlayString, RegisterPeg, WipeStrings
 
 
 def confirm(msg):
@@ -76,7 +82,7 @@ HELP = """
   ----------------------------------------------------------------
   play <줄>                     그 줄을 튕긴다 (피크가 없으면 집어 온다)
   peg <줄> <loosen|tighten> <도>  페그를 돌린다 (피크를 쥐고 있으면 먼저 반환)
-  strum                         전체 화음 (아직 미구현 — 실패가 정상)
+  wipe                          넥 닦기 (아직 미교시 — 실패가 정상)
   ?                             이 도움말
   q                             나가기
 
@@ -88,7 +94,7 @@ HELP = """
 """
 
 
-def repl(node, play, adj, strum):
+def repl(node, play, adj, wipe):
     """
     ROS Action 을 손으로 쏴 본다. 서버가 보내는 것과 같은 goal 이다.
 
@@ -123,8 +129,8 @@ def repl(node, play, adj, strum):
                 g.direction = -1 if w[2].startswith("l") else 1
                 g.angle_deg = float(w[3])
                 send(node, adj, g, f"adjust_peg {w[1]} {w[2]} {w[3]}도")
-            elif cmd == "strum":
-                send(node, strum, StrumAll.Goal(), "strum_all")
+            elif cmd == "wipe":
+                send(node, wipe, WipeStrings.Goal(), "wipe_strings")
             else:
                 print(f"  모르는 명령: {cmd}   ? 로 도움말")
         except (IndexError, ValueError):
@@ -163,17 +169,27 @@ def main():
     node = Node("tunio_loop_check")
     play = ActionClient(node, PlayString, "/robot/play_string")
     adj = ActionClient(node, AdjustPeg, "/robot/adjust_peg")
-    strum = ActionClient(node, StrumAll, "/robot/strum_all")
+    wipe = ActionClient(node, WipeStrings, "/robot/wipe_strings")
+    register = ActionClient(node, RegisterPeg, "/robot/register_peg")
 
     if args.interactive:
         try:
-            return repl(node, play, adj, strum)
+            return repl(node, play, adj, wipe)
         finally:
             node.destroy_node()
             rclpy.shutdown()
 
     ok = True
     try:
+        # Phase 0 — 항상 요청한다. 이미 등록돼 있으면 robot_controller 가
+        # 조용히 통과시킨다(task_manager._register_pegs() 와 같은 방식).
+        # 미등록이면 여기서 실제로 등록을 돈다 — 그만큼 오래 걸릴 수 있다.
+        if not args.yes:
+            confirm(f"\n[0/3] {no}번 페그 등록 확인 (미등록이면 여기서 Phase 0을 돈다).")
+        r = RegisterPeg.Goal()
+        r.string_number = no
+        ok = send(node, register, r, f"[0/3] {no}번 페그 등록", timeout=180.0) and ok
+
         if not args.skip_pluck:
             if not args.yes:
                 confirm("\n[1/3] 피크를 집고 줄을 튕긴다. 거치대 왕복 경로를 본다.")

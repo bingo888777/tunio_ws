@@ -364,13 +364,21 @@
 1차 실패 줄은 검증에서 제외하고 실패 사유를 보존한다 (2026-09-23 사용자 결정).
 → ReturnHome으로 피크 반환·대기 자세 복귀 → 완료·결과 저장
 
-화음은 미구현이라 `_run_job()`의 `_strum()` 호출을 주석 처리한다 (#84, 2026-09-22 사용자 결정).
-함수·Action은 보존하며 구현과 실기 검증 후 호출을 복구한다.
+**화음(#84로 미구현인 채 폐기)은 안경닦이로 넥을 닦는 마무리 동작이 대체한다**
+(2026-09-23 사용자 결정). Action 이름도 `StrumAll` → `WipeStrings`로 바꿨다 —
+인터페이스는 새로 안 늘리고 같은 자리를 재활용했다(Goal 필드 없음, Result만).
+`_run_job()`의 `_wipe()` 호출은 **아직 주석 처리된 채로 있다** — 넥 닦기
+교시점(`teach_points.yaml`의 `wipe.holder`/`start`/`end`)이 전부 미교시라,
+지금 켜면 `_wipe()`가 매 작업마다 실패를 반환하고, #83의 `_run_action`이 그걸
+`Aborted`로 올려 **4줄을 완주한 작업조차 "중간에 끊긴 작업"으로 잘못 분류된다**
+— #84가 막으려던 것과 같은 종류의 회귀다. `wipe`를 실측해 `taught: true`로
+올린 뒤에 `task_manager.py`의 주석 처리된 `self._wipe()`를 풀 것.
 
-**복귀 성공을 확인한 뒤 완료·저장한다.** 현재는 화음 요청 자체를 보내지 않으므로
-미구현 화음 때문에 복귀와 저장이 막히지 않는다. ReturnHome이 실패하거나 결과가
+**복귀 성공을 확인한 뒤 완료·저장한다.** 지금은 마무리 동작 호출 자체를 안 보내므로
+그 실패 때문에 복귀와 저장이 막히지 않는다. ReturnHome이 실패하거나 결과가
 확인되지 않으면 PHASE_ERROR로 중단한다. 중단 시 기록은 save_on_error_exit 설정을 따른다.
-이전 StrumAll 내부 복귀 동작은 호환용으로 남아 있지만 정상 통합에서는 호출하지 않는다.
+`WipeStrings`(옛 StrumAll) 내부 복귀 동작은 켜진 뒤에도 그대로 쓰인다 — 복귀를
+전담하는 별도 Action이 없어서다(아래 인터페이스 절 참조).
 
 **브릿지핀 안착 확인은 범위에서 제외했다**(2026-09-18, 기획서 v1.2 / PR #2).
 
@@ -394,7 +402,7 @@ src/
 
 ### 노드 관계
 - task_manager ─ measure_pitch Action ─ audio_analyzer
-- task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
+- task_manager ─ play_string / adjust_peg / wipe_strings Action ─ robot_controller
 - task_manager ─ /tuning/state Topic ─ web_node ─ 브라우저(localhost)
 - task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
 - 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
@@ -408,7 +416,7 @@ src/
 - 로봇 제어 PC: tunio_robot (+ 두산 컨트롤러 유선 LAN)
   (`ros2 launch tunio_robot robot.launch.py dry_run:=false`)
 
-**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다.**
+**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`wipe_strings`·`register_peg`·`return_home` 다섯이다.**
 `/audio/measure_pitch` 는 한 PC 안으로 들어와 왕복이 없어졌다 — 측정 응답 2.2초
 예산에 유리하다. 대신 정정인 PC 한 대에서 노드 4개가 도니 **통합 첫 회차에서
 응답 시간이 2.2초를 넘는지 봐야 한다.**
@@ -425,7 +433,7 @@ Discovery Server 를 띄우는 자리도 서버 PC 에서 **정정인 PC** 로 �
 - /robot/play_string — 줄 번호 → 발현
 - /robot/adjust_peg — 줄 번호, direction(±1), angle_deg(양수).
   백래시 마무리(풀었다 조이기)는 **task_manager가 결정**하고 로봇은 시킨 대로만 한다
-- /robot/strum_all — 전체 줄 훑어 화음 (측정 없는 연출)
+- /robot/wipe_strings — 안경닦이로 넥 닦기 (측정 없는 마무리, 옛 strum_all)
 - /audio/measure_pitch — job_id, string_number, measurement_id, target_hz,
   timeout_sec, onset_timeout_sec → 준비 Feedback, 측정 Result
 
@@ -673,8 +681,9 @@ colcon test --packages-select tunio_server && colcon test-result --all
   4줄을 완주했으면 PARTIAL·FAILED 도 저장한다(중간에 끊긴 작업만 제외)
 - UI — 관제 웹(rclpy 노드 안 http.server, 정정인 PC localhost 전용). PyQt 대체
 - 피크 — 거치대에서 집었다 반환. 시점은 로봇이 판단하고 서버는 지시하지 않는다
-- 대기 자세 복귀 — ReturnHome 성공 후 완료·저장한다. 미구현 StrumAll은 정상 통합에서
-  호출하지 않는다. 구현·실기 검증 후 주석 해제해 복구한다 (#84, 2026-09-22 사용자 결정).
+- 대기 자세 복귀 — ReturnHome 성공 후 완료·저장한다. 화음 자리를 물려받은
+  `WipeStrings`(안경닦이로 넥 닦기, 2026-09-23)는 교시점이 없어 정상 통합에서
+  호출하지 않는다. 실측·실기 검증 후 주석 해제해 복구한다 (#84 회귀 방지, 5절 참조).
 - 그리퍼 **제어** — 디지털 I/O + WebLogic 프리셋. Modbus 로 폭·힘을 보내지 않는다
 - 그리퍼 **상태 읽기** — Modbus 홀딩 레지스터 258~275 를 읽기 전용으로 본다
   (2026-09-19 정정, `tools/gripper_status.py`). 제어와 읽기의 경로가 다르다. 헷갈리지 말 것
@@ -750,7 +759,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
   `standby_skip_mm` 30mm. `pick.holder.sol_by_side` 는 아직 둘 다 null 이라
   거치대 팔 모양이 예전 경로 그대로다
 - **서버의 Action 타임아웃** — `play_timeout_sec` 30 / `adjust_timeout_sec` 120 /
-  `strum_timeout_sec` 60, 전부 임시값이다. Phase 0는 별도 register_peg로 실행하며
+  `wipe_timeout_sec` 60(옛 strum_timeout_sec), 전부 임시값이다. Phase 0는 별도 register_peg로 실행하며
   등록 제한 시간은 180초다. 실제 소요 시간은 아직 측정이 필요하다.
   `~/.tunio/robot_data` 의 실행 기록이 다음 실기에서 그 숫자를 낸다 (#58)
 
@@ -763,8 +772,8 @@ colcon test --packages-select tunio_server && colcon test-result --all
   확인해야 다음 명령을 보낸다. 실패·거부·종료 불명은 작업 중단하며 자동 복귀하지 않는다.
   추가 대기 중 늦게 온 성공은 성공으로 반영한다. Action 종료 대기는 정지 명령이 아니다.
 - 6·5번 반대쪽 J1/sol 적용은 보류다. sol_by_side와 발현 자세는 바꾸지 않는다.
-- 피크 반환·복귀 전용 ReturnHome Action을 추가한다. StrumAll의 기존 복귀는
-  호환용으로 유지하고, 한 줄 시험은 화음 없이 ReturnHome으로 끝낸다.
+- 피크 반환·복귀 전용 ReturnHome Action을 추가한다. WipeStrings(옛 StrumAll)의
+  기존 복귀는 호환용으로 유지하고, 한 줄 시험은 마무리 동작 없이 ReturnHome으로 끝낸다.
 - `tools/tune_one_string.py`는 실제 서버 조율 로직을 재사용하고 ROS Action으로
   등록→조율→최종 검증→반환을 수행한다. 실기 명령은 별도 런북 참조.
 
@@ -789,3 +798,65 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - PHASE_PREPARE_PLUCK=13을 뒤에 추가했다. prepare_timeout_sec=30초는 실측 전 임시값이며
   기존 로봇 완료 확인 추가 대기 정책을 따른다. 오디오 두 제한 시간과는 별개다.
 - 양쪽 PC의 인터페이스 재빌드·노드 재시작이 필요하다. 실물 경로 검증은 아직 남아 있다.
+
+### 2026-09-23 안경닦이로 넥 닦기 — 화음 자리 대체
+
+- Phase 2의 화음(#84로 미구현인 채 폐기) 자리를 안경닦이로 넥을 닦는 마무리
+  동작이 물려받는다. Action을 새로 안 늘리고 `StrumAll` → `WipeStrings`로
+  **이름만** 바꿨다 — Goal 필드도 없앴다(줄별이 아니라 넥 전체를 한 번에 닦는
+  동작이라 대상 줄 개념이 없다). `PHASE_STRUM`도 `PHASE_WIPE`로 같이 바꿨다
+  (번호 6은 그대로, 이름만). 양쪽 PC 재빌드 필요.
+- 닦는 방식: 거치대에서 안경닦이를 집었다 반환하는 방식(`pick.holder`와 같은
+  패턴, `wipe.holder`). 3·4번 줄 사이(넥 가로 중앙)를 너트에서 적당한
+  종료점까지 한 방향으로 쭉 닦는다(왕복 아님). 순응제어를 켠 채로 움직인다 —
+  기타 넥이 완전히 수평이 아니고, 닦으려면 접촉힘이 필요해서다.
+- **전부 미교시다.** `teach_points.yaml`에 `wipe:` 절 자체가 없다(교시 전엔
+  `pick.holder`도 그랬던 것과 같은 패턴) — `points.wipe()`가 조회 시점에
+  거부한다. `motion_primitives.wipe_strings()`는 로봇 없이 구조만 짜 놨고,
+  힘 제어도 순응제어만 켜는 1차 구현이다(페그 진입의 `_insert_force_controlled`
+  같은 기준선 보정은 아직 없음 — 실기에서 힘이 부족·과함이 보이면 그때 올린다).
+- **`task_manager._run_job()`의 `self._wipe()` 호출은 여전히 주석 처리돼 있다.**
+  지금 켜면 매 작업마다 `_wipe()`가 실패해 #83의 `_run_action`이 `Aborted`를
+  올리고, **4줄을 완주한 작업도 "중간에 끊긴 작업"으로 잘못 분류돼 저장이
+  안 된다** — #84가 막으려던 것과 같은 회귀라 일부러 그대로 뒀다. `wipe`
+  교시점을 실측해 `taught: true`로 올린 뒤에만 주석을 풀 것.
+- 로봇 쪽(`on_wipe_strings`)은 화음 때와 같은 원칙을 그대로 물려받았다 — 닦기가
+  실패해도 복귀(`return_home`)는 먼저 하고 원래 예외를 그다음에 올린다(#58).
+
+### 2026-09-23 넥 닦기 실측 좌표·힘 제어 1차 구현
+
+- **`wipe:` 절에 실측 좌표가 들어갔다(taught: true).** 위 "전부 미교시다"는
+  이제 좌표 기준으로는 지난 얘기다 — 단 힘 제어 값(`wipe_press_force_n`
+  2.0N, `wipe_settle_sec` 20초)은 **여전히 실기 미검증 1차값**이다.
+- **pickup 과 return_box 가 다른 자리로 바뀌었다.** `wipe.holder` 하나가
+  아니라 `wipe.pickup`(집는 자리) / `wipe.return_box`(놓는 자리) 로 나뉜다
+  (2026-09-23 사용자 결정) — 그리퍼가 한 점만 잡아서 안경닦이가 펼쳐진 채로
+  물리므로, 피크처럼 접힌 모양 그대로 되돌려 놓을 수 없다. 대신 반환 전용
+  상자 구역을 뒀다. 위 문단의 `wipe.holder` 표기는 이 문서가 아직 못 따라간
+  옛 스키마다.
+- **픽업 → 시작점 이동은 대각선이 아니라 Z 먼저, 그다음 수평이다.** 픽업
+  자리(기타에서 먼 쪽, X590·Y223.5)에서 Z 만 먼저 닦기 높이(시작점 Z, 184)로
+  올리고, 그다음 수평으로 시작점까지 간다 — 한 번에 섞은 대각선 경로는
+  기타를 쓸고 갈 수 있어서다.
+- **누르는 힘 방향은 자세에서 추론하지 않고 Base -Z 로 고정했다** — 자세
+  기울기와 무관하게 넥을 누르는 방향은 항상 아래이기 때문이다. 목표힘
+  2.0N 은 핸드폰 무게(187g)의 중력 근사치를 사용자가 실측 대용으로 잡은 값.
+- **접촉은 "누르는 축 힘 제어 + 진행 축 위치 제어"의 하이브리드다.** 시작점에
+  위치 제어로 선 뒤 순응제어+힘제어를 켜고, `wipe_settle_sec`(기본 20초)
+  동안 movel 을 새로 걸지 않고 그냥 기다린다 — `set_desired_force` 가 스스로
+  목표힘까지 눌러 내려가는 시간이다("자연스럽게 내려간다"). 그 뒤 힘을
+  유지한 채 종료점까지 위치 이동해 훑는다.
+- **힘 감지로 무한 대기를 빠져나오는 방식은 이번 범위에서 뺐다**(2026-09-23
+  사용자 지시). 지금은 고정 sleep 뿐이다 — 다음 단계 과제로 명시적으로
+  미뤘다.
+- 힘 제어·순응제어·힘 읽기 전부 **기존에 검증된 두산 API 호출**만 그대로
+  재사용했다 — `task_compliance_ctrl`/`release_compliance_ctrl`(`compliance()`),
+  `set_desired_force`/`release_force`(페그 진입 `_insert_force_controlled`와
+  같은 패턴). 새로운 미검증 API는 도입하지 않았다.
+- **`task_manager._run_job()`의 `self._wipe()` 호출은 여전히 주석 처리돼
+  있다.** 좌표는 채워졌지만 힘 제어 값이 실기 미검증이라, `tools/wipe_check.py`
+  로 단계별 확인을 마치기 전까지는 켜지 않는다.
+- 독립 검증 도구 `tools/wipe_check.py` — task_manager 없이 단계별(집기 →
+  Z 정렬 → 시작점 → 접촉 정착 대기 → 훑기 → 후퇴 → 반환)로 확인하며, 각
+  단계 사이에 확인을 받는다. `--press-n`·`--settle-sec` 로 힘·대기시간을
+  바로 바꿔 볼 수 있다.

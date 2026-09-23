@@ -15,6 +15,7 @@ taught: false 인 항목은 조회 시 거부한다. 교시를 마치면 true �
 """
 import math
 import os
+from types import SimpleNamespace
 
 import yaml
 
@@ -121,6 +122,7 @@ class TeachPoints:
         self._pegs = {}
         self._plucks = {}
         self._pick = None
+        self._wipe = None
         self._routes = {}
         self._parse()
 
@@ -204,6 +206,26 @@ class TeachPoints:
                          f"pick.holder.sol_by_side.{k} 는 0~7 정수 아니면 null 이어야 한다 "
                          f"(지금 {v!r})")
             self._pick.sol_by_side = {k: by_side.get(k) for k in ("left", "right")}
+
+        # 안경닦이로 넥 닦기(2026-09-23, 화음 자리 대체). 없는 YAML 도 로드는 되고,
+        # 조회할 때 걸린다.
+        #
+        # pickup 과 return_box 가 다른 자리다 — 피크는 집었다 그대로 되돌려 놓지만,
+        # 안경닦이는 그리퍼가 한 점만 잡아서 펼쳐진 채로 물리므로 접힌 모양대로
+        # 되돌려 놓을 수 없다. 그래서 반환은 상자 구역에 놓는 것으로 바꿨다
+        # (2026-09-23 사용자 결정).
+        w = d.get("wipe")
+        if w is not None:
+            _require(isinstance(w.get("pickup"), dict), "wipe.pickup 가 없다")
+            _require(isinstance(w.get("start"), dict), "wipe.start 가 없다")
+            _require(isinstance(w.get("end"), dict), "wipe.end 가 없다")
+            _require(isinstance(w.get("return_box"), dict), "wipe.return_box 가 없다")
+            self._wipe = SimpleNamespace(
+                pickup=self._grip_pose("wipe.pickup", w["pickup"]),
+                start=self._pose("wipe.start", w["start"]),
+                end=self._pose("wipe.end", w["end"]),
+                return_box=self._grip_pose("wipe.return_box", w["return_box"]),
+            )
 
     @staticmethod
     def _string_no(section, key):
@@ -301,6 +323,25 @@ class TeachPoints:
         _require(self._pick is not None,
                  "교시점 파일에 pick.holder 가 없다. 피크를 집었다 놓는 방식이라 필요하다")
         return self._taught(self._pick)
+
+    def wipe(self):
+        """
+        안경닦이 픽업·닦기 시작/종료점·반환 상자 (2026-09-23, 화음 자리 대체).
+
+        넷 다 교시가 끝나야(taught: true) 쓸 수 있다 — 하나라도 미교시면
+        여기서 막힌다. wipe_strings() 가 이 넷을 갖고 움직인다.
+
+        pickup 과 return_box 가 다른 자리다 — 그리퍼가 한 점만 잡아서
+        안경닦이가 펼쳐진 채로 물리므로 접힌 모양대로 되돌려 놓을 수 없다.
+        """
+        _require(self._wipe is not None,
+                 "교시점 파일에 wipe 절이 없다. 안경닦이로 넥을 닦으려면 필요하다")
+        return SimpleNamespace(
+            pickup=self._taught(self._wipe.pickup),
+            start=self._taught(self._wipe.start),
+            end=self._taught(self._wipe.end),
+            return_box=self._taught(self._wipe.return_box),
+        )
 
     def pluck(self, string_number):
         _require(string_number in self._plucks, f"pluck 에 {string_number}번 줄이 없다")

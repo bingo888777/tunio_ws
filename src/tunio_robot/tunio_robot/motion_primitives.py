@@ -35,8 +35,10 @@ TODO(정묵·성현):
     (gripper.py 주석 참조). 확인 수단을 정해야 한다
 """
 import math
+import os
 import time
 
+from tunio_robot import runlog
 from tunio_robot import teach_points as TP
 
 # 두산 API 핸들. connect() 가 채운다. dry_run 이면 None 그대로다
@@ -1192,6 +1194,23 @@ def _movel_base(pos, vel, acc):
                   "movel_base")
 
 
+def _amovel_base(pos, vel, acc):
+    """
+    비동기 직선 이동 (Base 절대 posx) — 끝나기를 기다리지 않는다.
+
+    순응·힘 제어와 같이 쓸 때만 쓴다. 두산 공식 예제(dsr_example2
+    simple/test.py, "amovel + task_compliance_ctrl MOTION_HOLD Test")의 패턴
+    그대로다 — 실제 표면보다 더 깊은 목표를 걸어 두고, 거기 닿기 전에 힘/순응이
+    먼저 멈춰 세운다. `set_desired_force` 만 걸고 가만히 있으면 로봇이 움직일
+    목표 자체가 없어 아무 일도 안 일어난다(2026-09-23 실기로 확인 — 넥 닦기
+    힘 제어가 미동도 없었다). 일반 이동에는 동기인 `_movel_base` 를 쓴다.
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    return _moved(api.amovel(posx(list(pos)), vel=vel, acc=acc, ref=api.DR_BASE, radius=0),
+                  "amovel_base")
+
+
 def _movel_tool_rel(delta, vel, acc, radius=0):
     """
     Tool(TCP) 좌표 기준 상대 직선 이동. 스트로크·후퇴에 쓴다.
@@ -1691,19 +1710,30 @@ def _stop_motion(stop_mode=2):
             "즉시 펜던트로 직접 멈출 것")
 
 
-def _turn_peg_async_with_string_check(delta_deg, motion, pose, joint):
+def _turn_peg_async_with_string_check(delta_deg, motion, pose, joint, logger=None):
     """회전을 **비동기**(amovej)로 시작하고, 도는 동안 폴링마다 토크를 본다.
 
     쪼개서 돌지 않는다 — 기본 이동 자체는 한 번의 연속 동작 그대로다.
     끊어짐이 보이면 MoveStop 서비스로 즉시 멈춘다(위 _stop_motion).
 
-    ⚠️ **문턱(motion.string_break_torque_threshold_nm)은 실측 전 임시값이다.**
-    검증됐다고 가정하고 미리 짜 둔 것뿐이다 — 그대로 실기에 쓰지 말 것.
-    tools/peg_turn_check.py --string cut 으로 조인트 6 잡음·신호를 먼저 재고
-    갈아 끼운다(#79/#80). 지금 값(0.05Nm)은 CLAUDE.md 3.6의 잡음 0.11Nm 보다
-    작게 잡아 뒀는데, 그 잡음 자체가 파지-허공 비교에서 나온 것이라 줄 유무
-    비교에 그대로 맞는다는 보장이 없다. **문턱이 잡음보다 작으면 오히려
-    오검출이 늘 수 있다** — 실측 전까지는 설계 검증용이지 판정 근거가 아니다.
+    문턱(motion.string_break_torque_threshold_nm)은 2026-09-23 1번 페그
+    실측으로 잡았다(0.25Nm) — teach_points.yaml 주석 참조. **1번 페그에서만
+    쟀다.** 다른 줄에 이 기능을 켜려면 그 줄로 다시 재야 한다.
+
+    ⚠️ **2026-09-23 실기에서 정상 줄에 오탐이 났다** (loop_check.py --string 1
+    --angle 15, 토크 변화 -0.008Nm로 즉시 StringBrokenError). 문턱은 8스텝
+    **평균** 단차(0.29~0.37)로 잡았는데, 판정은 폴링 **낱개 샘플**을 바로
+    비교한다 — 같은 회차 안에서도 개별 샘플이 최대 0.19Nm까지 흔들렸으니
+    (실측 spread), 한 번의 저조도 샘플만으로 끊어짐 확정은 오탐이 잦다.
+    오디오 쪽에서 이미 겪은 것과 같은 함정이다(CLAUDE.md 8절 "짧게 한 번
+    재면 잡음에 흔들린다"). 그래서 **연속으로 낮아야만** 확정한다 — 아래
+    motion.string_break_confirm_polls 참조.
+
+    motion.string_break_ignore_deg(기본 0)는 회전 시작 후 이 각도만큼은
+    문턱 판정을 건너뛴다. 그리퍼가 페그 손잡이의 여유(백래시)를 메우는
+    초반 구간은 줄이 있든 없든 토크가 낮게 나와 판정을 흐린다 — 1번 페그는
+    5도(실측 백래시 4.8도 기준)로 맞췄다. 위치를 매 폴링 읽지 않고 vel
+    기준 시간으로 근사한다(가속 구간은 무시).
 
     check_motion() 은 0=IDLE(끝남) / 1=INIT(계산중) / 2=BUSY(도는 중) 을 그대로
     돌려준다 — get_* 계열의 뒤집힌 값 함정(CLAUDE.md 3.5.1)이 아니다. **다만
@@ -1735,8 +1765,16 @@ def _turn_peg_async_with_string_check(delta_deg, motion, pose, joint):
     threshold = float(motion.get("string_break_torque_threshold_nm", 0.05))
     arrive_tol = float(motion.get("string_break_arrive_tolerance_deg", 0.5))
     max_wait = float(motion.get("string_break_max_wait_sec", 30.0))
+    ignore_deg = float(motion.get("string_break_ignore_deg", 0.0))
+    # 기본 1 = 옛 동작(낱개 샘플 하나로 확정). 실측 오탐 이후 1번 페그는 3으로
+    # 올려 쓴다 — 연속 3번(poll_sec 0.2초면 약 0.6초) 계속 낮아야 확정한다.
+    confirm_polls = int(motion.get("string_break_confirm_polls", 1))
     if poll_sec <= 0:
         raise MotionError("motion.string_break_poll_sec 는 양수여야 한다")
+    if ignore_deg < 0:
+        raise MotionError("motion.string_break_ignore_deg 는 0 이상이어야 한다")
+    if confirm_polls < 1:
+        raise MotionError("motion.string_break_confirm_polls 는 1 이상이어야 한다")
 
     turn = turn_motion(motion, pose)
     vel = _fast(turn, turn.get("vel", 30), SPEED_CAP_JOINT)
@@ -1744,46 +1782,91 @@ def _turn_peg_async_with_string_check(delta_deg, motion, pose, joint):
     d = [0.0] * 6
     d[joint - 1] = float(delta_deg)
 
+    # 초반 유격(그리퍼가 페그 손잡이의 여유를 메우는 구간) 동안은 줄이 있어도
+    # 토크가 거의 안 뜬다 — 1번 페그 실측(2026-09-23)에서 5도까지 배제하니
+    # intact/cut 분리가 오히려 더 또렷해졌다. 시간으로 근사한다(위치를 매
+    # 폴링 읽지 않아도 되게) — vel(deg/s) 기준으로 그 구간을 지나는 데 걸리는
+    # 시간만큼은 판정을 건너뛴다. 가속 구간은 무시한 근사치다.
+    ignore_sec = (ignore_deg / vel) if (ignore_deg > 0 and vel > 0) else 0.0
+
     start_angle = list(api.get_current_posj())[joint - 1]
     target_angle = start_angle + float(delta_deg)
     base = list(read_external_torque())[joint - 1]
     ret = api.amovej(posj(d), vel=vel, acc=acc, mod=api.DR_MV_MOD_REL)
     _moved(ret, "amovej")
 
-    waited = 0.0
-    seen_busy = False
-    while True:
-        status = api.check_motion()
-        cur = list(read_external_torque())[joint - 1]
-        if abs(cur - base) < threshold:
-            _stop_motion()
-            raise StringBrokenError(
-                f"J{joint} 회전 중 토크 변화 {cur - base:+.3f}Nm"
-                f" (문턱 {threshold:.3f}Nm 미만) — 줄이 끊어졌을 수 있다. "
-                "MoveStop 으로 멈췄다. 문턱 미검증 상태다(#79/#80 실측 전)")
-        if status not in (0, 1, 2):
-            raise MotionError(f"check_motion 이 알 수 없는 값을 돌려줬다: {status}")
-        if status == 2:
-            seen_busy = True
-        if status == 0 and seen_busy:
-            # 관절각 확인만으로는 부족하다 — 회전량이 허용 오차(arrive_tol)보다
-            # 작으면(미세 보정에서 흔하다) 회전 전 낡은 위치도 "도착"으로
-            # 통과해 버린다. **BUSY 를 한 번은 실제로 본 뒤의 IDLE** 이어야
-            # 이 낡은 값 함정을 피한다. BUSY 를 못 보고 있으면(로봇이 아직
-            # 시작 안 했거나 폴링 사이로 순간에 끝났거나) 아래 max_wait_sec
-            # 타임아웃이 결국 받아 준다 — 무한 대기는 아니다.
-            actual = list(api.get_current_posj())[joint - 1]
-            if abs(actual - target_angle) <= arrive_tol:
-                return
-            # IDLE 인데 목표에 안 왔다 — 시작 전의 낡은 상태를 본 것일 수
-            # 있다. 다시 본다(아래에서 재확인)
-        if waited >= max_wait:
-            _stop_motion()
-            raise MotionError(
-                f"J{joint} 회전이 {max_wait:.0f}초 안에 안 끝났다(status={status}). "
-                "MoveStop 으로 멈췄다")
-        time.sleep(poll_sec)
-        waited += poll_sec
+    # 폴링마다 기록해 뒀다가, 어떻게 끝나든(정상/끊어짐/타임아웃/그외 오류)
+    # ~/.tunio/robot_data 에 원자료로 남긴다 — 2026-09-23 오탐을 콘솔 로그만
+    # 보고 추측하다 나온 요청이다. 발표·재분석용으로 사람이 docs/robot_data 로
+    # 옮겨 쓸 수 있다(다른 도구들과 같은 방식).
+    polls = []
+    outcome = "interrupted"          # 아래에서 못 덮어쓰면(예외 종류가 다르면) 이 값으로 남는다
+    try:
+        waited = 0.0
+        seen_busy = False
+        low_streak = 0
+        while True:
+            status = api.check_motion()
+            cur = list(read_external_torque())[joint - 1]
+            diff = cur - base
+            armed = waited >= ignore_sec
+            low = armed and abs(diff) < threshold
+            low_streak = low_streak + 1 if low else 0
+            polls.append({"t": round(waited, 3), "status": status, "torque": cur,
+                          "diff": diff, "armed": armed, "low_streak": low_streak})
+            if logger is not None:
+                logger.info(
+                    f"J{joint} 폴링 t={waited:.2f}s 토크 {cur:+.3f} base {base:+.3f} "
+                    f"차이 {diff:+.3f} armed={armed} low_streak={low_streak}/{confirm_polls}")
+            if low_streak >= confirm_polls:
+                _stop_motion()
+                outcome = "broken"
+                raise StringBrokenError(
+                    f"J{joint} 회전 중 토크 변화 {diff:+.3f}Nm"
+                    f" (문턱 {threshold:.3f}Nm 미만, 연속 {low_streak}회) — 줄이 끊어졌을 수 있다. "
+                    "MoveStop 으로 멈췄다. 문턱 미검증 상태다(#79/#80 실측 전)")
+            if status not in (0, 1, 2):
+                outcome = "bad_status"
+                raise MotionError(f"check_motion 이 알 수 없는 값을 돌려줬다: {status}")
+            if status == 2:
+                seen_busy = True
+            if status == 0 and seen_busy:
+                # 관절각 확인만으로는 부족하다 — 회전량이 허용 오차(arrive_tol)보다
+                # 작으면(미세 보정에서 흔하다) 회전 전 낡은 위치도 "도착"으로
+                # 통과해 버린다. **BUSY 를 한 번은 실제로 본 뒤의 IDLE** 이어야
+                # 이 낡은 값 함정을 피한다. BUSY 를 못 보고 있으면(로봇이 아직
+                # 시작 안 했거나 폴링 사이로 순간에 끝났거나) 아래 max_wait_sec
+                # 타임아웃이 결국 받아 준다 — 무한 대기는 아니다.
+                actual = list(api.get_current_posj())[joint - 1]
+                if abs(actual - target_angle) <= arrive_tol:
+                    outcome = "completed"
+                    return
+                # IDLE 인데 목표에 안 왔다 — 시작 전의 낡은 상태를 본 것일 수
+                # 있다. 다시 본다(아래에서 재확인)
+            if waited >= max_wait:
+                _stop_motion()
+                outcome = "timeout"
+                raise MotionError(
+                    f"J{joint} 회전이 {max_wait:.0f}초 안에 안 끝났다(status={status}). "
+                    "MoveStop 으로 멈췄다")
+            time.sleep(poll_sec)
+            waited += poll_sec
+    finally:
+        out_dir = str(motion.get("string_break_runlog_dir",
+                                 os.path.expanduser("~/.tunio/robot_data")))
+        runlog.save("adjust_peg_string_check", {
+            "peg_joint": joint,
+            "delta_deg": delta_deg,
+            "threshold_nm": threshold,
+            "confirm_polls": confirm_polls,
+            "ignore_deg": ignore_deg,
+            "poll_sec": poll_sec,
+            "base_torque": base,
+            "start_angle": start_angle,
+            "target_angle": target_angle,
+            "outcome": outcome,
+            "polls": polls,
+        }, out_dir)
 
 
 def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
@@ -1870,7 +1953,7 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
         if joint == 6 and motion.get("string_break_enabled", False):
             # 줄 끊어짐 감지 (예외처리 B안). 기본은 꺼져 있다 — 문턱 미검증
             # (#79/#80). 켜져 있을 때만 비동기 이동 + 동시 토크 감시로 간다.
-            _turn_peg_async_with_string_check(float(delta_deg), motion, pose, joint)
+            _turn_peg_async_with_string_check(float(delta_deg), motion, pose, joint, logger=logger)
         else:
             delta = [0.0] * 6
             delta[joint - 1] = float(delta_deg)
@@ -1898,19 +1981,170 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
         _retreat(exit_, motion)                     # 돌아간 자세로 나와 페그를 되돌리지 않는다
 
 
-def strum_all(string_numbers, points):
-    """전체 줄을 훑어 화음. 측정 없는 완료 연출."""
-    raise NotImplementedError("성현 담당 — 훑기 동작 교시 후 구현")
+def _wipe_stroke(end_task, motion, logger=None):
+    """
+    순응제어 위에서 Base -Z 로 눌러 접촉시킨 뒤, 그 힘을 유지한 채 종료점까지 훑는다.
+
+    `_insert_force_controlled`(페그 진입)와 다르다 — 거기는 "막힐 때까지 한 축만
+    민다"(진입 후 정지)였고, 여기는 접촉을 유지한 채 **계속 이동**해야 한다.
+    `set_desired_force` 의 dir 벡터로 Base Z 축만 힘 제어를 걸고, 나머지 축(X·Y)은
+    그대로 movel 목표를 따라간다(두산 하이브리드 제어) — 넥이 완전히 수평이
+    아니어도 누르는 힘은 일정하게, 진행 경로는 직선을 유지한다.
+
+    힘 방향은 자세에서 추론하지 않고 **Base -Z 로 고정**했다(2026-09-23 사용자
+    지정) — 자세 기울기와 무관하게 넥을 누르는 방향은 항상 아래다.
+
+    호출 전에 이미 시작점(순응제어만 켠 위치 제어)에 서 있어야 한다.
+
+    **`set_desired_force` 만 걸고 가만히 있으면 아무 일도 안 일어난다** —
+    2026-09-23 실기로 확인했다(20초를 기다려도 로봇이 미동도 안 함). 로봇이
+    움직일 목표 자체가 없었기 때문이다. 두산 공식 예제(dsr_example2
+    simple/test.py, "amovel + task_compliance_ctrl MOTION_HOLD Test")를 그대로
+    따라 고쳤다 — 순응을 켠 채로 **실제 표면보다 `wipe_press_depth_mm` 만큼
+    더 깊은 목표로 비동기 이동(`amovel`)** 을 걸어 두고, 거기 닿기 전에
+    힘/순응이 먼저 멈춰 세우는 구조다. 그 예제도 "일부러 모션 종료를 안
+    기다린다"고 명시한다 — 그 목표는 원래 도달 못 하는 게 정상이다.
+
+    ⚠️ **가설 기반 1차 수정이다(2026-09-23), 아직 실기 검증 전.** 힘 제어가
+    이번에도 안 먹으면 `wipe_press_depth_mm` 만큼 실제로 밀고 들어간다 —
+    그래서 깊이를 작게(기본 10mm) 잡았고, **별도 안전판을 뒀다**
+    (2026-09-23, 사용자 지적) — 힘 제어가 안 걸려서 그대로 밀고 들어가는
+    경우를 코드가 스스로 못 믿기 때문이다. `wipe_max_force_n`(기본
+    `wipe_press_force_n + 10`)을 넘으면 줄 끊어짐 감지와 같은 패턴으로
+    `_stop_motion()`(MoveStop 서비스콜, #79)을 불러 **즉시 멈추고**
+    `MotionError`를 던진다 — "컨트롤러가 알아서 멈춰 줄 것"이라는 가정에만
+    기대지 않는다. 폴링은 0.2초 간격(`wipe_poll_sec`)이다.
+
+    **목표힘에 도달하면 그 즉시 훑기로 넘어간다**(2026-09-23, 사용자 지시로
+    변경). `wipe_arrive_tolerance_n`(기본 1.0N) 이내로 `wipe_arrive_confirm_polls`
+    (기본 3회, 약 0.6초) **연속으로** 들어오면 도달로 본다 — 단발 샘플 하나로
+    확정하지 않는다(줄 끊어짐 감지 때 겪은 잡음 함정과 같은 이유, CLAUDE.md
+    8절). `wipe_settle_sec`(기본 20초)은 이제 "그냥 기다리는 시간"이 아니라
+    **도달을 못 했을 때의 최대 대기 시간**이다 — 다 지나도 도달을 못 하면
+    그 시점 힘 그대로 훑기로 넘어간다(실패로 보지 않는다. 접촉은 됐지만
+    목표힘에 못 미친 상태일 뿐이라 — 넥을 안 밀고 있다는 뜻이라 더 안전한
+    방향이다).
+      · `_insert_force_controlled`처럼 기준선·스프링 몫을 뺀 정밀 접촉력 판정은
+        없다. 실기에서 힘이 과하거나(줄이 밀림) 부족하면(안 닦임) 그때 올린다.
+    """
+    api = _require_api()
+    press_n = float(motion.get("wipe_press_force_n", 2.0))
+    settle_sec = float(motion.get("wipe_settle_sec", 20.0))
+    press_depth_mm = float(motion.get("wipe_press_depth_mm", 10.0))
+    max_force_n = float(motion.get("wipe_max_force_n", press_n + 10.0))
+    poll_sec = float(motion.get("wipe_poll_sec", 0.2))
+    arrive_tol_n = float(motion.get("wipe_arrive_tolerance_n", 1.0))
+    arrive_confirm_polls = int(motion.get("wipe_arrive_confirm_polls", 3))
+    v_wipe = float(motion.get("wipe_vel", 30.0))
+    a_wipe = float(motion.get("wipe_acc", 50.0))
+
+    dir_vec = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]      # Base Z 축만 힘 제어
+    fd = [0.0, 0.0, -press_n, 0.0, 0.0, 0.0]      # -Z 방향(누르는 쪽)으로 press_n
+
+    cur = list(read_posx()[0][:6])
+    press_target = list(cur)
+    press_target[2] -= press_depth_mm             # 실제 표면보다 깊은 목표 — 힘이 먼저 멈춰 세운다(가설)
+
+    api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
+    try:
+        if logger:
+            logger.info(f"넥 접촉 대기(최대 {settle_sec:.0f}초) — Base -Z {press_n:.1f}N 목표, "
+                        f"{press_depth_mm:.0f}mm 더 깊이 비동기 이동. 안전 상한 {max_force_n:.1f}N")
+        _amovel_base(press_target, v_wipe, a_wipe)
+        # 0.2초마다 힘을 읽는다 — 판정 셋.
+        #   1) 로그로 찍는다(확인용)
+        #   2) 안전 상한을 넘으면 MoveStop 으로 즉시 멈추고 실패로 던진다
+        #      ("목표힘에서 컨트롤러가 알아서 멈춘다"는 가정이 틀렸을 때의
+        #      마지막 안전판 — 없으면 힘 제어가 안 걸렸을 때 press_depth_mm 를
+        #      그대로 다 밀고 들어간다, 2026-09-23 사용자 지적)
+        #   3) 목표힘 근방에 연속으로 들어오면 도달로 보고 대기를 끝낸다
+        t0 = time.monotonic()
+        stopped_for_safety = False
+        arrive_streak = 0
+        fz = 0.0
+        while time.monotonic() - t0 < settle_sec:
+            fz = read_force(api.DR_BASE)[2]
+            near = abs(abs(fz) - press_n) <= arrive_tol_n
+            arrive_streak = arrive_streak + 1 if near else 0
+            if logger:
+                logger.info(f"  접촉 대기 중 Base Z 힘 {fz:+.2f}N "
+                            f"(목표 -{press_n:.1f}N·반작용이라 부호 반대, "
+                            f"상한 {max_force_n:.1f}N, 도달 {arrive_streak}/{arrive_confirm_polls})")
+            if abs(fz) >= max_force_n:
+                _stop_motion()
+                stopped_for_safety = True
+                break
+            if arrive_streak >= arrive_confirm_polls:
+                break
+            time.sleep(poll_sec)
+        if stopped_for_safety:
+            raise MotionError(
+                f"넥 접촉 힘이 안전 상한 {max_force_n:.1f}N 을 넘어 MoveStop 으로 "
+                f"멈췄다(읽은값 {fz:+.2f}N) — 힘 제어가 안 걸렸거나 목표가 너무 "
+                "깊었을 수 있다. wipe_press_depth_mm 를 줄이거나 좌표를 다시 볼 것")
+        if logger:
+            logger.info(f"훑기 시작 (접촉 힘 {fz:+.2f}N, 목표 도달 여부 "
+                        f"{'예' if arrive_streak >= arrive_confirm_polls else '아니오(최대 대기 시간 소진)'})")
+        _movel_base(end_task, v_wipe, a_wipe)      # 힘 유지한 채 종료점까지
+    finally:
+        api.release_force()                       # 힘 제어는 반드시 푼다
+
+
+def wipe_strings(points, motion, logger=None):
+    """
+    안경닦이로 넥(3·4번 줄 사이, 너트 ~ 적당한 종료점)을 한 방향으로 쭉 닦는다.
+
+    화음 연출(strum_all, #84로 미구현인 채 폐기)이 있던 자리를 대체한다
+    (2026-09-23 사용자 결정) — 검증 뒤, 복귀 전 마무리 동작. Action 이름은
+    WipeStrings 로 바뀌었지만 인터페이스 필드(Goal 없음, Result만)는 그대로다.
+
+    ⚠️ **미교시면 여기서 막힌다.** 아래 `points.wipe()`(pickup·start·end·
+    return_box)가 채워져야 실제로 돈다.
+
+    순서 (2026-09-23 사용자 지정)
+      1. 거치대에서 안경닦이 집기 (pick_up 재사용 — 피크 집기와 같은 패턴)
+      2. **픽업 자리에서 Z 만 먼저 닦기 높이(시작점 Z)로 올린 뒤, 그다음에
+         수평으로 시작점까지 이동한다.** 높이와 수평 이동을 한 번에 섞은
+         대각선으로 가면 그 경로가 기타를 쓸고 갈 수 있다 — 픽업 자리
+         (X590·Y223.5, 기타에서 먼 쪽)에서 먼저 다 올라간 뒤에만 넥 쪽으로
+         들어간다.
+      3. **순응제어 켜고**, `_wipe_stroke` 로 접촉 대기 → 종료점까지 훑기
+         (누르는 축 Base -Z 는 힘 제어, 진행 축은 위치 제어 — 위 함수 참조)
+      4. 순응 끄고, 종료점의 명목 높이(눌리기 전 Z)로 돌아와 접촉을 뗀다
+      5. 반환 상자에 반환 (pick_return 재사용 — 픽업과 다른 자리, 위 teach_points 참조)
+    """
+    _require_api()
+    ensure_tcp()
+    wipe = points.wipe()                                # 미교시면 여기서 막힌다
+    v_app, a_app = _transit_speed(motion)
+
+    pick_up(wipe.pickup, motion, logger=logger)
+    try:
+        travel_z = float(motion.get("wipe_travel_z_mm", wipe.start.task[2]))
+        mid = list(wipe.pickup.task)
+        mid[2] = travel_z
+        _movel_base(mid, v_app, a_app)                   # 픽업 자리에서 Z 만 먼저
+        _movel_base(wipe.start.task, v_app, a_app)        # 그다음 수평으로 시작점
+
+        compliance(motion, on=True)                      # 넥이 안 수평이어도 뻣뻣하게 안 민다
+        try:
+            _wipe_stroke(wipe.end.task, motion, logger=logger)
+        finally:
+            compliance(motion, on=False)
+
+        _movel_base(wipe.end.task, v_app, a_app)          # 명목 높이로 복귀 = 접촉 해제
+    finally:
+        pick_return(wipe.return_box, motion, logger=logger)  # 실패해도 안경닦이는 반환 시도
 
 
 def return_home(pose, motion):
     """
-    대기 자세 복귀. strum_all 이 화음 연출을 마친 뒤 호출한다.
+    대기 자세 복귀. wipe_strings 가 마무리 동작을 마친 뒤 호출한다.
 
-    TuningState.PHASE_RETURN 을 호출할 전용 Action 이 인터페이스 13개에 없어서
-    strum_all 이 복귀까지 책임진다 (2026-09-19 결정). 인터페이스를 다시 열지
-    않으려는 선택이고, 기획 Phase 2 에서 화음 연출 직후가 곧 복귀라 순서상으로도
-    이어진다.
+    TuningState.PHASE_RETURN 을 호출할 전용 Action 이 인터페이스에 없어서
+    wipe_strings 가 복귀까지 책임진다 (2026-09-19 결정, 화음 자리를 물려받음).
+    인터페이스를 다시 열지 않으려는 선택이고, 기획 Phase 2 에서 마무리 동작
+    직후가 곧 복귀라 순서상으로도 이어진다.
 
     한계: 정상 완료 경로에만 있다. 취소·오류로 끝난 경우의 복귀는 수단이 없고
     지금은 사람이 회수한다.

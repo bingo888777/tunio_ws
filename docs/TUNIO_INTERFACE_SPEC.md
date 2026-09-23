@@ -6,7 +6,7 @@
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
 PC 2대가 ROS 2 Jazzy로 통신한다(2026-09-22, PC 3대에서 축소). 정정인 PC(task_manager,
 web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). 랜을 건너는
-인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다 — `measure_pitch`는
+인터페이스는 `/robot/play_string`·`adjust_peg`·`wipe_strings`·`register_peg`·`return_home` 다섯이다 — `measure_pitch`는
 정정인 PC 한 대 안에서 돈다. 근거는 `CLAUDE.md` 6절.
 
 ---
@@ -23,7 +23,7 @@ ros2 interface show tunio_interfaces/action/MeasurePitch
 ros2 interface show tunio_interfaces/action/PreparePluck
 ros2 interface show tunio_interfaces/action/PlayString
 ros2 interface show tunio_interfaces/action/AdjustPeg
-ros2 interface show tunio_interfaces/action/StrumAll
+ros2 interface show tunio_interfaces/action/WipeStrings
 ros2 interface show tunio_interfaces/action/RegisterPeg
 ros2 interface show tunio_interfaces/action/ReturnHome
 ros2 interface show tunio_interfaces/msg/TuningState
@@ -50,7 +50,7 @@ src/tunio_interfaces/
 │   ├── PreparePluck.action
 │   ├── PlayString.action
 │   ├── AdjustPeg.action
-│   ├── StrumAll.action
+│   ├── WipeStrings.action
 │   ├── RegisterPeg.action
 │   └── ReturnHome.action
 ├── msg/
@@ -102,7 +102,7 @@ src/tunio_interfaces/
 > 아래 예시 4개는 전부 `---` 가 2개다. 3절의 "Feedback 은 MeasurePitch 에만 있다"는
 > *필드* 기준 서술이며, 구분자 개수와는 별개다.
 >
-> (2026-09-19 수정: AdjustPeg·StrumAll 예시에 Feedback 섹션이 빠져 있어,
+> (2026-09-19 수정: AdjustPeg·WipeStrings 예시에 Feedback 섹션이 빠져 있어,
 >  기준본을 그대로 옮기면 빌드가 깨지는 상태였다. 실제 `.action` 파일 4개는
 >  처음부터 구분자가 2개로 맞아 있었다.)
 
@@ -219,14 +219,18 @@ string message
 - 줄별 실제 모터 회전 방향 변환은 로봇측 YAML이 담당한다
 - 백래시 대응(목표보다 높으면 아래로 풀었다 조여 올리기)은 **task_manager가 결정한다.** 로봇은 시킨 방향과 각도만 수행한다. 따라서 조절 1회가 goal 2번이 될 수 있다
 
-### action/StrumAll.action
+### action/WipeStrings.action
 
-`/robot/strum_all` · task_manager → robot_controller
-완료 알림용 연출 동작. 측정하지 않는다.
+`/robot/wipe_strings` · task_manager → robot_controller
+완료 마무리 동작 — 안경닦이로 넥(3·4번 줄 사이)을 너트에서 적당한 종료점까지
+한 방향으로 닦는다. 측정하지 않는다. (2026-09-23, 옛 `StrumAll`. 화음 연출
+[#84로 미구현인 채 폐기]이 있던 인터페이스 자리를 이름만 바꿔 재활용했다 —
+줄별이 아니라 넥 전체를 한 번에 닦는 동작이라 대상 줄 개념이 없어 Goal
+필드도 없앴다.)
 
 ```
 # --- Goal ---
-uint8[] string_numbers
+# 지금은 파라미터가 없다. 시작/종료점·힘은 teach_points.yaml의 wipe 절에서 온다.
 ---
 # --- Result ---
 bool success
@@ -236,7 +240,11 @@ string message
 # 사용하지 않음
 ```
 
-- 배열이 비면 교시된 전체 줄
+⚠️ **아직 교시점이 없어 정상 통합에서 호출하지 않는다.** `task_manager._run_job()`의
+`self._wipe()`가 주석 처리된 채로 있다 — `teach_points.yaml`의 `wipe.holder`/
+`start`/`end`를 실측해 `taught: true`로 올려야 켤 수 있다. 안 켠 채로 실행하면
+매 작업마다 `Aborted`가 나서 4줄을 완주한 작업도 "중간에 끊긴 작업"으로
+잘못 분류된다(#84와 같은 종류의 회귀).
 
 ---
 
@@ -451,7 +459,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/PlayString.action"
   "action/PreparePluck.action"
   "action/AdjustPeg.action"
-  "action/StrumAll.action"
+  "action/WipeStrings.action"
   "action/RegisterPeg.action"
   "action/ReturnHome.action"
   "msg/TuningSettings.msg"
@@ -538,8 +546,8 @@ AdjustPeg는 등록을 수행하지 않는다. 미등록이면 이동 전에 실
 
 `/robot/return_home` — `ReturnHome.action`, task_manager/단독 조율 시험 → robot_controller.
 빈 Goal, Result는 `bool success`와 `string message`, 빈 Feedback이다.
-피크를 쥐고 있으면 반환한 뒤 `frames.standby`로 간다. 화음은 연주하지 않는다.
-반환 실패 시 복귀 성공으로 보고하지 않는다. StrumAll의 기존 복귀 동작은 호환을 위해 유지한다.
+피크를 쥐고 있으면 반환한 뒤 `frames.standby`로 간다. 넥 닦기는 수행하지 않는다.
+반환 실패 시 복귀 성공으로 보고하지 않는다. WipeStrings(옛 StrumAll)의 기존 복귀 동작은 호환을 위해 유지한다.
 
 `adjust_timeout_sec`는 수락 후 요청 1회 기준 120초(임시값)이다.
 로봇 Action 시간 초과 시 `robot_completion_wait_sec`(120초, 임시값)만큼 같은 결과를
@@ -554,9 +562,11 @@ AdjustPeg는 등록을 수행하지 않는다. 미등록이면 이동 전에 실
 한 줄 시험 절차는 `docs/1번줄_ROS_통합시험.md`를 따른다.
 
 
-## 화음 실행 보류 (#84, 2026-09-22 사용자 결정)
+## 넥 닦기(WipeStrings) 실행 보류 (2026-09-23, 화음 자리를 물려받음)
 
 정상 조율에서는 최종 검증 → ReturnHome 성공 확인 → PHASE_DONE → 저장 순서로 진행한다.
-미구현 화음은 `_run_job()`의 `_strum()` 호출만 주석 처리해 제외한다.
-StrumAll Action 정의와 서버·로봇 함수는 삭제하지 않으며, 구현·실기 검증 후 호출을 복구한다.
+`wipe.holder`/`start`/`end`가 아직 미교시라 `_run_job()`의 `self._wipe()` 호출만
+주석 처리해 제외한다. 켜면 매 작업마다 `Aborted`가 나서 4줄을 완주한 작업도
+"중간에 끊긴 작업"으로 잘못 분류된다 — #84가 막으려던 것과 같은 회귀다.
+WipeStrings Action 정의와 서버·로봇 함수는 삭제하지 않으며, 실측·실기 검증 후 호출을 복구한다.
 ReturnHome 실패/거부/종료 불명은 기존 성공 Result 정책에 따라 작업을 중단한다.

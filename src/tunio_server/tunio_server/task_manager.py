@@ -14,7 +14,6 @@ import threading
 import time
 
 from action_msgs.msg import GoalStatus
-from rcl_interfaces.msg import ParameterDescriptor, ParameterType
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
@@ -24,7 +23,7 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
                        QoSProfile, QoSReliabilityPolicy)
 
 from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, PreparePluck,
-                                     RegisterPeg, ReturnHome, StrumAll)
+                                     RegisterPeg, ReturnHome, WipeStrings)
 from tunio_interfaces.msg import StringResult, TuningSettings, TuningState
 from tunio_interfaces.srv import CommandTuning, GetSettings, SaveJob, SetSettings
 
@@ -118,7 +117,7 @@ class TaskManager(Node):
         self.declare_parameter('adjust_timeout_sec', 120.0)  # 통합 시험용 임시값, 요청 1회 기준
         self.declare_parameter('robot_completion_wait_sec', 120.0)  # 초과 후 종료 확인 임시값
         self.declare_parameter('return_timeout_sec', 120.0)  # 피크 반환·복귀 임시값
-        self.declare_parameter('strum_timeout_sec', 60.0)   # 임시값
+        self.declare_parameter('wipe_timeout_sec', 60.0)    # 임시값. 옛 strum_timeout_sec
         self.declare_parameter('measure_slack_sec', 5.0)    # 통신 왕복 여유
 
         # 줄 하나가 끝난 뒤 다음 줄로 넘어가기 전에 쉬는 시간.
@@ -130,10 +129,6 @@ class TaskManager(Node):
         # 중간에 끊긴 작업(PHASE_ERROR)을 저장할지. 기본 False 는 확정 사항이다
         # (CLAUDE.md 13절 521~522행). 실측 회차에서만 켠다. 위 C5-1 주석과 이슈 #47 참조
         self.declare_parameter('save_on_error_exit', False)
-        self.declare_parameter(
-            'strum_string_numbers', [],
-            ParameterDescriptor(type=ParameterType.PARAMETER_INTEGER_ARRAY,
-                                description='화음 대상 줄. 비우면 로봇의 교시된 전체'))
 
         # --- 페그 캘리브레이션 (실측 전이면 조절 단계에서 멈춘다) ---
         self.calibration = self._load_calibration()
@@ -177,7 +172,7 @@ class TaskManager(Node):
             self, PreparePluck, '/robot/prepare_pluck', callback_group=cb)
         self.cli_play = ActionClient(self, PlayString, '/robot/play_string', callback_group=cb)
         self.cli_adjust = ActionClient(self, AdjustPeg, '/robot/adjust_peg', callback_group=cb)
-        self.cli_strum = ActionClient(self, StrumAll, '/robot/strum_all', callback_group=cb)
+        self.cli_wipe = ActionClient(self, WipeStrings, '/robot/wipe_strings', callback_group=cb)
         self.cli_save = self.create_client(SaveJob, '/tuning/save_job', callback_group=cb)
 
         self.pub_state = self.create_publisher(TuningState, '/tuning/state', STATE_QOS)
@@ -789,20 +784,20 @@ class TaskManager(Node):
                     % (s, m.hz, rec.final_error_cents))
             self._publish_state()
 
-    def _strum(self):
-        """완료 알림용 화음. 측정하지 않는다 (기획 2.6).
+    def _wipe(self):
+        """완료 마무리 — 안경닦이로 넥을 닦는다. 측정하지 않는다 (2026-09-23, 화음 자리 대체).
 
-        대상 줄은 파라미터로 받는다. 비우면 로봇의 교시된 전체 줄이다 (브리핑 D4, 미확정).
+        대상·좌표는 로봇 쪽 teach_points.yaml의 wipe 절에서 온다. 서버는 지시하지
+        않는다(CLAUDE.md 2절과 같은 원칙) — Goal에 필드가 없다.
         """
         self._gate()
-        self._set_phase(TuningState.PHASE_STRUM, 0)
-        goal = StrumAll.Goal()
-        goal.string_numbers = [int(n) for n in (self._p('strum_string_numbers') or [])]
-        self._run_action(self.cli_strum, goal,
-                         float(self._p('strum_timeout_sec')), 'strum_all')
+        self._set_phase(TuningState.PHASE_WIPE, 0)
+        goal = WipeStrings.Goal()
+        self._run_action(self.cli_wipe, goal,
+                         float(self._p('wipe_timeout_sec')), 'wipe_strings')
 
     def _return_home(self):
-        """피크 반환과 복귀는 미구현 화음의 성공 여부와 분리한다."""
+        """피크 반환과 복귀는 넥 닦기의 성공 여부와 분리한다."""
         self._gate()
         self._set_phase(TuningState.PHASE_RETURN, 0)
         res = self._run_action(self.cli_home, ReturnHome.Goal(),
@@ -865,8 +860,16 @@ class TaskManager(Node):
                     self._sleep_gated(hold)
 
             self._verify_pass()                           # Phase 2
-            # #84: 화음은 미구현이라 실행 제외. 구현·실기 검증 후 아래 호출 복구.
-            # self._strum()
+            # 2026-09-23: 화음(#84로 미구현인 채 폐기)을 안경닦이로 넥 닦기가
+            # 대체하기로 했다. **아직 실행은 그대로 뺀다.** teach_points.yaml의
+            # wipe 절(pickup·start·end·return_box)은 2026-09-23에 좌표가
+            # 채워졌지만(taught: true) 힘 제어·정착 시간(wipe_settle_sec)이
+            # 실기 미검증 1차값이다 — 지금 켜면 실패 시 _wipe() -> _run_action()
+            # 이 Aborted 를 던지고(#83), 4줄을 완주한 작업조차 "중간에 끊긴
+            # 작업"으로 잘못 분류돼 PHASE_DONE·_save() 를 못 탄다 — #84 가
+            # 막으려던 것과 같은 종류의 회귀다. tools/wipe_check.py 로 실기
+            # 검증을 마친 뒤에 아래 주석을 풀 것.
+            # self._wipe()
             self._return_home()
 
             self._set_phase(TuningState.PHASE_DONE, 0)

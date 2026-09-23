@@ -1,0 +1,14 @@
+# 안경닦이로 넥(3·4번 줄 사이, 너트~적당한 종료점)을 한 방향으로 쭉 닦는다.
+# 화음 연출(StrumAll, #84 미구현으로 폐기)이 있던 자리를 대체한다 — 검증 뒤,
+# 복귀 전 마무리 동작. 인터페이스 이름을 바꿨을 뿐 새 Action이 아니다.
+# task_manager -> robot_controller
+
+# --- Goal ---
+# 지금은 파라미터가 없다. 시작/종료점·힘은 teach_points.yaml의 wipe 절에서 온다.
+---
+# --- Result ---
+bool success               # 동작 수행 성공 여부
+string message             # 실패 시 사유
+---
+# --- Feedback ---
+# 사용하지 않음
