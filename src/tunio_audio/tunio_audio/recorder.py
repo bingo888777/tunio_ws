@@ -135,6 +135,7 @@ class Recorder:
         self._stream = None
         self._q = queue.Queue()
         self._queued = 0          # 큐에 쌓인 샘플 수
+        self._pending = np.zeros(0, dtype=np.float32)
         self.overflow_count = 0
 
     # ---------------- 장치 ----------------
@@ -192,6 +193,7 @@ class Recorder:
         raise RecorderError("입력 장치를 열 수 없습니다 — " + " / ".join(errors))
 
     def close(self):
+        self._pending = np.zeros(0, dtype=np.float32)
         if self._stream is not None:
             try:
                 self._stream.stop()
@@ -219,6 +221,7 @@ class Recorder:
             except queue.Empty:
                 break
         self._queued = 0
+        self._pending = np.zeros(0, dtype=np.float32)
 
     def read(self, duration, abort=None, timeout=None):
         """
@@ -232,7 +235,10 @@ class Recorder:
 
         need = int(duration * self.sample_rate)
         deadline = time.monotonic() + (timeout if timeout else duration * 3 + 1.0)
-        chunks, got = [], 0
+        # 콜백 블록 크기는 요청 길이와 다르다. 남는 샘플을 버리면 매 read마다
+        # 파형이 끊겨 FFT 돌출과 YIN 안정성이 무너진다. 다음 read로 넘긴다.
+        chunks, got = [self._pending], len(self._pending)
+        self._pending = np.zeros(0, dtype=np.float32)
 
         while got < need:
             if abort is not None and abort():
@@ -249,7 +255,9 @@ class Recorder:
             chunks.append(block)
             got += len(block)
 
-        return np.concatenate(chunks)[:need]
+        samples = np.concatenate(chunks)
+        self._pending = samples[need:].copy()
+        return samples[:need]
 
     # 컨텍스트 매니저로도 쓸 수 있게
     def __enter__(self):

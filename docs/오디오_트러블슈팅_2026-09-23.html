@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TUNIO · 오디오 통합 실패 트러블슈팅</title>
+<style>
+:root{color-scheme:light;--ink:#172b3a;--muted:#526674;--accent:#087f83;--line:#d9e4e8}
+*{box-sizing:border-box}body{margin:0;background:#edf3f5;color:var(--ink);font-family:"Noto Sans CJK KR","Malgun Gothic",sans-serif;line-height:1.75}main{max-width:980px;margin:36px auto;background:white;padding:56px 64px;border-top:8px solid var(--accent);box-shadow:0 8px 32px #172b3a12}header{border-bottom:1px solid var(--line);padding-bottom:28px}h1{font-size:32px;line-height:1.4;margin:12px 0}h2{font-size:23px;margin:32px 0 12px}h3{font-size:17px;margin:20px 0 6px}p{margin:10px 0}li{margin:7px 0}small,.meta{color:var(--muted)}.eyebrow{font-size:13px;letter-spacing:.12em;color:var(--accent);font-weight:bold}.lead{font-size:19px}.note{padding:16px 20px;background:#eaf7f5;border-left:4px solid var(--accent);margin:20px 0}.pending{background:#fff5e6;border-left-color:#bc7717}.flow{padding:18px;background:#f3f6f8;border:1px solid var(--line);border-radius:8px;font-size:15px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{padding:16px 20px;border:1px solid var(--line);border-radius:8px}.label{font-weight:bold;color:var(--accent)}code{font-family:monospace;background:#eef3f5;padding:2px 5px;overflow-wrap:anywhere}pre{background:#172b3a;color:#e5f4f5;padding:18px;border-radius:8px;white-space:pre-wrap;font-size:13px}a{color:var(--accent);overflow-wrap:anywhere}footer{margin-top:32px;padding-top:18px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}@media(max-width:680px){main{margin:0;padding:28px 20px}.pair{grid-template-columns:1fr}h1{font-size:26px}}@page{size:A4;margin:17mm}@media print{body{background:white;font-size:10pt}main{margin:0;padding:0;max-width:none;border-top-width:4px;box-shadow:none}h1{font-size:24pt}h2{font-size:16pt;break-after:avoid}h3{break-after:avoid}.card,.note,.flow,pre{break-inside:avoid}a{color:inherit}section{margin-bottom:20px}.page{break-before:page}footer{font-size:9pt}}
+</style>
+</head>
+<body><main>
+<header><div class="eyebrow">TUNIO / ENGINEERING NOTE / 2026.09.23</div>
+<h1>단독 시험에서는 잡히던 기타 소리,<br>통합에서는 왜 분석에 실패했을까?</h1>
+<p class="lead">실시간 녹음의 샘플 유실을 수정하고,<br>측정 결과 표시와 최종 검증의 의미를 바로잡았다.</p>
+<p class="meta">범위: USB 마이크 · audio_analyzer · task_manager · 관제<br>기준: 작업 로그 <code>20260923_094024</code>, 기존 WAV, 회귀 테스트, 사용자 시험 결과</p></header>
+<section><h2>01. 증상과 현재 결론</h2>
+<p>6·5번은 단독 시험에서 소리가 잡혔지만 로봇 통합에서는 주파수 후보가 계속 기각됐다. 2·1번도 재발현에서야 측정되는 경우가 있었다. 사용자 확인상 두 환경은 같은 USB 마이크를 기본 입력으로 사용했다.</p>
+<div class="note"><strong>확인된 핵심 결함은 FFT/YIN 공식이 아니라 입력 파형의 연속성이었다.</strong><br>실시간 녹음에서 0.1초씩 읽을 때 남는 샘플을 버렸다. 분석기는 중간중간 끊긴 소리를 원래 연속된 소리처럼 분석했다.</div>
+<p>사용자 시험에서 6번 개별 분석 성공과 관제 연동의 주파수 인식 개선을 확인했다. 다만 6·5번의 반복 성공률과 로봇 구동 중 재현성은 아직 수치로 검증하지 않았다.</p></section>
+<section><h2>02. 분석 경로에서 무엇이 잘못됐나</h2>
+<div class="flow">USB 마이크 → <strong>Recorder.read(): 0.1초씩 수집</strong> → audio_analyzer: 소리 시작 후보·과도음 제외 → pitch.analyze: FFT + YIN → 유효성 판정 → 서버·관제</div>
+<p>마이크 콜백은 항상 정확히 0.1초 분량을 주지 않는다. 예를 들어 44100Hz에서 0.1초는 4410샘플인데, 512샘플 블록을 받으면 9개 블록인 4608샘플을 꺼내야 한다.</p>
+<div class="pair"><div class="card"><span class="label">이전</span><p>4608개 중 4410개만 반환.<br><strong>남은 198개를 버림.</strong></p><p>첫 읽기 끝: 4409<br>다음 읽기 시작: 4608</p></div><div class="card"><span class="label">수정</span><p>4410개를 반환하고<br><strong>남은 198개를 다음 읽기에 보존.</strong></p><p>첫 읽기 끝: 4409<br>다음 읽기 시작: 4410</p></div></div>
+<p>반복되는 파형 단절은 스펙트럼을 바꾸고 주파수 추정을 불안정하게 만들 수 있다. 단독 <code>pitch_test.py</code>는 이 반복 읽기 경로를 쓰지 않아 같은 결함이 드러나지 않았다.</p>
+<p><strong>수정 파일:</strong> <code>src/tunio_audio/tunio_audio/recorder.py</code>. 남는 샘플을 보존하며, 새 측정의 <code>flush()</code>에서는 이전 측정의 꼬리를 비운다.</p>
+<p class="meta">512샘플은 재현 실험 조건이다. 실제 통합 당시 콜백 크기와 원음은 없으므로 첨부 로그의 모든 실패를 이 결함 하나로 확정하지 않는다.</p></section>
+<section class="page"><h2>03. 왜 ‘돌출 부족’·‘창 불일치’가 나왔나</h2>
+<p>현재 분석은 목표 ±2반음 범위에서 FFT로 피크를 찾고, 그 주변을 YIN으로 정밀 추정한다. 소리 크기만으로 성공 처리하지 않고 두 관문을 더 확인한다.</p>
+<ul><li><strong>돌출도 ≥20dB:</strong> 목표 대역의 피크가 주변보다 뚜렷한가.</li><li><strong>창 일치 ≤12센트:</strong> 같은 녹음의 여러 겹치는 구간이 비슷한 주파수를 내는가.</li></ul>
+<p>파형이 끊기면 두 판정에 불리해질 수 있다. 따라서 ‘소리는 큰데도 실패’할 수 있다. 수정은 이 문턱을 낮춰 통과시킨 것이 아니라, 분석에 들어가는 샘플을 온전하게 보존한 것이다.</p>
+<h3>기존 사람 발현 WAV 40개로 비교한 보조 실험</h3>
+<p>연속 입력과 512샘플 블록 유실을 가정한 입력을 비교했다. 각 줄 10개 파일이며, 하나라도 유효한 onset 후보가 있으면 해당 파일을 통과로 셌다.</p>
+<ul><li><strong>6번:</strong> 통과 9/10 → 7/10. 돌출 중앙값 35.3 → 23.2dB.</li><li><strong>5번:</strong> 통과 9/10 → 8/10. 돌출 중앙값 50.5 → 36.7dB.</li><li><strong>2번:</strong> 통과 10/10 → 10/10. 돌출 중앙값 43.2 → 39.9dB.</li><li><strong>1번:</strong> 통과 10/10 → 7/10. 돌출 중앙값 34.9 → 26.9dB.</li></ul>
+<p class="meta">화살표는 ‘연속 입력 → 유실 재현’ 방향. 과도음 0.5초 제외, 저음 2초·고음 1.5초, 짧은 파일은 최소 분석 길이 0.7초 허용. 돌출 중앙값은 파일별 후보의 최대 돌출을 모은 값이다. 이 수치는 로봇 발현 성공률이 아니다.</p>
+<h3>사용자가 실제 확인한 6번 결과</h3>
+<pre>success: true
+frequency_hz: 81.71884155273438
+failure_reason: 0
+Goal finished with status: SUCCEEDED</pre>
+<p>주파수 분석은 성공했다. 목표 82.4069Hz보다 약 14.5센트 낮으므로 조율 허용 범위 ±10센트에는 벗어난다. <strong>‘분석 성공’과 ‘조율 성공’은 서로 다른 판정이다.</strong></p></section>
+<section><h2>04. 함께 바로잡은 서버·관제 동작</h2>
+<h3>① 1차 성공한 줄만 최종 검증</h3><p>이전에는 중간 측정 실패로 종료된 2번도 검증했다. 검증에서 음이 잡히자 실패 사유가 ‘검증 시 틀어짐’으로 바뀌었다. 이제 1차 실패 줄은 검증에서 제외하고 원래 실패 사유·측정값·조절 횟수를 보존한다.</p>
+<h3>② 다음 줄에 이전 줄의 Hz가 미리 표시되는 문제</h3><p>서버가 현재 줄 번호를 바꾸면서 화면용 Hz와 유효 플래그를 지우지 않았다. 새 줄·새 측정·검증 시작 시 이를 초기화하도록 했다. 줄별 확정 결과는 보존한다. 사용자 재시험에서 표시 개선을 확인했다.</p>
+<h3>③ 설정 파일 일치</h3><p>과도음 제외는 기존 PR #86에서 노드 기본값이 이미 0.5초로 바뀌었다. 이번에는 YAML에 남아 있던 0.3초도 0.5초로 맞췄다. station 런치는 이 YAML을 직접 읽지 않으므로 이번 실패의 직접 원인으로 보지는 않는다.</p></section>
+<section class="page"><h2>05. 이번 PR에 포함하지 않는 문제 — #89</h2>
+<div class="note pending"><strong>첫 발현·페그 조절 후 두 번 튕기는 문제는 별도다.</strong><br>녹음 샘플 보존만으로 준비 시간과 측정 타이머의 순서가 해결되지는 않는다.</div>
+<p>첨부 로그에서 첫 6번 측정은 약 0.52초의 잡음 후보를 onset으로 잡고 약 10.6초에 시간 초과로 끝났다. 로봇 성공 Result는 약 22.2초에 왔다. 서버는 실패한 측정 결과를 받아 재측정하고 다시 발현을 요청했다. 로봇의 정확한 줄 접촉 시각은 로그에 없다.</p>
+<p>권장 후속 설계는 <strong>로봇 발현 준비 완료 → 마이크 ready → 로봇 발현</strong>이다. 별도 준비 Action과 로봇 담당자 협의가 필요하다. onset 대기 상한만 늘려도 잡음 onset 이후의 별도 분석 제한은 그대로이므로 충분하지 않다.</p>
+<p><a href="https://github.com/ImymemineJ/tunio_ws/issues/89">GitHub #89 · 준비 완료 신호 기반 마이크 대기 시작 협의</a></p>
+<h2>06. 검증과 다음 실기에서 볼 것</h2>
+<ul><li><strong>자동 검증:</strong> 오디오 25개·서버 66개, 총 91개 테스트. 샘플 연속성·실패 사유 보존·화면용 측정값 초기화 포함.</li><li><strong>사용자 확인:</strong> 6번 개별 측정 성공, 관제 연동 인식과 이전 줄 값 표시 개선.</li><li><strong>남은 확인:</strong> 줄별 반복 성공률, 로봇 발현·구동음 조건의 돌출도와 창 일치, #89 준비 시간 문제.</li></ul>
+<p>로봇 없는 시험은 <code>sim_robot.launch.py</code>로 진행한다. 마이크·서버·관제는 실제이며 로봇 응답만 가짜다. 관제의 최대 조절 횟수를 0으로 설정하고 준비 완료 후 표시된 줄을 한 번 튕긴다. 현재 순서는 6→5→2→1이다.</p>
+<p><a href="로봇없이_오디오_관제_시험.md">상세 실행 명령과 절차</a> · <a href="오디오_통합실패_2026-09-23.md">Git 이력·로그 진단 기록</a></p>
+<footer>이 문서는 확인된 결함·재현 실험·사용자 관찰·미검증 항목을 구분해 기록한다.<br>단일 HTML 파일로 브라우저에서 열 수 있다. PDF가 필요하면 Ctrl+P → PDF로 저장을 사용한다.</footer>
+</section></main></body></html>
