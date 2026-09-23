@@ -13,6 +13,8 @@ spec.loader.exec_module(tool)
 
 
 @pytest.mark.parametrize('start,answer,status,end', [
+    (300.5, 'RECOVER', 'recovered', 120.5),
+    (-300.5, 'RECOVER', 'recovered', -120.5),
     (285, 'RECOVER', 'recovered', 105), (-285, 'RECOVER', 'recovered', -105),
     (100, 'RECOVER', 'not_needed', 100), (285, '', 'canceled', 285),
 ])
@@ -36,6 +38,6 @@ def test_실제_회복함수_재사용과_확인전_무이동(monkeypatch, start
 
 def test_확인중_자세변경시_이동하지_않는다(monkeypatch):
     states = iter([[0] * 5 + [285], [10] + [0] * 4 + [285]])
-    monkeypatch.setattr(MP, '_read_peg_joints', lambda motion: next(states))
+    monkeypatch.setattr(MP, '_read_peg_joints', lambda motion, **kwargs: next(states))
     with pytest.raises(MP.MotionError, match='관절각이 바뀌었다'):
         tool.recover_once({'j6_recovery_enabled': True}, confirm=lambda prompt: 'RECOVER')

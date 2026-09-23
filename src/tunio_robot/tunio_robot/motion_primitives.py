@@ -1621,8 +1621,8 @@ def _peg_joint_limits(motion):
     return j6, margin
 
 
-def _read_peg_joints(motion):
-    """관절값을 모르면 움직이지 않는다. 한계 밖에서의 자동 복구도 하지 않는다."""
+def _read_peg_joints(motion, *, for_recovery=False):
+    """일반 이동은 J6 한계를 검사한다. 회복 시작값만 한계 초과를 허용한다."""
     j6, _ = _peg_joint_limits(motion)
     try:
         joints = [float(v) for v in _require_api().get_current_posj()]
@@ -1630,9 +1630,9 @@ def _read_peg_joints(motion):
             raise ValueError("유한한 관절각 6개가 아니다")
     except Exception as exc:
         raise MotionError(f"페그 관절각 읽기 실패 — 이동 중단: {exc}") from exc
-    if abs(joints[5]) > j6:
+    if not for_recovery and abs(joints[5]) > j6:
         raise MotionError(f"J6 {joints[5]:+.1f}도가 한계 ±{j6:g}도 밖이다. "
-                          "자동 되감기 대신 현장에서 복구하라")
+                          "일반 이동 금지 — 접촉 이탈 후 J6 회복이 필요하다")
     return joints
 
 
@@ -1659,7 +1659,7 @@ def _recover_j6(motion, delta_deg=0.0):
     """호출자는 접촉에서 벗어났음을 보장한다. 콜백에서는 절대 호출하지 않는다."""
     if not motion.get("j6_recovery_enabled", False):
         return 0.0
-    joints = _read_peg_joints(motion)
+    joints = _read_peg_joints(motion, for_recovery=True)
     threshold = _j6_threshold(motion)
     if max(abs(joints[5]), abs(joints[5] + delta_deg)) < threshold:
         return 0.0

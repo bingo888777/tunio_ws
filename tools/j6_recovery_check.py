@@ -19,7 +19,7 @@ def recover_once(motion, confirm=input):
     """운영 회복 함수를 그대로 호출. 확인 대기 중 관절이 바뀌면 실행하지 않는다."""
     if not motion.get('j6_recovery_enabled', False):
         raise MP.MotionError('YAML의 J6 회복이 꺼져 있다')
-    before = MP._read_peg_joints(motion)
+    before = MP._read_peg_joints(motion, for_recovery=True)
     threshold = MP._j6_threshold(motion)
     if abs(before[5]) < threshold:
         return {'status': 'not_needed', 'before': before, 'offset': 0.0}
@@ -28,7 +28,7 @@ def recover_once(motion, confirm=input):
     print('페그·줄·거치대에서 떨어져 있고 손목/피크/케이블의 회전 공간이 있어야 합니다.')
     if confirm('다른 이동 프로그램을 종료했고 공간을 확인했다면 RECOVER 입력: ').strip() != 'RECOVER':
         return {'status': 'canceled', 'before': before}
-    current = MP._read_peg_joints(motion)
+    current = MP._read_peg_joints(motion, for_recovery=True)
     if max(abs(a - b) for a, b in zip(before, current)) > 1.0:
         raise MP.MotionError('확인 중 관절각이 바뀌었다. 실행하지 않고 다시 확인한다')
     offset = MP._recover_j6(motion)

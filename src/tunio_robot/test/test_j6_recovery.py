@@ -14,7 +14,10 @@ MOTION = {"j6_recovery_enabled": True, "j6_recover_at_deg": 280.0,
           "peg_j6_limit_deg": 300.0}
 
 
-@pytest.mark.parametrize("start,end", [(280, 100), (-280, -100), (290, 110), (-290, -110)])
+@pytest.mark.parametrize("start,end", [
+    (280, 100), (-280, -100), (290, 110), (-290, -110),
+    (300.5, 120.5), (-300.5, -120.5),
+])
 def test_280도에서_양방향_180도_회복(monkeypatch, start, end):
     joints = [0., 0., 0., 0., 0., float(start)]
     monkeypatch.setattr(MP, "_api", SimpleNamespace(get_current_posj=lambda: joints[:]))
@@ -105,3 +108,13 @@ def test_미등록이면_발현준비에서_집기나_등록없이_안내한다(
         RobotController.on_prepare_pluck(n, goal)
     n._ensure_pick.assert_not_called()
     n._ensure_registered.assert_not_called()
+
+
+@pytest.mark.parametrize("start", [460, -460])
+def test_180도만으로_범위복귀_불가능하면_움직이지_않는다(monkeypatch, start):
+    monkeypatch.setattr(MP, "_api", SimpleNamespace(get_current_posj=lambda: [0] * 5 + [start]))
+    move = Mock()
+    monkeypatch.setattr(MP, "_movej", move)
+    with pytest.raises(MP.MotionError, match="여유를 확보"):
+        MP._recover_j6(MOTION)
+    move.assert_not_called()
