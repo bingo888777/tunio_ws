@@ -328,6 +328,7 @@ uint8 adjust_count
 StringResult[] results
 uint8 overall_result
 TuningSettings active_settings
+string error_message
 
 uint8 PHASE_IDLE=0
 uint8 PHASE_MEASURE_READY=1
@@ -604,3 +605,10 @@ ros2 service call /tuning/reregister_pegs tunio_interfaces/srv/CommandTuning '{}
 미구현 화음은 `_run_job()`의 `_strum()` 호출만 주석 처리해 제외한다.
 StrumAll Action 정의와 서버·로봇 함수는 삭제하지 않으며, 구현·실기 검증 후 호출을 복구한다.
 ReturnHome 실패/거부/종료 불명은 기존 성공 Result 정책에 따라 작업을 중단한다.
+
+### 2026-09-23 웹 재등록·오류 안내 연결
+
+- POST `/api/command/reregister_pegs` → `/tuning/reregister_pegs` (CommandTuning). 접수와 등록·복귀 완료는 구분한다.
+- `TuningState.error_message`는 작업 중단 사유다. 로봇 Action 실패의 message를 포함하며 웹이 ERROR 상태에서 텍스트로 표시한다. 새 시작·재등록 접수 시 빈 문자열로 초기화한다. 접수 거부는 기존 CommandTuning.message로 전달한다.
+- #100의 미등록 PreparePluck 실패도 이 경로를 따른다. 시작 접수 이후 비동기로 실패할 수 있으며, 네 줄의 등록 여부를 시작 전에 일괄 조회하는 서비스는 추가하지 않는다.
+- 메시지 변경으로 모든 TuningState 사용 노드의 인터페이스 재빌드·재시작이 필요하다. 기존 상수 번호는 변경하지 않는다.

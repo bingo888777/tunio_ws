@@ -42,6 +42,9 @@ const SETTING_FIELDS = [
 const $ = (id) => document.getElementById(id);
 
 let lastState = null;
+let streamReady = false;
+let commandPending = false;
+const registration = new RegistrationTracker();
 let defaults = null;
 let selectedJob = null;
 let historyJobs = [];        // 서버에서 받은 이력 원본. 검색은 이 위에서 한다
@@ -336,7 +339,7 @@ function renderTuner(state) {
   $('now-target').textContent = hz(state.target_hz);
 
   if (!state.measurement_valid) {
-    noteEl.textContent = '측정 불가';
+    noteEl.textContent = [PHASE.REGISTER_PEG, PHASE.PREPARE_PLUCK, PHASE.RETURN].includes(state.phase) ? state.phase_label : '측정 불가';
     noteEl.className = 'note invalid';
     octEl.textContent = '';
     needle.className = 'needle';
@@ -372,7 +375,15 @@ function renderTuner(state) {
   centsEl.className = 'cents-big ' + (inTune ? 'ok' : (c > 0 ? 'high' : 'low'));
 }
 
+function renderJobError(state) {
+  const el = $('job-error');
+  const message = state && state.phase === PHASE.ERROR ? state.error_message : '';
+  el.hidden = !message;
+  el.textContent = message ? `작업 중단: ${message}` : '';
+}
+
 function renderLive(state) {
+  renderJobError(state);
   markJustDone(state);
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 
@@ -452,22 +463,38 @@ function renderStringCards(state) {
 function renderButtons(state) {
   const running = isRunning(state);
   const paused = state && state.phase === PHASE.PAUSED;
-  $('btn-start').disabled = running;
-  $('btn-pause').disabled = !running || paused;
-  $('btn-resume').disabled = !paused;
-  $('btn-cancel').disabled = !running;
+  const blocked = !streamReady || !state || commandPending;
+  $('btn-start').disabled = blocked || running || registration.busy;
+  $('btn-reregister').disabled = blocked || running || registration.busy;
+  $('registration-status').textContent = registration.message;
+  $('btn-pause').disabled = blocked || !running || paused;
+  $('btn-resume').disabled = blocked || !paused;
+  $('btn-cancel').disabled = blocked || !running;
 }
 
 // ─────────────────────────────── 명령
 
 async function sendCommand(name) {
+  if (commandPending || !streamReady || !lastState) return;
+  const registering = name === 'reregister_pegs';
+  if ((registering || name === 'start') && (isRunning(lastState) || registration.busy)) return;
+  commandPending = true;
+  if (registering) registration.begin(lastState);
+  renderButtons(lastState);
   try {
     const res = await fetch(`/api/command/${name}`, { method: 'POST' });
     const data = await res.json();
-    if (!res.ok) { toast(data.error || '명령 실패', false); return; }
-    toast(data.message || (data.accepted ? '접수' : '거부'), data.accepted);
+    if (registering) {
+      if (res.ok) registration.reply(data.accepted, data.message);
+      else registration.unknown(data.error || '접수 여부 확인 불가');
+    }
+    toast(data.error || data.message || (data.accepted ? '접수' : '거부'), res.ok && data.accepted);
   } catch (e) {
+    if (registering) registration.unknown('응답 유실 — 접수 여부를 확인할 수 없습니다. 상태와 로그를 확인하세요.');
     toast(`명령을 보내지 못했다: ${e}`, false);
+  } finally {
+    commandPending = false;
+    renderButtons(lastState);
   }
 }
 
@@ -669,10 +696,15 @@ function connect() {
 
   es.onmessage = (ev) => {
     lastState = JSON.parse(ev.data);
+    streamReady = true;
+    registration.observe(lastState);
     renderLive(lastState);
   };
 
   es.onerror = () => {
+    streamReady = false;
+    registration.disconnect();
+    renderButtons(lastState);
     // EventSource 는 스스로 재접속한다. 그 사이 상태 표시만 바꾼다.
     link.textContent = '연결 끊김 — 재접속 중';
     link.className = 'badge badge-bad';
@@ -805,6 +837,7 @@ function init() {
   initCoordMode();
   initTheme();
   initTabs();
+  $('btn-reregister').addEventListener('click', () => sendCommand('reregister_pegs'));
   $('btn-start').addEventListener('click', () => sendCommand('start'));
   $('btn-pause').addEventListener('click', () => sendCommand('pause'));
   $('btn-resume').addEventListener('click', () => sendCommand('resume'));

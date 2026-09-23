@@ -837,3 +837,10 @@ colcon test --packages-select tunio_server && colcon test-result --all
   자동 초기 등록 정책을 폐기하고 별도 재등록 버튼에서만 등록한다.
   로봇 PreparePluck은 실기에서 해당 줄의 유효 등록값을 이동 전에 확인하며,
   없으면 재등록 안내로 실패한다. dry_run은 실제 등록 파일을 요구하지 않는다.
+
+### 웹 페그 재등록·오류 안내
+
+- 웹 재등록 버튼은 CommandTuning 계약을 사용하며 접수와 완료를 구분한다.
+- TuningState.error_message로 작업 중단 사유를 전달한다. ERROR에서 표시하고 새 작업 접수 시 비운다. 미등록 판단은 로봇 PreparePluck이 한다.
+- fake_hardware의 require_peg_registration=true는 메모리 등록 여부로 미등록 안내를 시험한다. 기본 false이고 실제 각도·파일 검증은 아니다.
+- 테스트 절차: docs/페그_재등록_웹_테스트_가이드.md. 인터페이스 변경 후 재빌드·재시작한다.

@@ -156,6 +156,7 @@ class TaskManager(Node):
         self._active_goals = []
         self._registered_pegs = set()  # 이번 작업에서 성공 Result를 확인한 줄
         self.job_id = ''
+        self.error_message = ''
         self.measurement_id = 0
         self.phase = TuningState.PHASE_IDLE
         self._phase_before_pause = TuningState.PHASE_IDLE
@@ -266,6 +267,7 @@ class TaskManager(Node):
         msg.stamp = self.get_clock().now().to_msg()
         msg.job_id = self.job_id
         msg.phase = self.phase
+        msg.error_message = self.error_message
         msg.current_string = self.current_string
         msg.target_hz = L.TARGETS[self.current_string][1] if self.current_string else 0.0
         msg.measured_hz = self.measured_hz
@@ -332,6 +334,7 @@ class TaskManager(Node):
             return res
         self._pause.clear()
         self._cancel.clear()
+        self.error_message = ''
         self._registered_pegs.clear()
         self._reset_results()
         self.job_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -869,6 +872,7 @@ class TaskManager(Node):
         except Cancelled:
             self._set_phase(TuningState.PHASE_CANCELED, 0)
         except Exception as exc:                          # noqa: BLE001
+            self.error_message = str(exc)
             self.get_logger().error('페그 재등록 중단: %s' % exc)
             self._set_phase(TuningState.PHASE_ERROR, 0)
 
@@ -895,9 +899,11 @@ class TaskManager(Node):
         except Cancelled:
             self._finish_cancelled()
         except Aborted as exc:
+            self.error_message = str(exc)
             self.get_logger().error('작업 중단: %s' % exc)
             self._finish_error()
         except Exception as exc:                          # noqa: BLE001
+            self.error_message = str(exc) or type(exc).__name__
             self.get_logger().error('예상치 못한 오류로 중단: %r' % exc)
             self._finish_error()
 
@@ -916,6 +922,7 @@ class TaskManager(Node):
             with self._lock:
                 stuck = list(self._active_goals)
             if stuck:
+                self.error_message = '취소 후에도 로봇 동작 종료를 확인하지 못했습니다.'
                 self.get_logger().error(
                     '취소했는데 goal %d개가 남아 있다. 로봇이 취소를 받지 않는 것으로 보인다'
                     % len(stuck))

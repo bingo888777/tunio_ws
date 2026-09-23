@@ -78,6 +78,8 @@ class FakeHardware(Node):
         self.declare_parameter('measure_delay_sec', 2.2)   # 녹음+분석 (기획 2.3)
         self.declare_parameter('prepare_delay_sec', 0.0)  # 준비 시간 재현용
         self._prepared_pluck = None
+        self.declare_parameter('require_peg_registration', False)
+        self._registered_strings = set()
         self.declare_parameter('play_delay_sec', 3.0)      # 피크 집기+접근+발현+후퇴 (추정)
         self.declare_parameter('adjust_delay_sec', 4.0)    # 피크 반환+페그 파지+회전+해제 (추정)
         self.declare_parameter('strum_delay_sec', 3.0)     # 화음 훑기+대기 자세 복귀 (추정)
@@ -290,11 +292,18 @@ class FakeHardware(Node):
 
     def on_register(self, goal):
         self._prepared_pluck = None
+        self._registered_strings.add(goal.request.string_number)
         goal.succeed()
         return RegisterPeg.Result(success=True, message='')
 
     def on_prepare_pluck(self, goal):
         self._prepared_pluck = None
+        if (self._p('require_peg_registration')
+                and goal.request.string_number not in self._registered_strings):
+            goal.abort()
+            return PreparePluck.Result(
+                success=False, message=f'{goal.request.string_number}번 페그 등록값 없음 — '
+                '페그 재등록을 먼저 실행하세요')
         if not self._sleep(goal, self._p('prepare_delay_sec')):
             goal.canceled()
             return PreparePluck.Result(success=False, message='준비 취소')
