@@ -1090,3 +1090,49 @@ def test_세구간_공통_실측판정_재집기_폭실패_분리(
     else:
         assert node._holding_pick is True
         assert node._pick_fault is None
+
+
+def test_prepare_token_is_consumed_and_wrong_string_never_plays(ros, taught):
+    from tunio_interfaces.action import PreparePluck
+
+    h = Harness(taught)
+    try:
+        prepared = h.send(PreparePluck, '/robot/prepare_pluck',
+                          PreparePluck.Goal(string_number=6)).result
+        assert prepared.success and prepared.preparation_id
+        played = h.send(PlayString, '/robot/play_string', PlayString.Goal(
+            string_number=6, preparation_id=prepared.preparation_id)).result
+        assert played.success
+        repeated = h.send(PlayString, '/robot/play_string', PlayString.Goal(
+            string_number=6, preparation_id=prepared.preparation_id)).result
+        assert not repeated.success
+        prepared = h.send(PreparePluck, '/robot/prepare_pluck',
+                          PreparePluck.Goal(string_number=6)).result
+        wrong = h.send(PlayString, '/robot/play_string', PlayString.Goal(
+            string_number=5, preparation_id=prepared.preparation_id)).result
+        assert not wrong.success
+    finally:
+        h.shutdown()
+
+
+def test_adjust_invalidates_preparation_and_requires_new_pick(ros, taught):
+    from tunio_interfaces.action import PreparePluck
+
+    h = Harness(taught)
+    try:
+        prepared = h.send(PreparePluck, '/robot/prepare_pluck',
+                          PreparePluck.Goal(string_number=6)).result
+        adjusted = h.send(AdjustPeg, '/robot/adjust_peg', AdjustPeg.Goal(
+            string_number=6, direction=1, angle_deg=1.)).result
+        assert adjusted.success
+        assert not h.node._holding_pick
+        stale = h.send(PlayString, '/robot/play_string', PlayString.Goal(
+            string_number=6, preparation_id=prepared.preparation_id)).result
+        assert not stale.success
+        prepared = h.send(PreparePluck, '/robot/prepare_pluck',
+                          PreparePluck.Goal(string_number=6)).result
+        assert prepared.success and h.node._holding_pick
+        assert h.send(PlayString, '/robot/play_string', PlayString.Goal(
+            string_number=6, preparation_id=prepared.preparation_id)).result.success
+    finally:
+        h.shutdown()

@@ -6,7 +6,7 @@
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
 PC 2대가 ROS 2 Jazzy로 통신한다(2026-09-22, PC 3대에서 축소). 정정인 PC(task_manager,
 web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). 랜을 건너는
-인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다 — `measure_pitch`는
+인터페이스는 `/robot/prepare_pluck`·`play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 여섯이다 — `measure_pitch`는
 정정인 PC 한 대 안에서 돈다. 근거는 `CLAUDE.md` 6절.
 
 ---
@@ -18,7 +18,9 @@ web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). �
 PlayString Feedback.warning은 폭 읽기 실패 경고와 재집기 소진 알람을 전달한다.
 기존 CommandTuning(start/pause/resume/cancel)은 그대로 둔다.
 
-PlayString Goal의 `resumed`는 재개 후 첫 발현 요청임을 나타내는 bool이다.
+PreparePluck과 PlayString Goal의 `resumed`는 재개 사실을 나타내는 bool이다.
+서버는 준비 전에 재개했다면 PreparePluck에 전달하고, 준비 이후 재개했다면 PlayString에 전달한다.
+두 Action의 Feedback.warning과 Result.message는 피크 경고를 동일하게 관제에 전달한다.
 서버는 이 사실만 전달하며 피크 보유 여부·폭을 판단하지 않는다.
 로봇은 resumed=true이고 피크를 들고 있던 경우에만 발현 전에 재확인한다.
 이미 반환한 상태라면 기존 집기 직후 확인을 사용한다. 페그에는 적용하지 않는다.
@@ -45,6 +47,7 @@ source install/setup.bash
 
 ros2 interface list | grep tunio_interfaces
 ros2 interface show tunio_interfaces/action/MeasurePitch
+ros2 interface show tunio_interfaces/action/PreparePluck
 ros2 interface show tunio_interfaces/action/PlayString
 ros2 interface show tunio_interfaces/action/AdjustPeg
 ros2 interface show tunio_interfaces/action/StrumAll
@@ -61,7 +64,7 @@ ros2 interface show tunio_interfaces/srv/GetHistory
 ros2 interface show tunio_interfaces/srv/SaveJob
 ```
 
-빌드가 통과하고 15개 인터페이스가 모두 보이면 통과다.
+빌드가 통과하고 16개 인터페이스가 모두 보이면 통과다.
 
 ---
 
@@ -71,6 +74,7 @@ ros2 interface show tunio_interfaces/srv/SaveJob
 src/tunio_interfaces/
 ├── action/
 │   ├── MeasurePitch.action
+│   ├── PreparePluck.action
 │   ├── PlayString.action
 │   ├── AdjustPeg.action
 │   ├── StrumAll.action
@@ -165,7 +169,28 @@ bool ready
 - `onset_timeout_sec` — onset 대기 상한. 마이크가 `ready`를 발행해 듣기 시작한 시점부터 센다. 이 안에 onset이 들어오지 않으면 발현 자체가 실패한 것이므로 `FAIL_LOW_SIGNAL`을 반환한다. onset이 영영 오지 않을 때 Action이 매달리는 것을 막는 유일한 장치다
 - Result의 ID 3개는 Goal 값을 그대로 되돌려준다. 늦게 도착한 이전 결과를 걸러내는 유일한 수단이라 생략 불가
 - `success=false`면 `frequency_hz`는 읽지 않는다. 0Hz를 유효값으로 쓰지 않는다
-- Feedback `ready=true`를 받은 뒤에 서버가 `play_string`을 요청한다
+- `prepare_pluck` 성공 후 `measure_pitch`를 요청하고, Feedback `ready=true`를 받은 뒤에 서버가 `play_string`을 요청한다
+
+### action/PreparePluck.action (#89)
+
+`/robot/prepare_pluck` · task_manager → robot_controller
+
+```
+uint8 string_number
+bool resumed
+---
+bool success
+string message
+string preparation_id
+---
+string warning
+```
+
+피크 집기가 필요하면 로봇이 판단해 집고, 대상 줄의 접촉점 위 접근점까지 이동한다.
+접촉·스트로크는 하지 않는다. 성공 시 줄 번호에 연결된 일회용 preparation_id를 발급한다.
+준비 실패·취소·응답 종료 불명 상태에서는 서버가 마이크/발현을 요청하지 않는다.
+준비 제한은 서버 파라미터 prepare_timeout_sec(30초, 실측 전 임시값)이며 오디오 예산과 별개다.
+기존 로봇 종료 확인 정책에 따라 제한 초과 뒤 추가 대기 중 성공을 확인하면 진행할 수 있다.
 
 ### action/PlayString.action
 
@@ -175,6 +200,8 @@ bool ready
 # --- Goal ---
 uint8 string_number
 bool resumed
+
+string preparation_id
 ---
 # --- Result ---
 bool success
@@ -185,6 +212,19 @@ string warning
 ```
 
 - 발현 직후 5mm 이상 후퇴(버징 방지)는 로봇 내부에서 처리하며 인터페이스에 드러나지 않는다
+
+- 서버는 PreparePluck 성공 → MeasurePitch ready → PlayString 순서로 요청한다.
+- preparation_id가 있으면 같은 줄의 유효한 준비 식별자인지 확인하고 한 번만 소비한다.
+  준비 후 다른 로봇 Action, 재준비, 이전 발현 시도는 기존 식별자를 무효화한다.
+  무효 식별자로 요청하면 자동으로 다시 준비하거나 움직이지 않고 실패한다.
+- 빈 preparation_id는 기존 단독 도구의 준비+발현 동작을 유지한다. 새 서버는 빈 값을 보내지 않는다.
+  이 호환은 새 인터페이스로 재빌드한 도구에 대한 것이며, 구버전 바이너리 혼용을 보장하지 않는다.
+- 준비 단계는 PHASE_PREPARE_PLUCK=13이다. 기존 열거 번호는 유지한다.
+- 준비 완료 뒤 취소/일시정지는 서버 단계 경계에서 확인한다. 진행 중 로봇의 물리 정지를
+  새로 구현한 것은 아니다. 준비 중 취소가 들어오면 이동 종료 후 발현을 차단한다.
+- 마이크 ready 뒤에는 접촉 직전 접근·스트로크·즉시 후퇴·복귀를 수행한다.
+  마이크는 기존처럼 소리 onset부터 분석 제한을 센다.
+- 관제 PC와 로봇 PC 양쪽 tunio_interfaces 및 관련 패키지를 재빌드하고 노드를 재시작한다.
 
 ### action/AdjustPeg.action
 
@@ -333,6 +373,7 @@ uint8 PHASE_PAUSED=9
 uint8 PHASE_CANCELED=10
 uint8 PHASE_ERROR=11
 uint8 PHASE_REGISTER_PEG=12
+uint8 PHASE_PREPARE_PLUCK=13
 
 uint8 OVERALL_PENDING=0
 uint8 OVERALL_SUCCESS=1
@@ -439,6 +480,7 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/MeasurePitch.action"
   "action/PlayString.action"
+  "action/PreparePluck.action"
   "action/AdjustPeg.action"
   "action/StrumAll.action"
   "action/RegisterPeg.action"

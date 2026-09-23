@@ -51,6 +51,9 @@ def test_pick_policy_across_real_actions(stage, outcome, monkeypatch):
         kwargs['verify_pick']()
 
     def pluck(*args, **kwargs):
+        if kwargs.get('prepare_only'):
+            events.append('prepare')
+            return
         events.append('pluck')
         kwargs['verify_pick']()
 

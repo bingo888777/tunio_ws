@@ -17,14 +17,15 @@ def measurement_node(resumed=False, play_success=True):
     node = SimpleNamespace(
         job_id='test', measurement_id=0, _registered_pegs={6, 5, 2, 1},
         active_settings=SimpleNamespace(measure_timeout_sec=1.0, onset_timeout_sec=1.0),
-        _resumed_since_play=threading.Event(), _p=lambda name: 1.0,
+        _resumed_since_play=threading.Event(), _cancel=threading.Event(), _p=lambda name: 1.0,
         _set_phase=MagicMock(), _track=MagicMock(), _untrack=MagicMock(),
-        _set_robot_notice=MagicMock(),
+        _set_robot_notice=MagicMock(), _gate=MagicMock(),
         get_logger=lambda: MagicMock(),
         _wait=MagicMock(side_effect=[handle, SimpleNamespace(result=measured)]),
         _run_action=MagicMock(return_value=SimpleNamespace(
-            success=play_success, message='' if play_success else '피크 없음. 홈 복귀 완료')),
-        cli_play=object(), cli_measure=MagicMock(),
+            success=play_success, preparation_id='token',
+            message='' if play_success else '피크 없음. 홈 복귀 완료')),
+        cli_prepare=object(), cli_play=object(), cli_measure=MagicMock(),
     )
     if not play_success:
         node._run_action.side_effect = Aborted('피크 없음. 홈 복귀 완료')
@@ -43,7 +44,7 @@ def measurement_node(resumed=False, play_success=True):
 def test_서버는_첫_발현에_재개사실만_전달한다(resumed):
     node, _ = measurement_node(resumed)
     assert TaskManager._measure_once(node, 6).ok
-    goal = node._run_action.call_args.args[1]
+    goal = node._run_action.call_args_list[0].args[1]
     assert goal.resumed == resumed
     assert not node._resumed_since_play.is_set()
     assert not hasattr(node, 'cli_check_pick')
@@ -53,8 +54,8 @@ def test_피크없음_Action실패는_재측정하지_않고_작업중단한다(
     node, handle = measurement_node(resumed=True, play_success=False)
     with pytest.raises(Aborted, match='피크 없음'):
         TaskManager._measure_once(node, 6)
-    handle.cancel_goal_async.assert_called_once()
-    node._untrack.assert_called_once_with(handle)
+    handle.cancel_goal_async.assert_not_called()
+    node._untrack.assert_not_called()
     node._run_action.assert_called_once()
 
 
@@ -87,7 +88,7 @@ def test_성공_Result의_폭확인불가_경고는_기록하고_측정을_계�
     logger.warning.assert_called_once()
     assert warning in logger.warning.call_args.args[0]
     handle.cancel_goal_async.assert_not_called()
-    node._run_action.assert_called_once()  # 경고 때문에 다시 발현하지 않는다
+    assert node._run_action.call_count == 2  # 준비와 발현 각 한 번
 
 
 def test_경고_Feedback을_받아도_동작을_중단하거나_중복경고하지_않는다():
@@ -98,7 +99,7 @@ def test_경고_Feedback을_받아도_동작을_중단하거나_중복경고하�
 
     def run(*args, **kwargs):
         kwargs['feedback_cb'](SimpleNamespace(feedback=SimpleNamespace(warning=warning)))
-        return SimpleNamespace(success=True, message=warning)
+        return SimpleNamespace(success=True, message=warning, preparation_id='token')
 
     node._run_action.side_effect = run
     assert TaskManager._measure_once(node, 6).ok

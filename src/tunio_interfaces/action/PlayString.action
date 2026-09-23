@@ -5,6 +5,8 @@
 # --- Goal ---
 uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1). 교시된 좌표를 로봇이 조회한다
 bool resumed              # 일시정지 후 첫 발현 요청. 피크 판정은 로봇 내부에서 수행
+
+string preparation_id     # PreparePluck 성공 식별자. 빈 문자열은 기존 단독 도구의 준비+발현 경로
 ---
 # --- Result ---
 bool success               # 동작 수행 성공 여부

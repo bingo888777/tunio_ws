@@ -92,9 +92,9 @@ def connect(robot_cfg, gripper_cfg=None, logger=None):
                    logger=logger)
 
     # 배포용이라 펜던트 설정에 기대지 않는다. 항상 설정하고, 읽어서 확인한다.
-    # 순서는 tool 먼저다 — 무게 설정이 먼저 들어가야 TCP 보정이 제 값을 쓴다
-    _ensure_named("tool", robot_cfg.get("tool"), logger=logger)
-    _ensure_named("tcp", robot_cfg.get("tcp"), logger=logger)
+    # tool/tcp 는 MANUAL 왕복 안에서 맞춘다 (아래 _ensure_tool_tcp) —
+    # connect() 의 다른 무엇보다도 먼저 끝나야 한다
+    _ensure_tool_tcp(robot_cfg, logger=logger)
     if logger:
         logger.info(f"두산 API 연결: {robot_cfg['id']} / {robot_cfg['model']} "
                     f"tool='{_read_named('tool')}' tcp='{_read_named('tcp')}'")
@@ -108,6 +108,11 @@ _WAIT_SERVICES = [
     ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
     ("MoveJoint", "dsr_controller2/motion/move_joint"),
     ("MoveLine", "dsr_controller2/motion/move_line"),
+    # tool/tcp 설정은 MANUAL 모드에서만 받아줘서(2026-09-23 tcp_diag.py --manual
+    # 실기로 확정) connect() 가 왕복에 쓴다. 못 기다리면 이 두 호출에서도
+    # 똑같이 영원히 멈춘다
+    ("GetRobotMode", "dsr_controller2/system/get_robot_mode"),
+    ("SetRobotMode", "dsr_controller2/system/set_robot_mode"),
     # 힘 제어 계열 (Phase 0 진입이 쓴다). 접두사가 force/ 라 위와 다르다.
     # 안 기다리면 task_compliance_ctrl 첫 호출에서 **영원히 멈춘다** —
     # spin_until_future_complete 에 타임아웃이 없다 (#31)
@@ -232,6 +237,93 @@ def _ensure_named(kind, want, logger=None):
         + f", 현재 '{now}'). 펜던트에 그 이름이 등록돼 있는지, 설정 변경 제어권이"
         " 로봇에 있는지 확인하라. 교시 좌표가 그 기준이라 다른 기준으로 움직이면"
         " 208mm 어긋난 곳으로 들어간다 (이슈 #23, #26)")
+
+
+def _read_mode(api):
+    """
+    현재 로봇 모드(MANUAL=0 / AUTONOMOUS=1)를 읽는다. 못 읽으면 None.
+
+    get_robot_mode() 도 다른 get_* 와 같은 함정이 있다 — 실패하면 -1(int) 이거나
+    UnboundLocalError 다(DSR_ROBOT2.py 648행). 둘 다 None 으로 본다
+    (tools/tcp_diag.py 의 read_mode 와 같은 판정 — 이슈 #23 후속).
+    """
+    try:
+        m = api.get_robot_mode()
+    except Exception:                            # noqa: BLE001 — UnboundLocalError 포함
+        return None
+    return m if isinstance(m, int) and m >= 0 else None
+
+
+def _set_mode(api, want, logger=None):
+    """
+    로봇 모드를 want 로 바꾸고 **get 으로** 확인한다. 바뀌었으면 True.
+
+    set_robot_mode 의 반환은 0 이 성공 / -1 이 실패로, 다른 set_* 래퍼와 반대
+    방향이라 진릿값으로 못 쓴다(tools/tcp_diag.py). 판정은 반드시 get 으로 한다.
+    """
+    try:
+        ret = api.set_robot_mode(want)
+    except Exception as e:                       # noqa: BLE001
+        ret = None
+        err = e
+    else:
+        err = None
+    time.sleep(0.5)                              # 반영될 틈
+    now = _read_mode(api)
+    ok = (now == want)
+    if logger:
+        logger.info(f"set_robot_mode({want}) -> {ret}"
+                    + (f" 예외 {err!r}" if err is not None else "")
+                    + f" (0=성공,-1=실패), 지금 모드 {now}")
+    return ok
+
+
+def _ensure_tool_tcp(robot_cfg, logger=None):
+    """
+    tool/tcp 를 맞춘다.
+
+    connect() 의 다른 무엇보다 먼저 끝나야 한다 — tool/tcp 가 안 맞은 채로는
+    아무것도 움직이면 안 된다.
+
+    설정 변경(set_tool/set_tcp/add_tcp)은 두산 컨트롤러가 **MANUAL 모드에서만**
+    받아준다(2026-09-23 `tools/tcp_diag.py --manual` 실기로 확정 — AUTONOMOUS
+    에서 셋 다 -1, MANUAL 에서 셋 다 0). `ros2_control`(dsr_hw_interface2.cpp
+    279행)이 브링업마다 로봇을 AUTONOMOUS 로 강제 전환해 두므로, 여기서 MANUAL
+    로 잠깐 왕복한다.
+
+    왕복이 안 되는 경우(모드를 못 읽음 / 이미 MANUAL / 전환 자체가 거부됨)는
+    막지 않고 그냥 진행한다 — `_ensure_named` 가 이미 set 실패를 get 대조로
+    넘기게 돼 있어(펜던트가 미리 맞춰 둔 경우), 왕복 없이도 통과할 수 있다.
+    왕복했는데 원래 모드로 못 돌아오면, 그건 이후 모든 이동 명령이 거부될 수
+    있는 상태라 조용히 넘기지 않고 멈춘다.
+    """
+    api = _require_api()
+    start_mode = _read_mode(api)
+    switched = False
+
+    if start_mode is None:
+        if logger:
+            logger.warn("로봇 모드를 못 읽어 MANUAL 왕복을 건너뛴다 — "
+                        "set 이 거부돼도 get 대조로만 판정한다")
+    elif start_mode == api.ROBOT_MODE_MANUAL:
+        if logger:
+            logger.info("이미 MANUAL 모드 — 왕복 없이 진행")
+    else:
+        switched = _set_mode(api, api.ROBOT_MODE_MANUAL, logger=logger)
+        if not switched and logger:
+            logger.warn("MANUAL 전환 실패 — 펜던트가 제어권을 쥐고 있을 수 있다. "
+                        "왕복 없이 진행한다(set 실패해도 get 대조로 판정)")
+
+    try:
+        # 순서는 tool 먼저다 — 무게 설정이 먼저 들어가야 TCP 보정이 제 값을 쓴다
+        _ensure_named("tool", robot_cfg.get("tool"), logger=logger)
+        _ensure_named("tcp", robot_cfg.get("tcp"), logger=logger)
+    finally:
+        if switched and not _set_mode(api, start_mode, logger=logger):
+            raise MotionError(
+                f"MANUAL 왕복 후 원래 모드({start_mode})로 못 돌아왔다. "
+                "펜던트에서 로봇 모드를 직접 확인하라 — MANUAL 로 남아 있으면 "
+                "이후 이동 명령이 전부 거부될 수 있다")
 
 
 def ensure_tcp(name=None, logger=None):
@@ -714,7 +806,8 @@ def _release():
     return _grip("open")
 
 
-def pluck_string(pose, motion, standby=None, verify_pick=None):
+def pluck_string(pose, motion, standby=None, verify_pick=None, *,
+                 prepare_only=False, prepared=False):
     """
     줄 튕기기 1차 구현 (위치 제어만). 힘 제어·피크 집기는 2단계에서 붙인다.
 
@@ -727,6 +820,9 @@ def pluck_string(pose, motion, standby=None, verify_pick=None):
               (기본값은 pluck_test.py 에서 검증한 값).
     standby — 기타 위 대기 자세(Pose, joints 또는 task). 주면 발현 전후에 들른다.
               joints 면 movej, task(x) 면 Base 직선(movel)으로 간다.
+
+    prepare_only: 줄 위 접근점까지만 이동하며 접촉·발현하지 않는다.
+    prepared: 준비 Action 성공 후 대기 자세 경유를 생략한다. 접근점은 다시 명령한다.
 
     순서 (성현 2026-09-19, 2026-09-21 대기 자세 좌표화):
       대기 자세 → 접촉점 위 pluck_up_mm → 접촉점(느리게) → 옆으로 스트로크
@@ -757,8 +853,11 @@ def pluck_string(pose, motion, standby=None, verify_pick=None):
     above = list(x)
     above[2] += up_mm                                   # Base +Z
 
-    _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
+    if not prepared:
+        _goto_standby(standby, motion, v_app, a_app)    # 기타 위 대기
     _movel_base(above, v_app, a_app)                    # 접촉점 위 2cm
+    if prepare_only:
+        return  # 마이크 ready 전에는 접촉점으로 내려가지 않는다
     _movel_base(contact, v_fine, a_fine)                # 접촉점 (느리게)
 
     # 스트로크·후퇴는 **피크가 줄에 닿아 있는 유일한 구간**이다. 이제 이동 거부를

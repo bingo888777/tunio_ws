@@ -23,8 +23,8 @@ from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
                        QoSProfile, QoSReliabilityPolicy)
 
-from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, RegisterPeg,
-                                     ReturnHome, StrumAll)
+from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, PreparePluck,
+                                     RegisterPeg, ReturnHome, StrumAll)
 from tunio_interfaces.msg import StringResult, TuningSettings, TuningState
 from tunio_interfaces.srv import CommandTuning, GetSettings, SaveJob, SetSettings
 
@@ -113,6 +113,7 @@ class TaskManager(Node):
         self.declare_parameter('goal_response_sec', 5.0)    # goal 수락 응답 대기
         self.declare_parameter('ready_wait_sec', 10.0)      # 마이크 ready feedback 대기
         self.declare_parameter('register_timeout_sec', 180.0)  # 줄별 임시값, 실측 후 조정
+        self.declare_parameter('prepare_timeout_sec', 30.0)  # 준비 이동 임시 상한, 실측 후 조정
         self.declare_parameter('play_timeout_sec', 30.0)    # 임시값. F3 로봇 실측 후 조정
         self.declare_parameter('adjust_timeout_sec', 120.0)  # 통합 시험용 임시값, 요청 1회 기준
         self.declare_parameter('robot_completion_wait_sec', 120.0)  # 초과 후 종료 확인 임시값
@@ -173,6 +174,8 @@ class TaskManager(Node):
             self, ReturnHome, '/robot/return_home', callback_group=cb)
         self.cli_register = ActionClient(
             self, RegisterPeg, '/robot/register_peg', callback_group=cb)
+        self.cli_prepare = ActionClient(
+            self, PreparePluck, '/robot/prepare_pluck', callback_group=cb)
         self.cli_play = ActionClient(self, PlayString, '/robot/play_string', callback_group=cb)
         self.cli_adjust = ActionClient(self, AdjustPeg, '/robot/adjust_peg', callback_group=cb)
         self.cli_strum = ActionClient(self, StrumAll, '/robot/strum_all', callback_group=cb)
@@ -283,7 +286,8 @@ class TaskManager(Node):
     def _set_phase(self, phase, string_number=None):
         self.phase = phase
         changed_string = string_number is not None and string_number != self.current_string
-        if changed_string or phase in (TuningState.PHASE_MEASURE_READY, TuningState.PHASE_VERIFY):
+        if changed_string or phase in (TuningState.PHASE_MEASURE_READY, TuningState.PHASE_VERIFY,
+                                       TuningState.PHASE_PREPARE_PLUCK):
             # 새 줄/새 측정에 이전 측정값을 붙여 발행하지 않는다.
             # 줄별 확정 결과는 self.results에 그대로 보존한다.
             self.measured_hz = 0.0
@@ -357,6 +361,7 @@ class TaskManager(Node):
         missing = []
         for name, cli in (('robot/return_home', self.cli_home),
                           ('robot/register_peg', self.cli_register),
+                          ('robot/prepare_pluck', self.cli_prepare),
                           ('audio/measure_pitch', self.cli_measure),
                           ('robot/play_string', self.cli_play),
                           ('robot/adjust_peg', self.cli_adjust)):
@@ -548,6 +553,25 @@ class TaskManager(Node):
         """
         if string_number not in self._registered_pegs:
             raise Aborted('%d번 페그 각 등록 미완료 — 측정·발현 요청 차단' % string_number)
+        # #89: 피크 집기·이동을 완료한 뒤 마이크 타이머를 시작한다.
+        self._gate()
+        self._set_phase(TuningState.PHASE_PREPARE_PLUCK, string_number)
+        prepare_goal = PreparePluck.Goal(
+            string_number=string_number, resumed=self._resumed_since_play.is_set())
+        self._resumed_since_play.clear()
+        try:
+            prepared = self._run_action(
+                self.cli_prepare, prepare_goal,
+                float(self._p('prepare_timeout_sec')), 'prepare_pluck',
+                feedback_cb=lambda msg: self._set_robot_notice(msg.feedback.warning))
+        except Aborted as exc:
+            self._set_robot_notice(str(exc))
+            raise
+        if prepared is None or not prepared.success or not prepared.preparation_id:
+            raise Aborted('발현 준비 성공 식별자가 없다 — 측정·발현 요청 차단')
+        if prepared.message:
+            self._set_robot_notice(prepared.message)
+        self._gate()  # 준비 중 취소/일시정지: 마이크와 발현을 시작하지 않는다
         target_hz = L.TARGETS[string_number][1]
         self.measurement_id += 1
         mid = self.measurement_id
@@ -580,11 +604,16 @@ class TaskManager(Node):
                 handle.cancel_goal_async()
                 return Measurement(False, reason=StringResult.FAIL_TIMEOUT)
 
+            if self._cancel.is_set():
+                handle.cancel_goal_async()
+                raise Cancelled()
+
             # 발현. 마이크가 준비된 뒤에만 튕긴다 (명세 5.2)
             self._set_phase(TuningState.PHASE_PLUCK, string_number)
             # 서버는 재개 사실만 전달한다. 피크 판정·알람·복귀는 로봇 내부 책임이다.
             play_goal = PlayString.Goal(
-                string_number=string_number, resumed=self._resumed_since_play.is_set())
+                string_number=string_number, resumed=self._resumed_since_play.is_set(),
+                preparation_id=prepared.preparation_id)
             self._resumed_since_play.clear()
             robot_warnings = set()
 

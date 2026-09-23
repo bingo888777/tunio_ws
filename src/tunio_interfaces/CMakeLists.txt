@@ -12,6 +12,7 @@ find_package(builtin_interfaces REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "action/MeasurePitch.action"
   "action/PlayString.action"
+  "action/PreparePluck.action"
   "action/AdjustPeg.action"
   "action/StrumAll.action"
   "action/RegisterPeg.action"

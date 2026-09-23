@@ -46,6 +46,8 @@ def generate_launch_description():
     db = LaunchConfiguration('db')
 
     return LaunchDescription([
+        DeclareLaunchArgument('prepare_delay_sec', default_value='0.0',
+                              description='가짜 로봇 준비 지연. #89 재현 시 22.0'),
         DeclareLaunchArgument('device', default_value='-1',
                               description='마이크 장치 번호. -1 은 시스템 기본 입력'),
         DeclareLaunchArgument('port', default_value='8080'),
@@ -61,6 +63,7 @@ def generate_launch_description():
         Node(package='tunio_server', executable='fake_hardware', name='fake_hardware',
              output='screen',
              parameters=[{'serve_measure': False, 'serve_robot': True,
+                          'prepare_delay_sec': LaunchConfiguration('prepare_delay_sec'),
                           'play_delay_sec': 1.0, 'adjust_delay_sec': 2.0,
                           'strum_delay_sec': 1.0}]),
 

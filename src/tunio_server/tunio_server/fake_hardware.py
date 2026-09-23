@@ -1,7 +1,7 @@
 """
 fake_hardware — 로봇·마이크 없이 서버를 통째로 돌려 보기 위한 하드웨어 대역. 담당: 정동휘.
 
-robot_controller 와 audio_analyzer 를 대신해 여섯 Action 을 제공한다. 그 위에서
+robot_controller 와 audio_analyzer 를 대신해 일곱 Action 을 제공한다. 그 위에서
 **진짜 task_manager 와 진짜 result_store 가 돈다.** 조율 판정·재시도·백래시 결정·
 검증 패스·저장이 전부 실제 코드로 실행된다. 기획 11.1 의 "모의 결과로 서버 흐름 테스트".
 
@@ -39,6 +39,7 @@ mode=sim — 화면 확인 전용 수렴 시뮬레이션
         -p peg_calibration_file:=<share>/config/peg_calibration.sim.yaml
 """
 import threading
+import uuid
 
 import rclpy
 from rclpy.action import ActionServer, CancelResponse
@@ -46,8 +47,8 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 
-from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, RegisterPeg,
-                                     ReturnHome, StrumAll)
+from tunio_interfaces.action import (AdjustPeg, MeasurePitch, PlayString, PreparePluck,
+                                     RegisterPeg, ReturnHome, StrumAll)
 from tunio_interfaces.srv import SaveJob
 
 # mode 파라미터 값
@@ -75,6 +76,8 @@ class FakeHardware(Node):
         # 교시가 끝나면 실제 시간으로 고쳐야 한다.
         self.declare_parameter('ready_delay_sec', 0.3)     # 마이크가 귀를 여는 시간
         self.declare_parameter('measure_delay_sec', 2.2)   # 녹음+분석 (기획 2.3)
+        self.declare_parameter('prepare_delay_sec', 0.0)  # 준비 시간 재현용
+        self._prepared_pluck = None
         self.declare_parameter('play_delay_sec', 3.0)      # 피크 집기+접근+발현+후퇴 (추정)
         self.declare_parameter('adjust_delay_sec', 4.0)    # 피크 반환+페그 파지+회전+해제 (추정)
         self.declare_parameter('strum_delay_sec', 3.0)     # 화음 훑기+대기 자세 복귀 (추정)
@@ -87,7 +90,7 @@ class FakeHardware(Node):
         #   serve_measure=false + 진짜 audio_analyzer  -> 마이크만 실물로 검증
         #   serve_robot=false   + 진짜 robot_controller -> 로봇만 실물로 검증
         self.declare_parameter('serve_measure', True)   # /audio/measure_pitch
-        self.declare_parameter('serve_robot', True)     # /robot/* 다섯 개
+        self.declare_parameter('serve_robot', True)     # /robot/* 여섯 개
 
         # mode=sim 전용. 전부 지어낸 값이다 (상단 주석 참조).
         self.declare_parameter('sim_start_cents', -38.0)      # 시작할 때 벗어난 정도
@@ -112,7 +115,8 @@ class FakeHardware(Node):
         if bool(self.get_parameter('serve_measure').value):
             wanted.append((MeasurePitch, '/audio/measure_pitch', self.on_measure))
         if bool(self.get_parameter('serve_robot').value):
-            wanted += [(ReturnHome, '/robot/return_home', self.on_return_home),
+            wanted += [(PreparePluck, '/robot/prepare_pluck', self.on_prepare_pluck),
+                       (ReturnHome, '/robot/return_home', self.on_return_home),
                        (RegisterPeg, '/robot/register_peg', self.on_register),
                        (PlayString, '/robot/play_string', self.on_play),
                        (AdjustPeg, '/robot/adjust_peg', self.on_adjust),
@@ -280,18 +284,37 @@ class FakeHardware(Node):
         return result_type(success=True, message='')
 
     def on_return_home(self, goal):
+        self._prepared_pluck = None
         goal.succeed()
         return ReturnHome.Result(success=True, message='')
 
     def on_register(self, goal):
+        self._prepared_pluck = None
         goal.succeed()
         return RegisterPeg.Result(success=True, message='')
 
+    def on_prepare_pluck(self, goal):
+        self._prepared_pluck = None
+        if not self._sleep(goal, self._p('prepare_delay_sec')):
+            goal.canceled()
+            return PreparePluck.Result(success=False, message='준비 취소')
+        token = uuid.uuid4().hex
+        self._prepared_pluck = (goal.request.string_number, token)
+        goal.succeed()
+        return PreparePluck.Result(success=True, preparation_id=token)
+
     def on_play(self, goal):
+        token = goal.request.preparation_id
+        prepared = self._prepared_pluck
+        self._prepared_pluck = None
+        if token and prepared != (goal.request.string_number, token):
+            goal.abort()
+            return PlayString.Result(success=False, message='준비 식별자 불일치')
         return self._simple(goal, PlayString.Result, 'play_delay_sec',
                             '%d번 줄 발현' % goal.request.string_number)
 
     def on_adjust(self, goal):
+        self._prepared_pluck = None
         req = goal.request
         way = '조임' if req.direction > 0 else '풀림'
 
@@ -315,6 +338,7 @@ class FakeHardware(Node):
         return AdjustPeg.Result(success=True, message='')
 
     def on_strum(self, goal):
+        self._prepared_pluck = None
         nums = list(goal.request.string_numbers)
         return self._simple(goal, StrumAll.Result, 'strum_delay_sec',
                             '화음 %s + 대기 자세 복귀' % (nums if nums else '전체'))

@@ -1,7 +1,8 @@
 """
 robot_controller — 발현·페그 조절·화음 Action 서버. 두산 API 연동.
 
-다섯 Action(register_peg / play_string / adjust_peg / strum_all / return_home)은 같은 팔을 쓰므로
+여섯 Action(prepare_pluck / register_peg / play_string / adjust_peg / strum_all / return_home)은
+같은 팔을 쓰므로
 동시에 실행되면 안 된다. 하나가 도는 동안 들어온 goal 은 REJECT 한다
 (audio_analyzer 의 동시 요청 거부와 같은 방식).
 
@@ -18,6 +19,7 @@ TODO(정묵·성현):
 import os
 import threading
 import time
+import uuid
 
 from ament_index_python.packages import get_package_share_directory
 import rclpy
@@ -25,7 +27,8 @@ from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 
-from tunio_interfaces.action import AdjustPeg, PlayString, RegisterPeg, ReturnHome, StrumAll
+from tunio_interfaces.action import (AdjustPeg, PlayString, PreparePluck, RegisterPeg,
+                                     ReturnHome, StrumAll)
 from tunio_robot import grip_width as GW
 from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
@@ -155,7 +158,7 @@ class RobotController(Node):
             MP.connect(self.points.robot, self.points.gripper,
                        logger=self.get_logger())
 
-        # 팔은 하나뿐이라 다섯 Action 이 같은 락을 쓴다
+        # 팔은 하나뿐이라 여섯 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
         self._running = None
         self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
@@ -175,6 +178,7 @@ class RobotController(Node):
         self._holding_pick = False
         self._from_pick = False  # 반환 후에는 높이 검사 경로 필수. 실패 시에도 유지
         self._pick_fault = None
+        self._prepared_pluck = None  # (줄 번호, 일회용 식별자). 다른 Action이면 무효
 
         cb = ReentrantCallbackGroup()
         self.home_srv = ActionServer(
@@ -184,6 +188,9 @@ class RobotController(Node):
             self, RegisterPeg, "/robot/register_peg",
             self.on_register, goal_callback=self.on_goal,
             cancel_callback=self.on_cancel, callback_group=cb)
+        self.prepare_srv = ActionServer(
+            self, PreparePluck, "/robot/prepare_pluck", self.on_prepare_pluck,
+            goal_callback=self.on_goal, cancel_callback=self.on_cancel, callback_group=cb)
         self.play_srv = ActionServer(
             self, PlayString, "/robot/play_string",
             self.on_play, goal_callback=self.on_goal,
@@ -242,12 +249,15 @@ class RobotController(Node):
                 res.message = f"{self._running} 실행 중"
                 return res
             self._running = name
+            if name != "play_string":
+                self._prepared_pluck = None
 
         res = result_type()
         self._pick_warnings = []  # 이 Action의 폭 읽기 경고·재집기 소진 알람
+        feedback_type = {"play_string": PlayString, "prepare_pluck": PreparePluck}.get(name)
         self._pick_warning_callback = (
-            lambda warning: goal.publish_feedback(PlayString.Feedback(warning=warning))
-        ) if name == "play_string" else None
+            lambda warning: goal.publish_feedback(feedback_type.Feedback(warning=warning))
+        ) if feedback_type else None
         t0 = time.time()
         try:
             if self._pick_fault:
@@ -567,26 +577,54 @@ class RobotController(Node):
 
         return self._run("register_peg", goal, RegisterPeg.Result, work)
 
-    def on_play(self, goal):
-        # Feedback은 폭 읽기 실패·재집기 소진 알림용. 측정 타임아웃은 이 Result 와 무관하다 —
-        # 마이크가 오디오 onset(무음 -> 소리)을 스스로 검출한 시점부터 센다.
-        # 로봇 접근·피크 집기·파지 시간이 측정 제한 시간에 먹히지 않게 하려는 것이다.
-        # (기획 2.4)
+    def on_prepare_pluck(self, goal):
         no = goal.request.string_number
+        token = uuid.uuid4().hex
 
         def work():
-            pose = self.points.pluck(no)            # 미교시면 여기서 걸린다
+            if goal.is_cancel_requested:
+                raise MP.MotionError("발현 준비 취소 — 발현하지 않는다")
+            pose = self.points.pluck(no)
             if goal.request.resumed:
                 self._verify_pick_on_resume(side=TP.side_of(no))
-            # 이 줄의 페그 쪽으로 집는다 — 발현 다음은 거의 항상 이 줄의 조절이다 (#58)
             self._ensure_pick(TP.side_of(no))
+            standby = self.points.frame("pluck_standby")
+            if not self.dry_run:
+                MP.pluck_string(pose, self.points.motion, standby=standby, prepare_only=True)
+            if goal.is_cancel_requested:
+                raise MP.MotionError("발현 준비 중 취소 — 발현하지 않는다")
+            self._prepared_pluck = (no, token)
+
+        res = self._run("prepare_pluck", goal, PreparePluck.Result, work)
+        res.preparation_id = token if res.success else ""
+        return res
+
+    def on_play(self, goal):
+        no = goal.request.string_number
+        token = goal.request.preparation_id
+
+        def work():
+            prepared = self._prepared_pluck
+            self._prepared_pluck = None  # 실패해도 재사용하지 않는다
+            if token:
+                if prepared != (no, token) or self._holding_pick is not True:
+                    raise MP.MotionError("발현 준비 식별자 불일치/무효 — prepare_pluck를 다시 요청하라")
+                if goal.is_cancel_requested:
+                    raise MP.MotionError("발현 전 취소 — 발현하지 않는다")
+            pose = self.points.pluck(no)
+            if goal.request.resumed:
+                self._verify_pick_on_resume(side=TP.side_of(no))
+            if not token:
+                # 기존 단독 도구 호환. 서버는 반드시 준비 식별자를 전달한다.
+                self._ensure_pick(TP.side_of(no))
             standby = self.points.frame("pluck_standby")
             if self.dry_run:
                 self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.task}")
                 return
             try:
                 MP.pluck_string(pose, self.points.motion, standby=standby,
-                                verify_pick=self._require_pick)
+                                verify_pick=self._require_pick,
+                                prepared=bool(token) and not goal.request.resumed)
             except _PickAbsent:
                 # MP는 줄에서 후퇴한 뒤 검사한다. 재집기는 원래 타현을 반복하지 않는다.
                 self._recover_pick(TP.side_of(no))
