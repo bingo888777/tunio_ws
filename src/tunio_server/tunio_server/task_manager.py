@@ -343,13 +343,14 @@ class TaskManager(Node):
         for f in ('tolerance_cents', 'max_adjust_count', 'max_measure_retry',
                   'measure_timeout_sec', 'onset_timeout_sec'):
             setattr(self.active_settings, f, getattr(self.settings, f))
-        self._set_phase(TuningState.PHASE_REGISTER_PEG, L.STRING_ORDER[0])
+        self._set_phase(TuningState.PHASE_REGISTER_PEG if reregister
+                        else TuningState.PHASE_PREPARE_PLUCK, L.STRING_ORDER[0])
         target = self._run_reregister if reregister else self._run_job
         self._worker = threading.Thread(target=target, name='tuning', daemon=True)
         self._worker.start()
         res.accepted = True
         res.message = ('페그 재등록 접수 %s — 조율 없이 등록·복귀만 실행' if reregister
-                       else '작업 시작 %s — 발현 전 페그 각 등록') % self.job_id
+                       else '작업 시작 %s — 기존 페그 등록값으로 조율') % self.job_id
         return res
 
     def _servers_not_ready(self, registration_only=False):
@@ -362,6 +363,8 @@ class TaskManager(Node):
                           ('audio/measure_pitch', self.cli_measure),
                           ('robot/play_string', self.cli_play),
                           ('robot/adjust_peg', self.cli_adjust)):
+            if not registration_only and cli is self.cli_register:
+                continue
             if registration_only and cli not in (self.cli_home, self.cli_register):
                 continue
             if not cli.wait_for_server(timeout_sec=wait):
@@ -549,8 +552,6 @@ class TaskManager(Node):
         PlayString Result 와 MeasurePitch Result 의 도착 순서는 보장되지 않는다.
         둘 다 받은 뒤에 판정한다.
         """
-        if string_number not in self._registered_pegs:
-            raise Aborted('%d번 페그 각 등록 미완료 — 측정·발현 요청 차단' % string_number)
         # #89: 피크 집기·이동을 완료한 뒤 마이크 타이머를 시작한다.
         self._gate()
         self._set_phase(TuningState.PHASE_PREPARE_PLUCK, string_number)
@@ -729,8 +730,6 @@ class TaskManager(Node):
 
         캘리브레이션 실측 전이면 여기서 Aborted 를 던진다. 임시 계수로 로봇을 돌리지 않는다.
         """
-        if string_number not in self._registered_pegs:
-            raise Aborted('%d번 페그 각 등록 미완료 — 페그 조절 요청 차단' % string_number)
         try:
             cal = self.calibration.get(string_number)
         except PC.CalibrationMissing as exc:
@@ -876,8 +875,7 @@ class TaskManager(Node):
     def _run_job(self):
         self.get_logger().info('작업 %s 시작' % self.job_id)
         try:
-            self._register_pegs()  # 마이크 ready/첫 발현보다 먼저 완료한다
-            self.get_logger().info('전체 페그 각 등록 완료 — 발현·측정 시작')
+            self.get_logger().info('기존 페그 등록값으로 조율 시작 — 자동 등록 없음')
             hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
                 self._gate()

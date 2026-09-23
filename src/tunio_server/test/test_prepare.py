@@ -14,7 +14,7 @@ def four_string_scenario(monkeypatch):
 
 
 @pytest.mark.parametrize('registration_ok', [True, False])
-@pytest.mark.parametrize('reregister', [False, True])
+@pytest.mark.parametrize('reregister', [True])
 def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregister):
     import threading
 
@@ -54,10 +54,6 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregiste
         assert registering.wait(2)
         assert calls == [('register_peg', no) for no in (6, 5, 2, 1)]
         assert n._registered_pegs == set()
-        with pytest.raises(TM.Aborted, match='측정·발현 요청 차단'):
-            TM.TaskManager._measure_once(n, 6)
-        with pytest.raises(TM.Aborted, match='페그 조절 요청 차단'):
-            TM.TaskManager._adjust_peg(n, 6, 20.0)
     finally:
         release.set()
         n._worker.join(3)
@@ -69,7 +65,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregiste
 
 
 @pytest.mark.parametrize('failure', [None, 5])
-def test_registration_precedes_tuning_and_failure_stops_job(failure):
+def test_start_never_registers_even_if_registration_would_fail(failure):
     calls = []
 
     def action(client, goal, timeout, name):
@@ -86,10 +82,7 @@ def test_registration_precedes_tuning_and_failure_stops_job(failure):
         _save=lambda: None, _finish_error=lambda: calls.append(('error', 0)))
     n._register_pegs = lambda: TM.TaskManager._register_pegs(n)
     TM.TaskManager._run_job(n)
-    if failure:
-        assert calls == [('register', 6), ('register', 5), ('error', 0)]
-    else:
-        assert calls == [(kind, no) for kind in ('register', 'tune') for no in (6, 5, 2, 1)]
+    assert calls == [('tune', no) for no in (6, 5, 2, 1)]
 
 
 @pytest.mark.parametrize('ended', [True, False])
@@ -232,7 +225,7 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
     TM.TaskManager._run_job(n)
     n._strum.assert_not_called()
     n.cli_home.send_goal_async.assert_called_once()
-    assert calls == ['register', *[('tune', no) for no in (6, 5, 2, 1)],
+    assert calls == [*[('tune', no) for no in (6, 5, 2, 1)],
                      'verify', 'home', 'save' if home_ok else 'error']
     assert (TuningState.PHASE_DONE in phases) is home_ok
 
@@ -297,3 +290,12 @@ def test_reregister_readiness_does_not_require_audio_or_pluck():
     assert TM.TaskManager._servers_not_ready(n, registration_only=True) == ['robot/register_peg']
     for name in ('prepare', 'measure', 'play', 'adjust'):
         getattr(n, 'cli_' + name).wait_for_server.assert_not_called()
+
+
+def test_start_does_not_require_registration_server():
+    n = SimpleNamespace(_p=lambda key: 0)
+    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust'):
+        setattr(n, 'cli_' + name, Mock())
+    n.cli_register.wait_for_server.return_value = False
+    assert TM.TaskManager._servers_not_ready(n) == []
+    n.cli_register.wait_for_server.assert_not_called()

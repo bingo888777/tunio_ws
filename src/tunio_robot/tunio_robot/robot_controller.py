@@ -16,6 +16,7 @@ TODO(정묵·성현):
   - motion_primitives 의 실제 동작 채우기 (그리퍼 방식 확정 후)
   - 두산 API의 정지/재개, 파지 유지 검증
 """
+import math
 import os
 import threading
 import time
@@ -26,6 +27,8 @@ import rclpy
 from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import JointState
 
 from tunio_interfaces.action import (AdjustPeg, PlayString, PreparePluck, RegisterPeg,
                                      ReturnHome, StrumAll)
@@ -169,6 +172,17 @@ class RobotController(Node):
         self._prepared_pluck = None  # (줄 번호, 일회용 식별자). 다른 Action이면 무효
 
         cb = ReentrantCallbackGroup()
+        self._j6_pending = False
+        if not self.dry_run and self.points.motion.get("j6_recovery_enabled", False):
+            MP._j6_threshold(self.points.motion)
+            MP._j6_motion = self.points.motion
+            MP._j6_sample = None
+            # 서비스 조회는 blocking move와 같은 드라이버 콜백 그룹에서 지연된다.
+            # hardware read 루프가 발행하는 실제 관절값(rad)을 직접 구독한다.
+            self._j6_subscription = self.create_subscription(
+                JointState, f"/{self.points.robot['id']}/joint_states",
+                self._on_j6, qos_profile_sensor_data, callback_group=cb)
+
         self.home_srv = ActionServer(
             self, ReturnHome, "/robot/return_home", self.on_return_home,
             goal_callback=self.on_goal, cancel_callback=self.on_cancel, callback_group=cb)
@@ -194,6 +208,21 @@ class RobotController(Node):
         self.get_logger().info("robot_controller 시작")
 
     # ------------------------------------------------------ 공통
+    def _on_j6(self, msg):
+        try:
+            value = math.degrees(float(msg.position[msg.name.index("joint_6")]))
+            if not math.isfinite(value):
+                raise ValueError("J6 관절각이 유효하지 않다")
+            MP._j6_sample = (time.monotonic(), value)
+            pending = abs(value) >= MP._j6_threshold(self.points.motion)
+            if pending and not self._j6_pending:
+                self.get_logger().warn(
+                    f"J6={value:.1f}도 — 회복 필요. 접촉 이탈 경계에서 처리한다")
+            self._j6_pending = pending
+        except Exception as exc:
+            MP._j6_sample = None
+            self.get_logger().error(f"J6 감시 실패: {exc}")
+
     def on_goal(self, goal_request):
         """이미 다른 동작이 돌고 있으면 받지 않는다. 팔이 하나라 겹칠 수 없다."""
         with self._lock:
@@ -437,6 +466,8 @@ class RobotController(Node):
             if goal.is_cancel_requested:
                 raise MP.MotionError("발현 준비 취소 — 발현하지 않는다")
             pose = self.points.pluck(no)
+            if not self.dry_run and self.pegs.roll_of(no) is None:
+                raise MP.MotionError(f"{no}번 페그 등록값 없음 — 페그 재등록을 먼저 실행하세요")
             self._ensure_pick(TP.side_of(no))
             standby = self.points.frame("pluck_standby")
             if not self.dry_run:

@@ -646,14 +646,15 @@ def test_복귀_Action은_피크_반환후_대기로_간다(ros, taught, monkeyp
 
 
 @pytest.mark.parametrize("side,j1,skip", [
-    ("right", -30.0, True), ("right", 30.0, True),
-    ("right", -30.01, False), ("right", 30.01, False),
-    ("left", 150.0, True), ("left", 210.0, True),
-    ("left", 149.99, False), ("left", 210.01, False),
+    ("right", -60.0, True), ("right", 80.0, True),
+    ("right", -60.01, False), ("right", 80.01, False),
+    ("left", 100.0, True), ("left", 240.0, True),
+    ("left", 99.99, False), ("left", 240.01, False),
+    ("left", 122.68, True), ("right", 57.70, True),
     ("left", -180.0, False), ("left", 0.0, False),
     ("right", None, False), ("left", float("nan"), False),
 ])
-def test_페그_경유는_실제_J1과_30도_경계로_결정한다(monkeypatch, side, j1, skip):
+def test_페그_경유는_실제_J1과_쪽별_경계로_결정한다(monkeypatch, side, j1, skip):
     went = []
     route = TPRoute("transit", [90, 0, 0, 0, 0, None], True)
     monkeypatch.setattr(MP, "_current_j1", lambda: j1)
@@ -794,3 +795,9 @@ def test_강제재등록은_이전각도를_디스크에서도_지우고_실행�
         assert PegState(path).load().roll_of(6) == (None if fail else 30.0)
     finally:
         h.shutdown()
+
+
+@pytest.mark.parametrize("bounds", [[0, 90], [80, -60], [0, float("nan")], [0], None])
+def test_잘못된_경유범위는_거부한다(bounds):
+    with pytest.raises(MP.MotionError, match="생략 범위 오류"):
+        MP._peg_route_required(0, "right", {"peg_j1_skip_right_deg": bounds})

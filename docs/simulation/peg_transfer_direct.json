@@ -1,0 +1,404 @@
+{
+  "scope": "holder lifted -> high approach only; nominal peg roll=0",
+  "excluded": "RG2, cables, guitar, holder, descent/insertion, actual controller trajectory",
+  "ik": "numerical model; not Doosan sol validation",
+  "step_deg": 0.5,
+  "description": "/home/mook/ws_cobot_pjt/ws_dsr/src/doosan-robot2/dsr_description2",
+  "srdf": "/home/mook/ws_cobot_pjt/ws_dsr/src/doosan-robot2/dsr_moveit2/dsr_moveit_config_m0609/config/dsr.srdf.xacro",
+  "collision_exclusions": [
+    [
+      "link_1",
+      "link_2"
+    ],
+    [
+      "link_4",
+      "link_6"
+    ],
+    [
+      "base_link",
+      "link_1"
+    ],
+    [
+      "link_5",
+      "link_6"
+    ],
+    [
+      "link_2",
+      "link_5"
+    ],
+    [
+      "link_2",
+      "link_6"
+    ],
+    [
+      "link_1",
+      "link_3"
+    ],
+    [
+      "link_4",
+      "link_5"
+    ],
+    [
+      "link_3",
+      "link_4"
+    ],
+    [
+      "link_3",
+      "link_5"
+    ],
+    [
+      "link_3",
+      "link_6"
+    ],
+    [
+      "link_2",
+      "link_3"
+    ]
+  ],
+  "paths": [
+    {
+      "peg": 6,
+      "holder_branch": "current",
+      "start": [
+        -14.240143811648096,
+        38.03333163993142,
+        37.042504900745996,
+        0.0,
+        104.92416345932259,
+        77.20985618835186
+      ],
+      "goal": [
+        122.65936664686325,
+        -44.66910973259499,
+        -79.30881603108944,
+        53.14073263398615,
+        -132.33916720520193,
+        42.67887809825132
+      ],
+      "high_tcp": [
+        336.0411871341269,
+        -175.17887266285777,
+        224.0,
+        86.4,
+        89.5,
+        1.11
+      ],
+      "samples": 476,
+      "min_height_mm": 195.70142471102196,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.9199999999999999,
+      "min_tcp_height_mm": 195.70142471102196,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 28.715462018455657,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 6,
+      "holder_branch": "opposite",
+      "start": [
+        166.92679025546238,
+        -38.033331639930566,
+        -37.04250490074742,
+        0.0,
+        -104.92416345932196,
+        -101.6232097445376
+      ],
+      "goal": [
+        122.65936664686325,
+        -44.66910973259499,
+        -79.30881603108944,
+        53.14073263398615,
+        -132.33916720520193,
+        42.67887809825132
+      ],
+      "high_tcp": [
+        336.0411871341269,
+        -175.17887266285777,
+        224.0,
+        86.4,
+        89.5,
+        1.11
+      ],
+      "samples": 290,
+      "min_height_mm": 152.4734255804981,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.4429065743944637,
+      "min_tcp_height_mm": 152.4734255804981,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 29.077260871809703,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 5,
+      "holder_branch": "current",
+      "start": [
+        -14.240143811648096,
+        38.03333163993142,
+        37.042504900745996,
+        0.0,
+        104.92416345932259,
+        77.20985618835186
+      ],
+      "goal": [
+        119.28782374554288,
+        -42.296378706661756,
+        -83.35813768524017,
+        48.32597764776159,
+        -132.82578836260586,
+        37.367365571236746
+      ],
+      "high_tcp": [
+        298.7262332415178,
+        -176.83485293539164,
+        224.0,
+        86.07,
+        90.0,
+        0.0
+      ],
+      "samples": 477,
+      "min_height_mm": 185.8975360706131,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.9117647058823529,
+      "min_tcp_height_mm": 185.8975360706131,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 28.721848706052075,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 5,
+      "holder_branch": "opposite",
+      "start": [
+        166.92679025546238,
+        -38.033331639930566,
+        -37.04250490074742,
+        0.0,
+        -104.92416345932196,
+        -101.6232097445376
+      ],
+      "goal": [
+        119.28782374554288,
+        -42.296378706661756,
+        -83.35813768524017,
+        48.32597764776159,
+        -132.82578836260586,
+        37.367365571236746
+      ],
+      "high_tcp": [
+        298.7262332415178,
+        -176.83485293539164,
+        224.0,
+        86.07,
+        90.0,
+        0.0
+      ],
+      "samples": 279,
+      "min_height_mm": 151.5143495207817,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.4460431654676259,
+      "min_tcp_height_mm": 151.5143495207817,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 29.077260871809703,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 2,
+      "holder_branch": "current",
+      "start": [
+        -14.240143811648096,
+        38.03333163993142,
+        37.042504900745996,
+        0.0,
+        104.92416345932259,
+        77.20985618835186
+      ],
+      "goal": [
+        57.54923698672138,
+        41.95220032739712,
+        84.02026043833911,
+        -47.26891622580314,
+        133.0730011317563,
+        143.52527529516811
+      ],
+      "high_tcp": [
+        302.0,
+        157.5,
+        224.0,
+        90.0,
+        -90.0,
+        180.0
+      ],
+      "samples": 145,
+      "min_height_mm": 151.26033846384468,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.45138888888888884,
+      "min_tcp_height_mm": 151.26033846384468,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 29.0860671038618,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 2,
+      "holder_branch": "opposite",
+      "start": [
+        166.92679025546238,
+        -38.033331639930566,
+        -37.04250490074742,
+        0.0,
+        -104.92416345932196,
+        -101.6232097445376
+      ],
+      "goal": [
+        57.54923698672138,
+        41.95220032739712,
+        84.02026043833911,
+        -47.26891622580314,
+        133.0730011317563,
+        143.52527529516811
+      ],
+      "high_tcp": [
+        302.0,
+        157.5,
+        224.0,
+        90.0,
+        -90.0,
+        180.0
+      ],
+      "samples": 492,
+      "min_height_mm": 183.69009416157854,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.910386965376782,
+      "min_tcp_height_mm": 183.69009416157854,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 28.723278410633345,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 1,
+      "holder_branch": "current",
+      "start": [
+        -14.240143811648096,
+        38.03333163993142,
+        37.042504900745996,
+        0.0,
+        104.92416345932259,
+        77.20985618835186
+      ],
+      "goal": [
+        54.86122790253006,
+        44.36534882573315,
+        79.3607390514702,
+        -52.16323789981061,
+        132.57893132027863,
+        138.94024088540198
+      ],
+      "high_tcp": [
+        338.90696827905396,
+        159.8773132863883,
+        224.0,
+        90.42,
+        -90.0,
+        180.0
+      ],
+      "samples": 140,
+      "min_height_mm": 152.91403311945837,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.4460431654676259,
+      "min_tcp_height_mm": 152.91403311945837,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 29.094462764730864,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    },
+    {
+      "peg": 1,
+      "holder_branch": "opposite",
+      "start": [
+        166.92679025546238,
+        -38.033331639930566,
+        -37.04250490074742,
+        0.0,
+        -104.92416345932196,
+        -101.6232097445376
+      ],
+      "goal": [
+        54.86122790253006,
+        44.36534882573315,
+        79.3607390514702,
+        -52.16323789981061,
+        132.57893132027863,
+        138.94024088540198
+      ],
+      "high_tcp": [
+        338.90696827905396,
+        159.8773132863883,
+        224.0,
+        90.42,
+        -90.0,
+        180.0
+      ],
+      "samples": 483,
+      "min_height_mm": 194.90262541365007,
+      "height_ok": false,
+      "min_height_part": "TCP",
+      "min_height_fraction": 0.921161825726141,
+      "min_tcp_height_mm": 194.90262541365007,
+      "j1_ok": true,
+      "j5_ok": false,
+      "j6_ok": true,
+      "collision_pairs": [],
+      "min_clearance_mm": 28.73168655995826,
+      "closest_pair": [
+        "base_link",
+        "link_2"
+      ]
+    }
+  ]
+}
