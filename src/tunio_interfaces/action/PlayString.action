@@ -4,11 +4,11 @@
 
 # --- Goal ---
 uint8 string_number        # 실제 줄 번호 (6, 5, 2, 1). 교시된 좌표를 로봇이 조회한다
+bool resumed              # 일시정지 후 첫 발현 요청. 피크 판정은 로봇 내부에서 수행
 ---
 # --- Result ---
 bool success               # 동작 수행 성공 여부
-string message             # 실패 시 사람이 읽을 사유. 성공 시 빈 문자열
+string message             # 실패 사유 또는 성공 시 비치명적 경고. 경고 없으면 빈 문자열
 ---
 # --- Feedback ---
-# 사용하지 않음
-# 향후 추가 예정: 힘 미분으로 발현 순간 감지
+string warning             # 피크 폭 읽기 실패/재집기 소진 알람. 발현 시점 신호가 아님

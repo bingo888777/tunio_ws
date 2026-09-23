@@ -151,6 +151,7 @@ class TaskManager(Node):
         self._worker = None
         self._starting = False
         self._pause = threading.Event()
+        self._resumed_since_play = threading.Event()
         self._cancel = threading.Event()
         self._active_goals = []
         self._registered_pegs = set()  # 이번 작업에서 성공 Result를 확인한 줄
@@ -271,7 +272,13 @@ class TaskManager(Node):
         msg.results = [self.results[s] for s in L.STRING_ORDER]
         msg.overall_result = L.overall_result([r.result for r in msg.results])
         msg.active_settings = self.active_settings if self.job_id else self.settings
+        msg.robot_notice = self.robot_notice
         self.pub_state.publish(msg)
+
+    def _set_robot_notice(self, message):
+        """로봇의 판정을 그대로 관제에 전달한다. 서버에서 폭을 재판정하지 않는다."""
+        self.robot_notice = message
+        self._publish_state()
 
     def _set_phase(self, phase, string_number=None):
         self.phase = phase
@@ -280,6 +287,7 @@ class TaskManager(Node):
         self._publish_state()
 
     def _reset_results(self):
+        self.robot_notice = ''
         self.results = {}
         for s in L.STRING_ORDER:
             r = StringResult()
@@ -314,6 +322,7 @@ class TaskManager(Node):
             res.message = '노드 준비 안 됨: %s' % ', '.join(missing)
             return res
         self._pause.clear()
+        self._resumed_since_play.clear()
         self._cancel.clear()
         self._registered_pegs.clear()
         self._reset_results()
@@ -361,10 +370,11 @@ class TaskManager(Node):
             res.accepted = False
             res.message = '진행 중인 작업이 없다'
             return res
-        if not self._pause.is_set():
+        if not self._pause.is_set() or self.phase != TuningState.PHASE_PAUSED:
             res.accepted = False
-            res.message = '일시정지 상태가 아니다'
+            res.message = '현재 단계가 끝나 일시정지된 뒤 재개하라'
             return res
+        self._resumed_since_play.set()
         self._pause.clear()
         res.accepted = True
         res.message = '재개'
@@ -563,12 +573,33 @@ class TaskManager(Node):
 
             # 발현. 마이크가 준비된 뒤에만 튕긴다 (명세 5.2)
             self._set_phase(TuningState.PHASE_PLUCK, string_number)
-            play = self._run_action(self.cli_play, PlayString.Goal(string_number=string_number),
-                                    float(self._p('play_timeout_sec')), 'play_string')
-            play_ok = play is not None and play.success
-            if not play_ok:
-                why = play.message if play is not None else '응답 없음'
-                self.get_logger().error('%d번 줄 발현 실패: %s' % (string_number, why))
+            # 서버는 재개 사실만 전달한다. 피크 판정·알람·복귀는 로봇 내부 책임이다.
+            play_goal = PlayString.Goal(
+                string_number=string_number, resumed=self._resumed_since_play.is_set())
+            self._resumed_since_play.clear()
+            robot_warnings = set()
+
+            def on_robot_feedback(msg):
+                warning = msg.feedback.warning
+                if warning and warning not in robot_warnings:
+                    robot_warnings.add(warning)
+                    self.get_logger().warning('로봇 알림: %s' % warning)
+                    self._set_robot_notice(warning)
+
+            try:
+                play = self._run_action(self.cli_play, play_goal,
+                                        float(self._p('play_timeout_sec')), 'play_string',
+                                        feedback_cb=on_robot_feedback)
+            except Aborted as exc:
+                # #83은 실패 Result도 예외로 전달한다. 피드백 유실 시에도 사유를 표시하고
+                # 아직 기다리는 마이크를 취소한 뒤 후속 로봇 명령 없이 종료한다.
+                self._set_robot_notice(str(exc))
+                handle.cancel_goal_async()
+                raise
+            if play.message and play.message not in robot_warnings:
+                self._set_robot_notice(play.message)
+                # 성공 + 경고: 폭을 못 읽었지만 로봇 동작은 완료됐다. 재시도/종료하지 않는다.
+                self.get_logger().warning('로봇 동작 완료(경고): %s' % play.message)
 
             # 측정 결과 대기. 마이크가 onset 부터 timeout_sec 을 세므로
             # 서버는 onset 대기 + 측정 + 통신 여유만큼 기다린다
@@ -580,9 +611,6 @@ class TaskManager(Node):
         finally:
             self._untrack(handle)
 
-        if not play_ok:
-            # 발현이 안 됐으면 측정값이 나와도 그 줄의 소리가 아니다
-            return Measurement(False, reason=StringResult.FAIL_ROBOT_ERROR)
         if wrapped is None:
             return Measurement(False, reason=StringResult.FAIL_TIMEOUT)
 

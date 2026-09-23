@@ -11,6 +11,31 @@ web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). �
 
 ---
 
+## 2026-09-22 추가: 로봇 내부 피크 확인 (성현)
+
+피크 측정·판정·알람·홈 복귀는 robot_controller가 담당한다.
+피크 확인용 Service/Topic과 정상 피크 상태 보고는 추가하지 않는다.
+PlayString Feedback.warning은 폭 읽기 실패 경고와 재집기 소진 알람을 전달한다.
+기존 CommandTuning(start/pause/resume/cancel)은 그대로 둔다.
+
+PlayString Goal의 `resumed`는 재개 후 첫 발현 요청임을 나타내는 bool이다.
+서버는 이 사실만 전달하며 피크 보유 여부·폭을 판단하지 않는다.
+로봇은 resumed=true이고 피크를 들고 있던 경우에만 발현 전에 재확인한다.
+이미 반환한 상태라면 기존 집기 직후 확인을 사용한다. 페그에는 적용하지 않는다.
+정상일 때 별도 확인 응답 없이 작업을 수행하고 기존 Action Result를 반환한다.
+세 검사 구간에서 빈손이면 거치대 재집기를 추가 2회 시도한다. 두 번 모두 빈손일 때
+로봇이 알람을 보낸 뒤 홈 복귀하고 success=false와 사유를 전달한다.
+폭 읽기는 최초 실패 시 1회 재시도한다. 두 번 모두 실패하면 Feedback.warning으로
+폭 확인 불가를 알리고 재개를 포함한 동작을 계속한다. 성공 Result.message에도 경고를
+남긴다. 서버는 경고를 기록하고 정상 측정 흐름을 계속하며 경고만으로 재발현하지 않는다.
+폭 읽기 실패는 재집기 중에도 빈손 실패로 세지 않는다. 실제 빈손으로 재집기 한도를
+소진했을 때만 실패이며 서버는 후속 요청을 보내지 않는다.
+TuningState.robot_notice(string)를 추가해 로봇 알람을 기존 상태 Topic으로 관제 화면에
+전달한다. 최근 문구를 유지하며 새 작업 시작 시 비운다. 열거 상수 번호는 바꾸지 않는다.
+기존 Action 취소·통신 오류 처리는 유지한다.
+
+---
+
 ## 1. 검증 절차
 
 ```bash
@@ -80,7 +105,7 @@ src/tunio_interfaces/
 - `string_number` — 배열 인덱스가 아니라 **실제 줄 번호** (6, 5, 2, 1)
 - 실패 표현 — `bool success` + `string message`. 단, `MeasurePitch`만 `failure_reason` 상수를 쓴다
 - 열거 상수를 나중에 바꿀 때 기존 번호를 재사용하거나 당기지 않는다. 뒤에 추가만 한다
-- Feedback은 `MeasurePitch`에만 있다
+- Feedback: `MeasurePitch.ready`는 마이크 준비, `PlayString.warning`은 비치명적 경고다
 
 ---
 
@@ -149,13 +174,14 @@ bool ready
 ```
 # --- Goal ---
 uint8 string_number
+bool resumed
 ---
 # --- Result ---
 bool success
 string message
 ---
 # --- Feedback ---
-# 사용하지 않음
+string warning
 ```
 
 - 발현 직후 5mm 이상 후퇴(버징 방지)는 로봇 내부에서 처리하며 인터페이스에 드러나지 않는다
@@ -291,6 +317,7 @@ uint8 adjust_count
 StringResult[] results
 uint8 overall_result
 TuningSettings active_settings
+string robot_notice
 
 uint8 PHASE_IDLE=0
 uint8 PHASE_MEASURE_READY=1

@@ -714,7 +714,7 @@ def _release():
     return _grip("open")
 
 
-def pluck_string(pose, motion, standby=None):
+def pluck_string(pose, motion, standby=None, verify_pick=None):
     """
     줄 튕기기 1차 구현 (위치 제어만). 힘 제어·피크 집기는 2단계에서 붙인다.
 
@@ -778,6 +778,8 @@ def pluck_string(pose, motion, standby=None):
         raise
 
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
+    if verify_pick is not None:
+        verify_pick()                                 # 줄에서 후퇴한 뒤에만 판정
     _goto_standby(standby, motion, v_app, a_app)        # 기타 위 대기
 
 
@@ -953,7 +955,7 @@ def _pick_points(holder, motion):
 
 
 def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
-            logger=None):
+            logger=None, verify_pick=None):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -971,7 +973,8 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
               없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
               폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
-    파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
+    verify_pick — 닫힘 안정화 뒤, 들어 올리기 전에 호출한다. 예외면 집기를 중단한다.
+                  빈손 판정 시의 후퇴·홈 복귀는 호출자가 담당한다.
 
     sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
           같은 뜻이다 (#58). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
@@ -1009,6 +1012,8 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
+    if verify_pick is not None:
+        verify_pick()
     _movel_base(above, v_app, a_app)                    # 들어 올린다
     if standby is not None:
         _movej(standby.joints, motion)                  # 기타 위 대기
@@ -1027,6 +1032,15 @@ def _check_pick_return_position(target, motion, stage, logger=None):
         logger.info(f"피크 반환 {stage}: 목표 {target[:3]}, 실제 {actual}, 오차 {error:.2f}mm")
     if error > tolerance:
         raise MotionError(f"피크 반환 {stage}: 위치 오차 {error:.2f}mm > {tolerance:.2f}mm")
+
+
+def retreat_pick(holder, motion):
+    """집기 위치에서 빈손이 확인됐을 때 거치대 위로 수직 후퇴한다."""
+    _require_api()
+    ensure_tcp()
+    _, above = _pick_points(holder, motion)
+    vel, acc = _transit_speed(motion)
+    _movel_base(above, vel, acc)
 
 
 def pick_return(holder, motion, via=None, home=None, sol=None, route=None,

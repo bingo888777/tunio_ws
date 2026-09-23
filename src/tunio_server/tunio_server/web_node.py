@@ -146,6 +146,7 @@ def _state_to_dict(msg):
         'overall_label': OVERALL_LABELS.get(msg.overall_result,
                                             '알 수 없음(%d)' % msg.overall_result),
         'active_settings': _settings_to_dict(msg.active_settings),
+        'robot_notice': msg.robot_notice,
     }
 
 

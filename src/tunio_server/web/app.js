@@ -371,6 +371,9 @@ function renderTuner(state) {
 }
 
 function renderLive(state) {
+  const notice = $('robot-notice');
+  notice.textContent = state?.robot_notice || '';
+  notice.hidden = !notice.textContent;
   markJustDone(state);
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 

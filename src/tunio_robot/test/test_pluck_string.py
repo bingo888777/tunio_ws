@@ -73,6 +73,31 @@ def _pose_x(x):
 CONTACT = [642.93, -29.60, 185.00, 57.46, -175.68, 150.31]
 
 
+def test_타현_검사는_후퇴가_끝난_뒤에만_한다(fake_api):
+    snapshots = []
+    MP.pluck_string(_pose_x(CONTACT), {},
+                    verify_pick=lambda: snapshots.append(list(fake_api.calls)))
+    assert len(snapshots) == 1
+    assert len(snapshots[0]) == 5
+    assert snapshots[0][-1][1][2] == CONTACT[2] + 20.0
+
+
+def test_집기_검사는_닫힘_대기후_들어올리기_전이다(fake_api, fake_gripper, monkeypatch):
+    events = []
+    monkeypatch.setattr(MP.time, "sleep", lambda seconds: events.append("안정화"))
+
+    def check():
+        assert fake_gripper.calls == ["open", "close"]
+        assert len(fake_api.calls) == 2
+        assert fake_api.calls[-1][1] == HOLDER
+        assert events == ["안정화"]
+        raise MP.MotionError("검사 실패")
+
+    with pytest.raises(MP.MotionError, match="검사 실패"):
+        MP.pick_up(Pose("pick.holder", True, task=HOLDER), {}, verify_pick=check)
+    assert len(fake_api.calls) == 2
+
+
 def test_sequence_without_standby(fake_api):
     MP.pluck_string(_pose_x(CONTACT), {})
     kinds = [c[0] for c in fake_api.calls]
@@ -762,3 +787,40 @@ def test_반환_후에는_페그이동_높이와_모델여유까지_수직상승
     assert retreat[1][:2] == holder[:2]
     assert retreat[1][3:] == holder[3:]
     assert fake_gripper.calls == ["open"]
+
+
+@pytest.mark.parametrize('failure', ['return_position', 'retreat'])
+def test_빈손_복구도_반환위치와_이동실패를_무시하지_않는다(
+        fake_api, fake_gripper, monkeypatch, failure):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from tunio_robot.robot_controller import RobotController
+
+    holder = Pose('pick.holder', True, task=HOLDER)
+    standby = Pose('standby', True, joints=[0, 0, 75, 0, 100, 0])
+    node = SimpleNamespace(
+        dry_run=False, _holding_pick=False, _pick_fault=None, _from_pick=False,
+        points=SimpleNamespace(pick_holder=lambda: holder, frame=lambda name: standby,
+                               motion={}, route=lambda: None),
+        get_logger=lambda: Mock(), _verify_pick=lambda: 'empty')
+    for name in ('_try_pick', '_recover_pick', '_require_pick', '_notify_pick'):
+        setattr(node, name, getattr(RobotController, name).__get__(node))
+    monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
+    home = Mock()
+    monkeypatch.setattr(MP, 'return_home', home)
+    if failure == 'return_position':
+        monkeypatch.setattr(MP, '_current_xyz', lambda: None)
+        expected = '현재 위치를 읽지 못해'
+    else:
+        # via → above → contact → 빈손 수직후퇴. 실제 드라이버처럼 -1을 낸다.
+        fake_api.reject.add(3)
+        expected = '거부'
+    with pytest.raises(MP.MotionError, match=expected):
+        RobotController._ensure_pick(node)
+    assert node._holding_pick is None
+    assert fake_gripper.calls == ['open', 'close']
+    home.assert_not_called()
+    before = len(fake_api.calls)
+    with pytest.raises(MP.MotionError, match='모른다'):
+        RobotController._ensure_pick(node)
+    assert len(fake_api.calls) == before

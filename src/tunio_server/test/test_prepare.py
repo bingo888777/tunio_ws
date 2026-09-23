@@ -27,6 +27,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok):
     n = SimpleNamespace(
         _lock=threading.Lock(), _starting=False, _worker=None,
         _pause=threading.Event(), _cancel=threading.Event(),
+        _resumed_since_play=threading.Event(),
         settings=TM.TuningSettings(), cli_register=object(),
         _registered_pegs={6, 5, 2, 1},  # 이전 작업의 완료 상태도 시작할 때 지워야 한다
         _servers_not_ready=lambda: [], _reset_results=lambda: None,

@@ -55,10 +55,10 @@ class Harness:
         self.thread = threading.Thread(target=self.ex.spin, daemon=True)
         self.thread.start()
 
-    def send(self, action_type, name, goal):
+    def send(self, action_type, name, goal, feedback_callback=None):
         cli = ActionClient(self.client_node, action_type, name)
         assert cli.wait_for_server(timeout_sec=5.0), f"{name} 서버가 안 뜬다"
-        handle = cli.send_goal(goal)
+        handle = cli.send_goal(goal, feedback_callback=feedback_callback)
         return handle
 
     def shutdown(self):
@@ -199,7 +199,13 @@ def test_페그_조절_전에_피크를_반환하고_발현하면_다시_집는�
 # 테스트와 같은 방식 — self 에서 쓰는 것만 갖추면 노드·rclpy 없이 검증된다).
 # ---------------------------------------------------------------
 
-def _fake_node(holding, dry_run=False, side="left"):
+def _fake_node(holding, dry_run=False, side="left", verify="skip"):
+    """
+    필요한 속성만 가진 대역 노드를 만든다.
+
+    verify — _verify_pick 이 낼 값. 문자열이면 늘 그 값, 리스트면 회차별로 낸다.
+             기본 "skip" 은 확인을 안 하는 예전 동작이다 (#39).
+    """
     holder = Pose("pick.holder", True, task=[1.0, 2.0, 3.0, 0.0, 0.0, 0.0], tcp="GripperDA_v1")
     standby = Pose("frames.standby", True, joints=[0.0] * 6)
     # 거치대 팔 모양을 바꿀 때 지나는 J1=90 경유지 (#58). 실물과 같은 값이다
@@ -210,13 +216,26 @@ def _fake_node(holding, dry_run=False, side="left"):
         route=lambda: route,
         motion={},
     )
-    return SimpleNamespace(
+    seq = list(verify) if isinstance(verify, (list, tuple)) else None
+
+    def _verify():
+        if seq is None:
+            return verify
+        return seq.pop(0) if seq else "empty"
+
+    node = SimpleNamespace(
         _holding_pick=holding,
+        _pick_fault=None,
         _side=side,
         points=points,
         dry_run=dry_run,
         get_logger=lambda: mock.MagicMock(),
+        _verify_pick=_verify,
     )
+    for name in ('_notify_pick', '_require_pick', '_try_pick', '_recover_pick',
+                 '_check_pick_or_recover'):
+        setattr(node, name, getattr(RobotController, name).__get__(node))
+    return node
 
 
 def test_이미_쥐고_있으면_다시_집지_않는다(monkeypatch):
@@ -717,3 +736,355 @@ def test_반환_후에는_높이검사_경로를_쓰고_실패해도_직행으�
             assert n._from_pick is fails
     finally:
         h.shutdown()
+
+
+# ---------------------------------------------------------------
+# 피크 집기 확인 (#39) — 폭을 읽어 빈손이면 거치대를 거쳐 다시 집는다.
+#
+# 장수는 안 가린다 (2026-09-22 결정). "집었나 / 못 집었나" 만 본다.
+# ---------------------------------------------------------------
+
+def test_확인이_꺼져_있으면_예전처럼_한_번만_집는다(monkeypatch):
+    """pick_stack 이 없거나 verify_pick=false 면 _verify_pick 이 skip 을 낸다."""
+    node = _fake_node(holding=False, verify="skip")
+    pick_up = mock.MagicMock()
+    pick_return = mock.MagicMock()
+    monkeypatch.setattr(MP, "pick_up", pick_up)
+    monkeypatch.setattr(MP, "pick_return", pick_return)
+    RobotController._ensure_pick(node)
+    assert pick_up.call_count == 1
+    pick_return.assert_not_called()
+    assert node._holding_pick is True
+
+
+def test_폭이_맞으면_한_번에_끝난다(monkeypatch):
+    node = _fake_node(holding=False, verify="hold")
+    pick_up = mock.MagicMock()
+    pick_return = mock.MagicMock()
+    monkeypatch.setattr(MP, "pick_up", pick_up)
+    monkeypatch.setattr(MP, "pick_return", pick_return)
+    RobotController._ensure_pick(node)
+    assert pick_up.call_count == 1
+    pick_return.assert_not_called()
+    assert node._holding_pick is True
+
+
+def test_빈손이면_재집기_두번후_홈으로_간다(monkeypatch):
+    node = _fake_node(holding=False, verify="empty")
+    events = []
+
+    def pick_up(*args, **kwargs):
+        events.append("닫힘")
+        kwargs["verify_pick"]()
+        events.append("들어올림")
+
+    monkeypatch.setattr(MP, "pick_up", pick_up)
+    monkeypatch.setattr(MP, "retreat_pick", lambda *a: events.append("수직후퇴"))
+    monkeypatch.setattr(MP, "pick_return", lambda *a, **kw: events.append("거치대반환"))
+    monkeypatch.setattr(MP, "return_home", lambda *a: events.append("홈"))
+    with pytest.raises(MP.MotionError, match="홈 복귀 완료"):
+        RobotController._ensure_pick(node)
+    assert events == ["닫힘", "수직후퇴", "거치대반환", "닫힘", "수직후퇴",
+                      "거치대반환", "닫힘", "수직후퇴", "홈"]
+    assert node._holding_pick is False
+    with pytest.raises(MP.MotionError):
+        RobotController._ensure_pick(node)
+    assert len(events) == 9
+
+
+def test_큰_폭은_빈손이_아니므로_이동하지_않는다(monkeypatch):
+    node = _fake_node(holding=True, verify="unknown")
+    home = mock.MagicMock()
+    monkeypatch.setattr(MP, "return_home", home)
+    with pytest.raises(MP.MotionError, match="비정상"):
+        node._check_pick_or_recover()
+    assert node._holding_pick is None
+    home.assert_not_called()
+
+
+def test_발현후_빈손이면_홈으로_간다(monkeypatch):
+    node = _fake_node(holding=True, verify="empty")
+    monkeypatch.setattr(MP, "pick_return", mock.MagicMock())
+    monkeypatch.setattr(MP, "retreat_pick", mock.MagicMock())
+    monkeypatch.setattr(MP, "pick_up", lambda *a, **kw: kw["verify_pick"]())
+    home = mock.MagicMock()
+    monkeypatch.setattr(MP, "return_home", home)
+    with pytest.raises(MP.MotionError, match="홈 복귀 완료"):
+        node._check_pick_or_recover()
+    home.assert_called_once()
+    assert node._holding_pick is False
+
+
+@pytest.mark.parametrize("width, expected", [
+    (13.0, "empty"), (13.2, "hold"), (13.7, "hold"),
+    (16.0, "hold"), (19.6, "unknown"), (38.0, "unknown"),
+])
+def test_실제_폭_판정(width, expected):
+    from tunio_robot import teach_points as TP
+    node = SimpleNamespace(
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG),
+        _width_reader=lambda: lambda: width,
+        get_logger=lambda: mock.MagicMock(),
+    )
+    node._notify_pick = RobotController._notify_pick.__get__(node)
+    assert RobotController._verify_pick(node) == expected
+
+
+def test_통신_실패는_빈손이_아니다():
+    from tunio_robot import grip_width as GW
+    from tunio_robot import teach_points as TP
+    node = SimpleNamespace(
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG),
+        _width_reader=lambda: mock.MagicMock(side_effect=GW.WidthError("연결 실패")),
+        get_logger=lambda: mock.MagicMock(),
+    )
+    node._notify_pick = RobotController._notify_pick.__get__(node)
+    assert RobotController._verify_pick(node) == "skip"
+
+
+def test_재개는_기억한_피크를_다시_확인한다():
+    node = _fake_node(holding=True, verify="hold")
+    node._verify_pick = mock.MagicMock(return_value="hold")
+    RobotController._verify_pick_on_resume(node)
+    node._verify_pick.assert_called_once()
+
+
+def test_재개때_읽지_못해도_동작을_계속한다():
+    node = _fake_node(holding=True, verify="skip")
+    RobotController._verify_pick_on_resume(node)
+    assert node._holding_pick is True
+    assert node._pick_fault is None
+
+
+def test_피크를_반환한_상태에는_피크_문턱을_적용하지_않는다():
+    node = _fake_node(holding=False)
+    node._verify_pick = mock.MagicMock()
+    RobotController._verify_pick_on_resume(node)
+    node._verify_pick.assert_not_called()
+
+
+def test_홈_복귀가_실패해도_피크_오류는_유지한다(monkeypatch):
+    node = _fake_node(holding=True, verify="empty")
+    monkeypatch.setattr(MP, "pick_return", mock.MagicMock())
+    monkeypatch.setattr(MP, "retreat_pick", mock.MagicMock())
+    monkeypatch.setattr(MP, "pick_up", lambda *a, **kw: kw["verify_pick"]())
+    monkeypatch.setattr(MP, "return_home", mock.MagicMock(side_effect=MP.MotionError("거부")))
+    with pytest.raises(MP.MotionError, match="홈 복귀 실패"):
+        node._check_pick_or_recover()
+    assert node._pick_fault
+
+
+def test_확인_중_예외면_집기_상태는_모름이다(monkeypatch):
+    node = _fake_node(holding=False)
+    node._verify_pick = mock.MagicMock(side_effect=RuntimeError("읽기 예외"))
+    monkeypatch.setattr(MP, "pick_up", lambda *a, **kw: kw["verify_pick"]())
+    with pytest.raises(RuntimeError):
+        RobotController._ensure_pick(node)
+    assert node._holding_pick is None
+
+
+@pytest.mark.parametrize('width, resumed, success, homes, strokes, reads', [
+    (13.7, True, True, 0, 1, 2),
+    (13.7, False, True, 0, 1, 1),
+    (13.0, True, False, 1, 0, 1),
+    (19.6, True, False, 0, 0, 1),
+])
+def test_피크_판정은_로봇내부_Action에서_수행한다(
+        ros, taught, monkeypatch, width, resumed, success, homes, strokes, reads):
+    h = Harness(taught)
+    home = mock.MagicMock()
+    stroke = mock.MagicMock(side_effect=lambda *a, **kw: kw['verify_pick']())
+    monkeypatch.setattr(MP, 'return_home', home)
+    monkeypatch.setattr(MP, 'pick_return', mock.MagicMock())
+    monkeypatch.setattr(MP, 'retreat_pick', mock.MagicMock())
+    monkeypatch.setattr(MP, 'pick_up', lambda *a, **kw: kw['verify_pick']())
+    monkeypatch.setattr(MP, 'pluck_string', stroke)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True
+        h.node._read_width = mock.MagicMock(return_value=width)
+        result = h.send(PlayString, '/robot/play_string',
+                        PlayString.Goal(string_number=6, resumed=resumed)).result
+        assert result.success == success
+        assert home.call_count == homes
+        assert stroke.call_count == strokes
+        assert h.node._read_width.call_count == (3 if width == 13.0 else reads)
+        if success:
+            assert result.message == ''   # 정상 피크 상태를 서버에 별도 보고하지 않는다
+        elif homes:
+            assert '피크 없음' in result.message
+    finally:
+        h.shutdown()
+
+
+@pytest.mark.parametrize('values, expected, warning', [
+    ('recover_hold', 'hold', False),
+    ('recover_empty', 'empty', False),
+    ('unreadable', 'skip', True),
+])
+def test_폭읽기는_실패할때만_한번_더_시도한다(values, expected, warning):
+    from tunio_robot import grip_width as GW
+    from tunio_robot import teach_points as TP
+    second = {'recover_hold': 13.7, 'recover_empty': 13.0,
+              'unreadable': GW.WidthError('두번째 실패')}[values]
+    reader = mock.MagicMock(side_effect=[GW.WidthError('첫번째 실패'), second])
+    node = SimpleNamespace(
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG), _width_reader=lambda: reader,
+        get_logger=lambda: mock.MagicMock(), _pick_warnings=[],
+    )
+    node._notify_pick = RobotController._notify_pick.__get__(node)
+    assert RobotController._verify_pick(node) == expected
+    assert reader.call_count == 2
+    assert bool(node._pick_warnings) == warning
+
+
+def test_정상_폭은_한번만_읽는다():
+    from tunio_robot import teach_points as TP
+    reader = mock.MagicMock(return_value=13.7)
+    node = SimpleNamespace(
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG), _width_reader=lambda: reader,
+        get_logger=lambda: mock.MagicMock(),
+    )
+    node._notify_pick = RobotController._notify_pick.__get__(node)
+    assert RobotController._verify_pick(node) == 'hold'
+    reader.assert_called_once()
+
+
+@pytest.mark.parametrize('second, success, homes, strokes', [
+    ('unreadable', True, 0, 1),
+    (13.7, True, 0, 1),
+    (13.0, False, 1, 0),
+])
+def test_재개_재읽기와_경고_Result_ROS왕복(
+        ros, taught, monkeypatch, second, success, homes, strokes):
+    from tunio_robot import grip_width as GW
+    h = Harness(taught)
+    home = mock.MagicMock()
+    stroke = mock.MagicMock(side_effect=lambda *a, **kw: kw['verify_pick']())
+    monkeypatch.setattr(MP, 'return_home', home)
+    monkeypatch.setattr(MP, 'pick_return', mock.MagicMock())
+    monkeypatch.setattr(MP, 'retreat_pick', mock.MagicMock())
+    monkeypatch.setattr(MP, 'pick_up', lambda *a, **kw: kw['verify_pick']())
+    monkeypatch.setattr(MP, 'pluck_string', stroke)
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True
+        outcome = GW.WidthError('재읽기 실패') if second == 'unreadable' else second
+        warnings = []
+        feedback_received = threading.Event()
+
+        def on_feedback(msg):
+            warnings.append(msg.feedback.warning)
+            feedback_received.set()
+
+        # 재개 검사 두 번 + 발현 후 검사는 정상. 앞선 경고는 Result까지 보존한다.
+        h.node._read_width = mock.MagicMock(
+            side_effect=([GW.WidthError('최초 실패'), 13.0, 13.0, 13.0]
+                         if second == 13.0 else [GW.WidthError('최초 실패'), outcome, 13.7]))
+        result = h.send(PlayString, '/robot/play_string',
+                        PlayString.Goal(string_number=6, resumed=True),
+                        feedback_callback=on_feedback).result
+        assert result.success == success
+        assert home.call_count == homes
+        assert stroke.call_count == strokes
+        if second == 'unreadable':
+            assert feedback_received.wait(1)
+            assert warnings == [result.message]
+            assert '피크 폭 확인 불가' in result.message
+            assert h.node._holding_pick is True and h.node._pick_fault is None
+            # 다음 정상 Action에는 과거 경고가 새어 나가지 않는다.
+            h.node._read_width.side_effect = None
+            h.node._read_width.return_value = 13.7
+            next_result = h.send(PlayString, '/robot/play_string',
+                                 PlayString.Goal(string_number=6)).result
+            assert next_result.success and next_result.message == ''
+        elif success:
+            assert result.message == ''
+        else:
+            assert '피크 없음' in result.message
+    finally:
+        h.shutdown()
+
+
+def test_폭경고가_있어도_실제_동작실패를_성공으로_바꾸지_않는다(ros, taught, monkeypatch):
+    from tunio_robot import grip_width as GW
+    h = Harness(taught)
+    monkeypatch.setattr(MP, 'pluck_string', mock.MagicMock(side_effect=MP.MotionError('이동 거부')))
+    try:
+        h.node.dry_run = False
+        h.node._holding_pick = True
+        h.node._read_width = mock.MagicMock(side_effect=GW.WidthError('통신 실패'))
+        result = h.send(PlayString, '/robot/play_string',
+                        PlayString.Goal(string_number=6, resumed=True)).result
+        assert not result.success
+        assert '이동 거부' in result.message
+        assert '피크 폭 확인 불가' in result.message
+        assert h.node._read_width.call_count == 2
+    finally:
+        h.shutdown()
+
+
+@pytest.mark.parametrize('stage', ['pickup', 'post_pluck', 'resume'])
+@pytest.mark.parametrize('readings, recovery_count, fails, notice', [
+    ([13.7], 0, False, False),
+    ([13.0, 13.7], 1, False, False),
+    ([13.0, 13.0, 13.7], 2, False, False),
+    ([13.0, 13.0, 13.0], 2, True, True),
+    (['error', 'error'], 0, False, True),
+    ([13.0, 'error', 'error'], 1, False, True),
+    ([13.0, 13.0, 'error', 'error'], 2, False, True),
+])
+def test_세구간_공통_실측판정_재집기_폭실패_분리(
+        stage, readings, recovery_count, fails, notice, monkeypatch):
+    from tunio_robot import grip_width as GW
+    from tunio_robot import teach_points as TP
+    node = _fake_node(holding=stage != 'pickup')
+    node.points.pick_stack = TP.load(CONFIG).pick_stack
+    node.get_parameter = lambda name: SimpleNamespace(value=True)
+    reader = mock.MagicMock(side_effect=[
+        GW.WidthError('읽기 실패') if x == 'error' else x for x in readings])
+    node._width_reader = lambda: reader
+    node._verify_pick = RobotController._verify_pick.__get__(node)
+    events = []
+    node._pick_warning_callback = lambda message: events.append(('notice', message))
+
+    def pick(*args, **kwargs):
+        events.append(('pick', None))
+        kwargs['verify_pick']()
+        events.append(('lift', None))
+
+    monkeypatch.setattr(MP, 'pick_up', pick)
+    monkeypatch.setattr(MP, 'pick_return', lambda *a, **kw: events.append(('holder', None)))
+    monkeypatch.setattr(MP, 'retreat_pick', lambda *a: events.append(('retreat', None)))
+    monkeypatch.setattr(MP, 'return_home', lambda *a: events.append(('home', None)))
+
+    def run():
+        if stage == 'pickup':
+            RobotController._ensure_pick(node)
+        elif stage == 'resume':
+            RobotController._verify_pick_on_resume(node)
+        else:
+            node._check_pick_or_recover()
+
+    if fails:
+        with pytest.raises(MP.MotionError, match='재집기 2회 실패'):
+            run()
+    else:
+        run()
+    kinds = [e[0] for e in events]
+    assert kinds.count('holder') == recovery_count
+    assert kinds.count('pick') == recovery_count + (1 if stage == 'pickup' else 0)
+    assert kinds.count('home') == int(fails)
+    assert ('notice' in kinds) == notice
+    assert reader.call_count == len(readings)
+    if fails:
+        assert kinds.index('notice') < kinds.index('home')
+        assert node._holding_pick is False
+        assert node._pick_fault
+    else:
+        assert node._holding_pick is True
+        assert node._pick_fault is None
