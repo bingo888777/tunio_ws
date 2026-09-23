@@ -466,6 +466,8 @@ class RobotController(Node):
             if goal.is_cancel_requested:
                 raise MP.MotionError("발현 준비 취소 — 발현하지 않는다")
             pose = self.points.pluck(no)
+            if not self.dry_run and self.pegs.roll_of(no) is None:
+                raise MP.MotionError(f"{no}번 페그 등록값 없음 — 페그 재등록을 먼저 실행하세요")
             self._ensure_pick(TP.side_of(no))
             standby = self.points.frame("pluck_standby")
             if not self.dry_run:

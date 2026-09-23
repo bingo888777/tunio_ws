@@ -92,3 +92,16 @@ def test_J5가_135도를_넘어도_J6_검사는_유지한다(monkeypatch):
     joints[5] = 301.
     with pytest.raises(MP.MotionError, match="J6"):
         MP._read_peg_joints(MOTION)
+
+
+def test_미등록이면_발현준비에서_집기나_등록없이_안내한다():
+    from tunio_interfaces.action import PreparePluck
+    n = SimpleNamespace(
+        dry_run=False, points=SimpleNamespace(pluck=Mock()),
+        pegs=SimpleNamespace(roll_of=lambda no: None), _ensure_pick=Mock(),
+        _ensure_registered=Mock(), _run=lambda name, goal, result, work: work())
+    goal = SimpleNamespace(request=PreparePluck.Goal(string_number=6), is_cancel_requested=False)
+    with pytest.raises(MP.MotionError, match='재등록을 먼저'):
+        RobotController.on_prepare_pluck(n, goal)
+    n._ensure_pick.assert_not_called()
+    n._ensure_registered.assert_not_called()
