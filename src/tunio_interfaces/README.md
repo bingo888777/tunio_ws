@@ -7,6 +7,7 @@ TUNIO 기타 자동 조율 시스템의 ROS 2 인터페이스 정의 패키지.
 
 ### Action
 - `MeasurePitch` — `/audio/measure_pitch` · task_manager → audio_analyzer
+- `PreparePluck` — `/robot/prepare_pluck` · 피크 집기·줄 위 접근점 준비
 - `PlayString` — `/robot/play_string` · task_manager → robot_controller
 - `AdjustPeg` — `/robot/adjust_peg` · task_manager → robot_controller
 - `StrumAll` — `/robot/strum_all` · task_manager → robot_controller
