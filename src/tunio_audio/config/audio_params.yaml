@@ -8,7 +8,7 @@
   ros__parameters:
     device: -1                  # -1이면 시스템 기본 입력. 목록은 tools/mic_level.py
     sample_rate: 44100          # 장치가 안 받으면 기본값 -> 48000 -> 44100 순으로 재시도
-    skip_head_sec: 0.3          # onset 직후 과도음 제외
+    skip_head_sec: 0.5          # onset 직후 과도음 제외
     min_db: -50.0               # 소리 부족 판정 (이것만으로는 방 소음을 못 거른다)
     min_prominence_db: 20.0     # 유효 측정 판정. 2026-09-19 로봇 구동음 실측으로
                                 # 16 -> 20 으로 올렸다 (CLAUDE.md 8절). 16 에서는

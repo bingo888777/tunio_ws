@@ -275,8 +275,17 @@ class TaskManager(Node):
 
     def _set_phase(self, phase, string_number=None):
         self.phase = phase
+        changed_string = string_number is not None and string_number != self.current_string
+        if changed_string or phase in (TuningState.PHASE_MEASURE_READY, TuningState.PHASE_VERIFY):
+            # 새 줄/새 측정에 이전 측정값을 붙여 발행하지 않는다.
+            # 줄별 확정 결과는 self.results에 그대로 보존한다.
+            self.measured_hz = 0.0
+            self.measurement_valid = False
         if string_number is not None:
             self.current_string = string_number
+        if changed_string:
+            rec = self.results.get(string_number)
+            self.adjust_count = rec.adjust_count if rec is not None else 0
         self._publish_state()
 
     def _reset_results(self):
@@ -632,7 +641,7 @@ class TaskManager(Node):
         rec = self.results[string_number]
         target_hz = rec.target_hz
         self.adjust_count = 0
-        self.current_string = string_number
+        # 현재 줄 전환은 _set_phase에서 측정값 초기화와 함께 수행한다.
         retry_budget = self.active_settings.max_measure_retry
 
         while True:
@@ -725,12 +734,16 @@ class TaskManager(Node):
         최종 검증 패스. 페그를 건드리지 않고 다시 측정만 한다 (기획 2.5).
 
         한 줄을 조이면 넥이 당겨져 먼저 맞춘 줄이 틀어진다. 전체 판정은 이 결과가 기준이다.
-        Phase 1 에서 실패한 줄도 측정한다 — 기획 2.5 는 "4줄을 다시 측정"이라고 적고 있다.
+        Phase 1 성공 줄만 검증한다. 실패 줄은 최초 실패 사유와 측정값을 보존한다.
         """
         for s in (L.STRING_ORDER if numbers is None else numbers):
             self._gate()
-            self._set_phase(TuningState.PHASE_VERIFY, s)
             rec = self.results[s]
+            if rec.result != StringResult.RESULT_SUCCESS:
+                self.get_logger().info(
+                    '%d번 줄 검증 제외 — 1차 성공 아님 (사유 %d)' % (s, rec.failure_reason))
+                continue
+            self._set_phase(TuningState.PHASE_VERIFY, s)
             m, _ = self._measure_with_retry(s, self.active_settings.max_measure_retry)
 
             if not m.ok:
