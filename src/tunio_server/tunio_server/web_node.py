@@ -70,6 +70,7 @@ PHASE_LABELS = {
     TuningState.PHASE_CANCELED: '취소',
     TuningState.PHASE_ERROR: '오류',
     TuningState.PHASE_REGISTER_PEG: '페그 초기 등록',
+    TuningState.PHASE_PREPARE_PLUCK: '발현 준비',
 }
 OVERALL_LABELS = {
     TuningState.OVERALL_PENDING: '판정 전',

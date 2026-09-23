@@ -8,6 +8,8 @@ from tunio_server import task_manager as TM
 
 
 @pytest.mark.parametrize('next_string,phase', [
+    (5, TM.TuningState.PHASE_PREPARE_PLUCK),
+    (6, TM.TuningState.PHASE_PREPARE_PLUCK),
     (5, TM.TuningState.PHASE_MEASURE_READY),
     (6, TM.TuningState.PHASE_MEASURE_READY),
     (5, TM.TuningState.PHASE_VERIFY),
