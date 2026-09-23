@@ -44,6 +44,7 @@ def scenario(ready=True, outcomes=(True,)):
         return SimpleNamespace(success=True, message='')
 
     node._run_action = action
+    node._measure_attempt = TM.TaskManager._measure_attempt.__get__(node)
     node._measure_once = lambda n: TM.TaskManager._measure_once(node, n)
     return node, calls
 

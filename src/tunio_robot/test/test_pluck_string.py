@@ -870,3 +870,37 @@ def test_prepared_play_skips_standby_before_single_stroke(fake_api):
     relative = [c for c in fake_api.calls if c[2].get('mod') == 'REL']
     assert len(relative) == 2  # 스트로크 한 번 + 즉시 후퇴 한 번
     assert relative[0][1][:3] == [-8.0, 0.0, 0.0]
+
+
+def test_빈손복구는_거치대상단에서_열고_내려간다(fake_api, fake_gripper, monkeypatch):
+    holder = Pose('pick.holder', True, task=HOLDER)
+    via = Pose('standby', True, joints=[0, 0, 75, 0, 100, 0])
+    motion = {'pick_up_mm': 50, 'pick_settle_sec': 0}
+    monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
+    MP.pick_return(holder, motion, via=via, approach_only=True)
+    assert [c[0] for c in fake_api.calls] == ['movej', 'movel']
+    assert fake_api.current[2] == HOLDER[2] + 50
+    assert fake_gripper.calls == []
+    original = fake_api.movel
+
+    def move(pos, **kwargs):
+        if list(pos) == HOLDER:
+            assert fake_gripper.calls == ['open']
+        return original(pos, **kwargs)
+
+    monkeypatch.setattr(fake_api, 'movel', move)
+    MP.pick_up(holder, motion, at_holder=True)
+    assert fake_gripper.calls == ['open', 'close']
+    assert [c[0] for c in fake_api.calls] == ['movej', 'movel', 'movel', 'movel']
+
+
+@pytest.mark.parametrize('failure', ['position', 'move'])
+def test_빈손복구_상단실패면_열거나_하강하지_않는다(fake_api, fake_gripper, monkeypatch, failure):
+    if failure == 'position':
+        monkeypatch.setattr(MP, '_current_xyz', lambda: None)
+    else:
+        fake_api.reject.add(0)
+    with pytest.raises(MP.MotionError):
+        MP.pick_return(Pose('pick.holder', True, task=HOLDER), {}, approach_only=True)
+    assert len(fake_api.calls) == 1
+    assert fake_gripper.calls == []

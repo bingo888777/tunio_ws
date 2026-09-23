@@ -91,6 +91,10 @@ class Aborted(Exception):
     """더 진행할 수 없는 오류. PHASE_ERROR 로 끝낸다."""
 
 
+class PickRefillRequired(Aborted):
+    """로봇이 빈손 재집기를 소진하고 홈 복귀를 완료했다."""
+
+
 class Measurement:
     """측정 1회의 결과. MeasurePitch Result 를 서버 관점으로 옮겨 담은 것."""
 
@@ -512,6 +516,11 @@ class TaskManager(Node):
                     raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
+        if (what in ('prepare_pluck', 'play_string')
+                and wrapped.status == GoalStatus.STATUS_ABORTED
+                and not wrapped.result.success
+                and getattr(wrapped.result, 'pick_refill_required', False)):
+            raise PickRefillRequired(wrapped.result.message)
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED or not wrapped.result.success:
             raise Aborted('%s 실패(status=%s): %s — 후속 동작 중단'
                           % (what, wrapped.status, wrapped.result.message))
@@ -556,6 +565,19 @@ class TaskManager(Node):
     # ------------------------------------------------------------------ 측정 1회
 
     def _measure_once(self, string_number):
+        """보충 대기는 측정 실패 횟수에 넣지 않고, 재개 후 새 측정을 준비한다."""
+        while True:
+            try:
+                return self._measure_attempt(string_number)
+            except PickRefillRequired as exc:
+                self.measurement_valid = False
+                self.measured_hz = 0.0
+                self._set_robot_notice(str(exc))
+                self._pause.set()
+                self._gate()  # 기존 웹 재개/취소 서비스를 그대로 사용한다
+                self._set_robot_notice('')
+
+    def _measure_attempt(self, string_number):
         """
         ICD 6.1 한 사이클. ready feedback 을 받은 뒤에 발현을 시킨다.
 
@@ -637,6 +659,14 @@ class TaskManager(Node):
                 play = self._run_action(self.cli_play, play_goal,
                                         float(self._p('play_timeout_sec')), 'play_string',
                                         feedback_cb=on_robot_feedback)
+            except PickRefillRequired:
+                # 이전 녹음이 끝났는지 확인한 뒤에만 보충 대기로 전환한다.
+                handle.cancel_goal_async()
+                finished = self._wait(result_future, float(self._p('cancel_wait_sec')),
+                                      '피크 보충 전 녹음 종료')
+                if finished is None:
+                    raise Aborted('녹음 종료 불명 — 피크 보충 후 자동 재개 차단')
+                raise
             except Aborted as exc:
                 # #83은 실패 Result도 예외로 전달한다. 피드백 유실 시에도 사유를 표시하고
                 # 아직 기다리는 마이크를 취소한 뒤 후속 로봇 명령 없이 종료한다.
@@ -645,7 +675,7 @@ class TaskManager(Node):
                 raise
             if play.message and play.message not in robot_warnings:
                 self._set_robot_notice(play.message)
-                # 성공 + 경고: 폭을 못 읽었지만 로봇 동작은 완료됐다. 재시도/종료하지 않는다.
+                # 성공 결과의 부가 알림은 표시만 한다.
                 self.get_logger().warning('로봇 동작 완료(경고): %s' % play.message)
 
             # 측정 결과 대기. 마이크가 onset 부터 timeout_sec 을 세므로

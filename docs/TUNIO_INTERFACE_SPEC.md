@@ -15,7 +15,7 @@ web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). �
 
 피크 측정·판정·알람·홈 복귀는 robot_controller가 담당한다.
 피크 확인용 Service/Topic과 정상 피크 상태 보고는 추가하지 않는다.
-PlayString Feedback.warning은 폭 읽기 실패 경고와 재집기 소진 알람을 전달한다.
+PlayString Feedback.warning은 재집기 소진·홈 복귀·보충 안내를 전달한다.
 기존 CommandTuning(start/pause/resume/cancel)은 그대로 둔다.
 
 PreparePluck과 PlayString Goal의 `resumed`는 재개 사실을 나타내는 bool이다.
@@ -25,13 +25,21 @@ PreparePluck과 PlayString Goal의 `resumed`는 재개 사실을 나타내는 bo
 로봇은 resumed=true이고 피크를 들고 있던 경우에만 발현 전에 재확인한다.
 이미 반환한 상태라면 기존 집기 직후 확인을 사용한다. 페그에는 적용하지 않는다.
 정상일 때 별도 확인 응답 없이 작업을 수행하고 기존 Action Result를 반환한다.
-세 검사 구간에서 빈손이면 거치대 재집기를 추가 2회 시도한다. 두 번 모두 빈손일 때
-로봇이 알람을 보낸 뒤 홈 복귀하고 success=false와 사유를 전달한다.
-폭 읽기는 최초 실패 시 1회 재시도한다. 두 번 모두 실패하면 Feedback.warning으로
-폭 확인 불가를 알리고 재개를 포함한 동작을 계속한다. 성공 Result.message에도 경고를
-남긴다. 서버는 경고를 기록하고 정상 측정 흐름을 계속하며 경고만으로 재발현하지 않는다.
-폭 읽기 실패는 재집기 중에도 빈손 실패로 세지 않는다. 실제 빈손으로 재집기 한도를
-소진했을 때만 실패이며 서버는 후속 요청을 보내지 않는다.
+2026-09-23 성현 정정: 피크 판정은 있음/없음 두 가지다. 정상 폭 범위 밖과
+폭 읽기 2회 실패 모두 없음으로 처리한다. 읽기 실패는 로봇 로그에 원인을 남긴다.
+세 검사 구간에서 없음이면 거치대 재집기를 추가 2회 시도한다.
+두 번 모두 없으면 홈 복귀를 완료한 뒤 PreparePluck/PlayString Result에
+`success=false`, `pick_refill_required=true`, 보충 안내 message를 반환한다(ABORTED).
+홈 복귀 실패·일반 이동 오류에서는 `pick_refill_required=false`를 유지한다.
+서버는 이 bool 필드로만 보충 대기를 구분하며 메시지 문자열을 파싱하지 않는다.
+기존 녹음이 있으면 취소·종료 확인 후 PHASE_PAUSED로 기다린다. Action을 실행 중인
+채로 사람 입력을 기다리지 않으므로 보충 대기에는 로봇 Action 시간 제한을 적용하지 않는다.
+웹은 robot_notice로 "피크 없음. 피크를 재보충하고 재개 버튼을 누르세요"를 표시한다.
+기존 `/tuning/resume`을 누르면 새 PreparePluck(resumed=true)부터 시작한다.
+로봇은 홈 복귀가 확인된 보충 대기 상태에서만 오류를 해제하고 새 집기를 수행한다.
+또 재집기가 소진되면 홈 복귀·보충 대기를 반복한다. 대기 중 취소는 이동 없이 종료한다.
+보충 재개는 새로운 측정으로 진행하며 측정 실패 횟수에는 포함하지 않는다.
+두 Action의 Result 필드가 추가되므로 관련 PC 모두 인터페이스 재빌드·노드 재시작이 필요하다.
 TuningState.robot_notice(string)를 추가해 로봇 알람을 기존 상태 Topic으로 관제 화면에
 전달한다. 최근 문구를 유지하며 새 작업 시작 시 비운다. 열거 상수 번호는 바꾸지 않는다.
 기존 Action 취소·통신 오류 처리는 유지한다.
@@ -109,7 +117,7 @@ src/tunio_interfaces/
 - `string_number` — 배열 인덱스가 아니라 **실제 줄 번호** (6, 5, 2, 1)
 - 실패 표현 — `bool success` + `string message`. 단, `MeasurePitch`만 `failure_reason` 상수를 쓴다
 - 열거 상수를 나중에 바꿀 때 기존 번호를 재사용하거나 당기지 않는다. 뒤에 추가만 한다
-- Feedback: `MeasurePitch.ready`는 마이크 준비, `PlayString.warning`은 비치명적 경고다
+- Feedback: `MeasurePitch.ready`는 마이크 준비, `PlayString.warning`은 로봇 알림이다. 보충 대기 판정은 Result.pick_refill_required를 쓴다
 
 ---
 
@@ -182,6 +190,7 @@ bool resumed
 bool success
 string message
 string preparation_id
+bool pick_refill_required
 ---
 string warning
 ```
@@ -206,6 +215,7 @@ string preparation_id
 # --- Result ---
 bool success
 string message
+bool pick_refill_required
 ---
 # --- Feedback ---
 string warning

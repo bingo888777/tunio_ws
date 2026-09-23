@@ -7,7 +7,7 @@ import pytest
 
 from tunio_interfaces.msg import TuningState
 from tunio_interfaces.srv import CommandTuning
-from tunio_server.task_manager import Aborted, TaskManager
+from tunio_server.task_manager import Aborted, PickRefillRequired, TaskManager
 
 
 def measurement_node(resumed=False, play_success=True):
@@ -36,6 +36,7 @@ def measurement_node(resumed=False, play_success=True):
         feedback_callback(SimpleNamespace(feedback=SimpleNamespace(ready=True)))
         return object()
 
+    node._measure_attempt = TaskManager._measure_attempt.__get__(node)
     node.cli_measure.send_goal_async.side_effect = send
     return node, handle
 
@@ -50,7 +51,7 @@ def test_서버는_첫_발현에_재개사실만_전달한다(resumed):
     assert not hasattr(node, 'cli_check_pick')
 
 
-def test_피크없음_Action실패는_재측정하지_않고_작업중단한다():
+def test_보충대기_표시없는_Action실패는_작업중단한다():
     node, handle = measurement_node(resumed=True, play_success=False)
     with pytest.raises(Aborted, match='피크 없음'):
         TaskManager._measure_once(node, 6)
@@ -77,9 +78,9 @@ def test_동작중_재개는_거부한다():
     assert not response.accepted
 
 
-def test_성공_Result의_폭확인불가_경고는_기록하고_측정을_계속한다():
+def test_성공_Result의_부가알림은_기록하고_측정을_계속한다():
     node, handle = measurement_node(resumed=True)
-    warning = '피크 폭 확인 불가: 2회 읽기 실패'
+    warning = '터미널 보충 후 집기 완료'
     node._run_action.return_value.message = warning
     logger = MagicMock()
     node.get_logger = lambda: logger
@@ -95,7 +96,7 @@ def test_경고_Feedback을_받아도_동작을_중단하거나_중복경고하�
     node, handle = measurement_node(resumed=True)
     logger = MagicMock()
     node.get_logger = lambda: logger
-    warning = '피크 폭 확인 불가'
+    warning = '터미널 보충 후 집기 완료'
 
     def run(*args, **kwargs):
         kwargs['feedback_cb'](SimpleNamespace(feedback=SimpleNamespace(warning=warning)))
@@ -133,3 +134,16 @@ def test_재집기가_길어져도_같은_Action결과를_기다린다():
     assert node._wait.call_args_list[1].args[0] is future
     assert node._wait.call_args_list[2].args[0] is future
     client.send_goal_async.assert_called_once()
+
+
+def test_보충전_녹음종료가_불명확하면_재개대기로_넘기지_않는다():
+    node, handle = measurement_node()
+    node._run_action.side_effect = [
+        SimpleNamespace(success=True, preparation_id='token', message=''),
+        PickRefillRequired('피크 보충 필요'),
+    ]
+    node._wait.side_effect = [handle, None]
+    with pytest.raises(Aborted, match='녹음 종료 불명'):
+        TaskManager._measure_once(node, 6)
+    handle.cancel_goal_async.assert_called_once()
+    node._untrack.assert_called_once_with(handle)

@@ -1197,7 +1197,7 @@ def retreat_pick(holder, motion):
 
 
 def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
-                logger=None):
+                logger=None, approach_only=False):
     """
     피크를 거치대에 돌려놓는다.
 
@@ -1214,6 +1214,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
     순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
           → 그리퍼 열기 → 수직 상승/도착 확인 → (home 이 있으면) 홈 자세.
     pick_to_peg_min_z_mm 설정 시 빈손 상승은 하한+모델 여유 2배 이상으로 한다.
+    approach_only — 빈손 복구 전용. 상단 도착 확인까지만 한다. 이어지는 pick_up이
+                    상단에서 그리퍼를 열고 내려가므로 닫힌 채 반환점에 진입하지 않는다.
     """
     _require_api()
     ensure_tcp()                                         # 거치대 좌표도 robot.tcp 기준이다 (이슈 #21·#32)
@@ -1230,6 +1232,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
     else:
         _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _check_pick_return_position(above, motion, "거치대 위", logger)
+    if approach_only:
+        return
     _movel_base(contact, v_fine, a_fine)                # 수직으로 내려가서
     _check_pick_return_position(contact, motion, "반환점", logger)
     _release()                                          # 위치 확인 후 놓는다
