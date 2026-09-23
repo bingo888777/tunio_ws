@@ -46,6 +46,7 @@ _node = None
 _gripper = None
 _j6_motion = None       # 실제 노드가 감시 설정을 연결한다. 단독 도구는 기존 경로 유지
 _j6_sample = None       # (수신 monotonic 시각, J6). joint_states 콜백만 갱신
+_cancel_check = None  # robot_controller의 현재 Action 취소 검사
 _robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
@@ -345,6 +346,9 @@ def ensure_tcp(name=None, logger=None):
 def _require_api():
     if _api is None:
         raise MotionError("두산 API가 초기화되지 않았다. connect() 를 먼저 부르거나 dry_run 으로 돌려라")
+    if _cancel_check is not None:
+        from .motion_cancel import GuardedAPI
+        return GuardedAPI(_api, _cancel_check)
     return _api
 
 
@@ -840,6 +844,17 @@ def _grip(preset_name):
     """
     if _gripper is None:
         raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
+    if _cancel_check is not None:
+        _cancel_check()
+        from .motion_cancel import GuardedAPI
+        original = _gripper.api
+        _gripper.api = GuardedAPI(original, _cancel_check)
+        try:
+            result = _gripper.select(preset_name)
+            _cancel_check()
+            return result
+        finally:
+            _gripper.api = original
     return _gripper.select(preset_name)
 
 

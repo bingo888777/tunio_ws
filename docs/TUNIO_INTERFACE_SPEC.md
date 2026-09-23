@@ -619,3 +619,13 @@ ReturnHome 실패/거부/종료 불명은 기존 성공 Result 정책에 따라 
 - 허가는 조율 접수 시 소비한다. 완료·오류·취소 후 다음 조율은 재등록이 필요하며 일시정지/재개는 소비한 같은 작업을 계속한다. 노드 준비 부족으로 거부할 때는 소비하지 않는다.
 - `/tuning/reregister_pegs`는 전 줄 등록과 ReturnHome 성공 및 취소 여부 확인 후 허가를 발급한다. 관제 재시작은 허가를 복원하지 않는다.
 - 로봇 등록 파일은 유지한다. 로봇 Action 직접 호출/단독 도구는 이 관제 정책의 적용 대상이 아니다. 메시지 필드/서비스 타입 변경은 없다.
+
+### 실물 취소 / Soft Stop (2026-09-23)
+
+- 웹 `/tuning/cancel` → task_manager의 활성 Action 취소 요청 → robot_controller. 취소 접수 자체는 정지 완료가 아니다.
+- robot_controller는 별도 Reentrant 클라이언트로 `/{robot_id}/dsr_controller2/motion/move_stop` (`dsr_msgs2/srv/MoveStop`, stop_mode=2 Soft Stop)을 요청한다. DSR_ROBOT2의 동기 이동용 노드/executor를 재사용하지 않는다.
+- 취소 플래그 이후에는 API 호출 전후 검사로 추가 이동·그리퍼 I/O를 차단한다. 기존 힘/순응 해제 호출은 허용하되 자동 후퇴·그리퍼 열기·복귀는 하지 않는다. 이미 전송된 I/O를 되돌리거나 그리퍼를 즉시 정지시키는 기능은 아니다.
+- 작업 코드가 종료되기 전까지 Stop을 반복 요청하여 명령 전 검사/전송 사이 취소 경합을 다룬다. 작업 코드 종료 후 `check_motion` (`dsr_msgs2/srv/CheckMotion`)의 success=true와 status=0(IDLE)을 확인해야 Action을 CANCELED로 종료한다. status=1/2는 기다리고, 그 외 값·거부·무응답은 ABORTED다.
+- 정지/상태 서비스가 준비되지 않으면 새 실물 Action을 받지 않는다. 정지 결과 불명은 정상 취소로 숨기지 않는다.
+- 실물 취소 후에는 정지 성공 여부와 무관하게 새 Action을 거부한다. 피크/그리퍼/페그 접촉 상태를 확인하고 복구한 뒤 노드를 재시작해야 한다. 자동 재개/자동 복귀는 없다. 관제에서도 다시 등록해야 한다.
+- `cancel_stop_timeout_sec=5.0`, `cancel_stop_interval_sec=0.1`은 실측 전 임시 파라미터다. robot.launch.py에서 설정 가능하다. 네트워크/드라이버 응답이 없으면 소프트웨어만으로 정지를 보장할 수 없다. 안전 인증된 비상정지는 별도다.

@@ -102,6 +102,7 @@ function cents(v) {
 }
 
 function phaseClass(phase) {
+  if (phase === PHASE.REGISTER_PEG) return 'badge badge-warn';
   if (phase === PHASE.DONE) return 'badge badge-ok';
   if (phase === PHASE.ERROR) return 'badge badge-bad';
   if (phase === PHASE.PAUSED || phase === PHASE.CANCELED) return 'badge badge-warn';
@@ -260,7 +261,9 @@ function renderProgress(state) {
     const dot = wrap.children[i];
     const r = byNumber.get(n);
     let cls = 'pdot';
-    if (state && state.current_string === n && running) cls += ' current';
+    if (state && state.current_string === n && running) {
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
+    }
     else if (r && r.result === 1) cls += ' ok';
     else if (r && r.result === 2) cls += ' bad';
     dot.className = cls;
@@ -285,7 +288,7 @@ function renderGuitar(state) {
     if (!TARGET_STRINGS.has(n)) {
       cls += ' off';                       // 4·3번 — 조율하지 않는다
     } else if (state && state.current_string === n && running) {
-      cls += ' current';
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
     } else {
       const r = byNumber.get(n);
       if (r && r.result === 1) cls += ' ok';
@@ -423,7 +426,9 @@ function renderStringCards(state) {
     const card = document.createElement('div');
 
     let cls = 'scard';
-    if (state && state.current_string === n && isRunning(state)) cls += ' current';
+    if (state && state.current_string === n && isRunning(state)) {
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
+    }
     if (r && r.result === 1) cls += ' ok';
     if (r && r.result === 2) cls += ' bad';
     if (isJustDone(n)) cls += ' just-done';
@@ -433,11 +438,14 @@ function renderStringCards(state) {
     // 흘러들어오는 측정값을 보여준다. tuned_hz 는 줄이 끝나야 채워지므로,
     // 그것만 쓰면 진행 중에는 카드가 '측정 불가'로 굳어 보인다.
     const live = state && state.current_string === n && isRunning(state);
-    const note = live ? '진행 중' : (r ? r.result_label : '대기');
+    const registering = live && state.phase === PHASE.REGISTER_PEG;
+    const note = registering ? '등록 중' : live ? '진행 중' : (r ? r.result_label : '대기');
 
     const rows = [];
     rows.push(['목표', `${hz(r ? r.target_hz : null)} Hz`, false]);
-    if (live) {
+    if (registering) {
+      rows.push(['상태', '페그 자세 등록 중', false]);
+    } else if (live) {
       rows.push(['측정', state.measurement_valid ? `${hz(state.measured_hz)} Hz` : '측정 불가',
                  !state.measurement_valid]);
       const c = state.measurement_valid
@@ -457,7 +465,7 @@ function renderStringCards(state) {
     card.innerHTML = `
       <div class="scard-head">
         <span class="scard-name">${n}번 <span class="scard-note">${name}</span></span>
-        <span class="${r && r.result === 1 ? 'badge badge-ok'
+        <span class="${registering ? 'badge badge-warn' : r && r.result === 1 ? 'badge badge-ok'
                        : r && r.result === 2 ? 'badge badge-bad' : 'badge badge-idle'}">${note}</span>
       </div>
       <div class="rows">
