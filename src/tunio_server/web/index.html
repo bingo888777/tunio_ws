@@ -33,6 +33,7 @@
 <section id="tab-live" class="panel active">
 
   <div class="controls">
+    <button id="btn-reregister" class="btn">페그 재등록</button>
     <button id="btn-start"  class="btn btn-primary">시작</button>
     <button id="btn-pause"  class="btn">일시정지</button>
     <button id="btn-resume" class="btn">재개</button>
@@ -46,6 +47,7 @@
     </div>
   </div>
 
+  <p id="registration-status" class="hint" role="status" aria-live="polite">사람이 페그를 돌렸다면 재등록 후 시작하세요. 재등록은 등록·복귀만 수행합니다.</p>
   <div id="toast" class="toast"></div>
 
   <div class="stage">
@@ -190,6 +192,7 @@
 
 </main>
 
+<script src="registration.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

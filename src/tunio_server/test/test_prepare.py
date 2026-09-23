@@ -1,4 +1,5 @@
 """시작 전 등록은 측정과 분리하고, 실패하면 발현에 진입하지 않는다."""
+import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -62,6 +63,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregiste
                 else [('error', 0)])
     assert calls[4:] == ([] if reregister else expected)
     assert n._registered_pegs == ({6, 5, 2, 1} if registration_ok else set())
+    assert n._registration_ready is registration_ok
 
 
 @pytest.mark.parametrize('failure', [None, 5])
@@ -92,7 +94,8 @@ def test_robot_timeout_waits_for_terminal_result_before_continuing(ended):
             if ended else None)
     waits = Mock(side_effect=[handle, None, late])
     n = SimpleNamespace(
-        _wait=waits, _p=lambda key: 120.0, _track=Mock(), _untrack=Mock(),
+        _wait=waits, _p=lambda key: 120.0, _cancel=threading.Event(),
+        _track=Mock(), _untrack=Mock(),
         get_logger=lambda: Mock())
     client = Mock()
     if ended:
@@ -119,6 +122,7 @@ def test_failed_or_canceled_robot_result_aborts(status, success, late):
     result = SimpleNamespace(status=status, result=SimpleNamespace(success=success, message='실패'))
     responses = [handle, None, result] if late else [handle, result]
     n = SimpleNamespace(_wait=Mock(side_effect=responses), _p=lambda key: 120,
+                        _cancel=threading.Event(),
                         _track=Mock(), _untrack=Mock(), get_logger=lambda: Mock())
     with pytest.raises(TM.Aborted, match='후속 동작 중단'):
         TM.TaskManager._run_action(n, Mock(), object(), 120, 'adjust_peg')
@@ -150,7 +154,8 @@ def test_next_robot_request_waits_for_success_result():
         response.set_result(SimpleNamespace(accepted=True, get_result_async=get_result))
         return response
 
-    n = SimpleNamespace(_p=lambda key: 2, _track=Mock(), _untrack=Mock(),
+    n = SimpleNamespace(_p=lambda key: 2, _cancel=threading.Event(),
+                        _track=Mock(), _untrack=Mock(),
                         get_logger=lambda: Mock())
     n._wait = lambda *args: TM.TaskManager._wait(n, *args)
     client = SimpleNamespace(send_goal_async=send)
@@ -214,6 +219,7 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
         _strum=Mock(side_effect=NotImplementedError('화음 미구현')),
         _set_phase=lambda phase, no: phases.append(phase),
         cli_home=Mock(), _wait=Mock(side_effect=[handle, wrapped]),
+        _cancel=threading.Event(),
         _track=Mock(), _untrack=Mock(),
         _save=lambda: calls.append('save'), _finish_error=lambda: calls.append('error'))
     n._run_action = lambda *a, **k: TM.TaskManager._run_action(n, *a, **k)
@@ -299,3 +305,45 @@ def test_start_does_not_require_registration_server():
     n.cli_register.wait_for_server.return_value = False
     assert TM.TaskManager._servers_not_ready(n) == []
     n.cli_register.wait_for_server.assert_not_called()
+
+
+def test_unregistered_start_rejected_before_any_action():
+    n = SimpleNamespace(_registration_ready=False, _servers_not_ready=Mock())
+    response = TM.TaskManager._do_start(n, SimpleNamespace())
+    assert not response.accepted
+    assert '재등록을 먼저' in response.message
+    n._servers_not_ready.assert_not_called()
+
+
+def test_missing_server_does_not_consume_registration():
+    n = SimpleNamespace(_registration_ready=True,
+                        _servers_not_ready=Mock(return_value=['audio/measure_pitch']))
+    response = TM.TaskManager._do_start(n, SimpleNamespace())
+    assert not response.accepted
+    assert n._registration_ready
+
+
+@pytest.mark.parametrize('status,success,expected', [
+    (5, False, TM.Cancelled), (4, True, TM.Cancelled), (6, False, TM.Aborted)])
+def test_cancel_requires_confirmed_terminal_result(status, success, expected):
+    event = threading.Event()
+    event.set()
+    handle = Mock(accepted=True)
+    result = SimpleNamespace(status=status, result=SimpleNamespace(success=success, message='응답'))
+    n = SimpleNamespace(_cancel=event, _wait=Mock(side_effect=[handle, result]),
+                        _p=lambda key: 1, _track=Mock(), _untrack=Mock(),
+                        get_logger=lambda: Mock())
+    with pytest.raises(expected):
+        TM.TaskManager._run_action(n, Mock(), object(), 1, 'play_string')
+    handle.cancel_goal_async.assert_called_once()
+
+
+def test_user_cancel_with_unknown_robot_end_stays_error():
+    event = threading.Event()
+    event.set()
+    handle = Mock(accepted=True)
+    n = SimpleNamespace(_cancel=event, _wait=Mock(side_effect=[handle, None, None]),
+                        _p=lambda key: 1, _track=Mock(), _untrack=Mock(),
+                        get_logger=lambda: Mock())
+    with pytest.raises(TM.Aborted, match='동작 종료 불명'):
+        TM.TaskManager._run_action(n, Mock(), object(), 1, 'play_string')

@@ -135,6 +135,7 @@ def _state_to_dict(msg):
         'stamp': _stamp_to_float(msg.stamp),
         'job_id': msg.job_id,
         'phase': msg.phase,
+        'error_message': msg.error_message,
         'phase_label': PHASE_LABELS.get(msg.phase, '알 수 없음(%d)' % msg.phase),
         'current_string': msg.current_string,
         'target_hz': msg.target_hz,
@@ -169,7 +170,7 @@ class WebNode(Node):
 
         self.cli_command = {
             name: self.create_client(CommandTuning, '/tuning/%s' % name, callback_group=cb)
-            for name in ('start', 'pause', 'resume', 'cancel')
+            for name in ('start', 'pause', 'resume', 'cancel', 'reregister_pegs')
         }
         self.cli_get_settings = self.create_client(
             GetSettings, '/tuning/get_settings', callback_group=cb)
@@ -366,7 +367,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path.startswith('/api/command/'):
                 name = path[len('/api/command/'):]
-                if name not in ('start', 'pause', 'resume', 'cancel'):
+                if name not in ('start', 'pause', 'resume', 'cancel', 'reregister_pegs'):
                     self._error(404, '없는 명령: %s' % name)
                     return
                 self._json(self.node.command(name))
