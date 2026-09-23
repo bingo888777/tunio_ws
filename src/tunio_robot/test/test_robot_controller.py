@@ -763,3 +763,34 @@ def test_adjust_invalidates_preparation_and_requires_new_pick(ros, taught):
             string_number=6, preparation_id=prepared.preparation_id)).result.success
     finally:
         h.shutdown()
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_강제재등록은_이전각도를_디스크에서도_지우고_실행한다(ros, taught, monkeypatch, tmp_path, fail):
+    from tunio_interfaces.action import RegisterPeg
+    from tunio_robot.peg_state import PegState
+
+    h = Harness(taught)
+    path = str(tmp_path / "pegs.json")
+    try:
+        n = h.node
+        n.dry_run = False
+        n.pegs = PegState(path)
+        n.pegs.register(6, 12.0)
+        n.pegs.save()
+        monkeypatch.setattr(n, "_cross_to", lambda side: None)
+
+        def register(*args, **kwargs):
+            assert n.pegs.roll_of(6) is None
+            assert PegState(path).load().roll_of(6) is None
+            if fail:
+                raise MP.MotionError("등록 실패")
+            return 30.0
+        monkeypatch.setattr(MP, "register_peg", register)
+        result = h.send(RegisterPeg, "/robot/register_peg",
+                        RegisterPeg.Goal(string_number=6, force=True))
+        assert result.result.success is not fail
+        assert n.pegs.roll_of(6) == (None if fail else 30.0)
+        assert PegState(path).load().roll_of(6) == (None if fail else 30.0)
+    finally:
+        h.shutdown()
