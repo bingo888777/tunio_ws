@@ -378,10 +378,7 @@ function renderTuner(state) {
 let lastJobErrorKey = null;
 
 function renderJobError(state) {
-  const el = $('job-error');
   const message = state && state.phase === PHASE.ERROR ? state.error_message : '';
-  el.hidden = !message;
-  el.textContent = message ? `작업 중단: ${message}` : '';
   if (!state) return; // 연결 대기만으로 같은 오류의 팝업을 반복하지 않는다.
   if (state.phase !== PHASE.ERROR) {
     lastJobErrorKey = null;
