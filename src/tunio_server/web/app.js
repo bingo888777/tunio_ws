@@ -497,7 +497,14 @@ async function sendCommand(name) {
       if (res.ok) registration.reply(data.accepted, data.message);
       else registration.unknown(data.error || '접수 여부 확인 불가');
     }
-    toast(data.error || data.message || (data.accepted ? '접수' : '거부'), res.ok && data.accepted);
+    if (name === 'start' && (!res.ok || !data.accepted)) {
+      window.alert(data.error || data.message || '시작 요청이 거부되었습니다.');
+    } else {
+      if (name === 'start' && data.accepted) {
+        registration.message = '이번 조율에 등록값을 사용합니다. 다음 조율 전에는 다시 등록하세요.';
+      }
+      toast(data.error || data.message || (data.accepted ? '접수' : '거부'), res.ok && data.accepted);
+    }
   } catch (e) {
     if (registering) registration.unknown('응답 유실 — 접수 여부를 확인할 수 없습니다. 상태와 로그를 확인하세요.');
     toast(`명령을 보내지 못했다: ${e}`, false);

@@ -157,6 +157,7 @@ class TaskManager(Node):
         self._registered_pegs = set()  # 이번 작업에서 성공 Result를 확인한 줄
         self.job_id = ''
         self.error_message = ''
+        self._registration_ready = False  # 등록·복귀 성공으로 발급하는 조율 1회 허가
         self.measurement_id = 0
         self.phase = TuningState.PHASE_IDLE
         self._phase_before_pause = TuningState.PHASE_IDLE
@@ -327,11 +328,18 @@ class TaskManager(Node):
             self._starting = False
 
     def _do_start(self, res, reregister=False):
+        if not reregister and not self._registration_ready:
+            res.accepted = False
+            res.message = '페그 재등록을 먼저 실행하세요. 조율 작업마다 새 등록이 필요합니다.'
+            return res
         missing = self._servers_not_ready(registration_only=reregister)
         if missing:
             res.accepted = False
             res.message = '노드 준비 안 됨: %s' % ', '.join(missing)
             return res
+        # 조율 접수 시 소비한다. 성공·오류·취소 모두 다음 시작은 재등록이 필요하다.
+        # 노드 준비 부족으로 거부된 요청은 위에서 반환하므로 허가를 소비하지 않는다.
+        self._registration_ready = False
         self._pause.clear()
         self._cancel.clear()
         self.error_message = ''
@@ -353,7 +361,7 @@ class TaskManager(Node):
         self._worker.start()
         res.accepted = True
         res.message = ('페그 재등록 접수 %s — 조율 없이 등록·복귀만 실행' if reregister
-                       else '작업 시작 %s — 기존 페그 등록값으로 조율') % self.job_id
+                       else '작업 시작 %s — 이번에 등록한 값으로 조율') % self.job_id
         return res
 
     def _servers_not_ready(self, registration_only=False):
@@ -866,6 +874,8 @@ class TaskManager(Node):
         try:
             self._register_pegs(force=True)
             self._return_home()
+            self._gate()  # 복귀 중 취소 요청까지 확인한 뒤에만 다음 조율을 허용한다
+            self._registration_ready = True
             self.job_id = ''
             self._set_phase(TuningState.PHASE_IDLE, 0)
             self.get_logger().info('페그 재등록·복귀 완료')

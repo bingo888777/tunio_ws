@@ -62,6 +62,7 @@ def test_start_waits_for_all_peg_angles_before_tuning(registration_ok, reregiste
                 else [('error', 0)])
     assert calls[4:] == ([] if reregister else expected)
     assert n._registered_pegs == ({6, 5, 2, 1} if registration_ok else set())
+    assert n._registration_ready is registration_ok
 
 
 @pytest.mark.parametrize('failure', [None, 5])
@@ -299,3 +300,19 @@ def test_start_does_not_require_registration_server():
     n.cli_register.wait_for_server.return_value = False
     assert TM.TaskManager._servers_not_ready(n) == []
     n.cli_register.wait_for_server.assert_not_called()
+
+
+def test_unregistered_start_rejected_before_any_action():
+    n = SimpleNamespace(_registration_ready=False, _servers_not_ready=Mock())
+    response = TM.TaskManager._do_start(n, SimpleNamespace())
+    assert not response.accepted
+    assert '재등록을 먼저' in response.message
+    n._servers_not_ready.assert_not_called()
+
+
+def test_missing_server_does_not_consume_registration():
+    n = SimpleNamespace(_registration_ready=True,
+                        _servers_not_ready=Mock(return_value=['audio/measure_pitch']))
+    response = TM.TaskManager._do_start(n, SimpleNamespace())
+    assert not response.accepted
+    assert n._registration_ready

@@ -9,7 +9,7 @@ from rclpy.parameter import Parameter
 from tunio_interfaces.msg import TuningState
 from tunio_interfaces.srv import CommandTuning
 from tunio_server.fake_hardware import FakeHardware
-from tunio_server.task_manager import TaskManager
+from tunio_server.task_manager import Aborted, Cancelled, TaskManager
 from tunio_server.web_node import _state_to_dict
 
 
@@ -52,10 +52,33 @@ def test_missing_registration_error_reaches_web_and_recovers():
         assert node.error_message == ''
         assert fake._registered_strings == {6, 5, 2, 1}
         node._save.assert_not_called()
-        node.job_id = 'registered'
-        node.active_settings = node.settings
-        result = node._measure_once(6)
-        assert result.ok
+        measure = node._tune_string
+        for outcome in (None, Aborted('시험 오류'), Cancelled()):
+            if not node._registration_ready:
+                response = node.on_reregister_pegs(None, CommandTuning.Response())
+                assert response.accepted
+                node._worker.join(5)
+                assert node._registration_ready
+
+            def tune(no):
+                if outcome is not None:
+                    raise outcome
+                measure(no)
+            node._tune_string = tune
+            response = node.on_start(None, CommandTuning.Response())
+            assert response.accepted
+            assert not node._registration_ready
+            node._worker.join(5)
+            assert not node._worker.is_alive()
+            expected = (TuningState.PHASE_DONE if outcome is None else
+                        TuningState.PHASE_CANCELED if isinstance(outcome, Cancelled)
+                        else TuningState.PHASE_ERROR)
+            assert node.phase == expected
+            response = node.on_start(None, CommandTuning.Response())
+            assert not response.accepted
+            assert '재등록을 먼저' in response.message
+            # 로봇 대역에 등록값이 남아 있어도 관제는 다음 조율을 허용하지 않는다.
+            assert fake._registered_strings == {6, 5, 2, 1}
     finally:
         executor.shutdown()
         if thread:
