@@ -415,7 +415,7 @@ class TaskManager(Node):
         self._pause.clear()
         self._request_goal_cancel()
         res.accepted = True
-        res.message = '취소 요청'
+        res.message = '취소를 요청했습니다. 현재 동작의 종료 응답을 기다립니다.'
         return res
 
     def on_get_settings(self, req, res):
@@ -501,6 +501,9 @@ class TaskManager(Node):
             raise Aborted('%s goal 거부 — 후속 동작 중단' % what)
         self._track(handle)
         try:
+            # 수락 응답을 기다리는 사이 취소가 들어온 경우도 전달한다.
+            if self._cancel.is_set():
+                handle.cancel_goal_async()
             future = handle.get_result_async()
             wrapped = self._wait(future, timeout, '%s 결과' % what)
             if wrapped is None:
@@ -513,9 +516,14 @@ class TaskManager(Node):
                     raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
+        if self._cancel.is_set() and wrapped.status == GoalStatus.STATUS_CANCELED:
+            raise Cancelled()
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED or not wrapped.result.success:
             raise Aborted('%s 실패(status=%s): %s — 후속 동작 중단'
                           % (what, wrapped.status, wrapped.result.message))
+        if self._cancel.is_set():
+            # 현재 동작은 끝났지만 사용자가 요청한 뒤에는 다음 동작을 시작하지 않는다.
+            raise Cancelled()
         self.get_logger().info('%s 성공 Result 확인' % what)
         return wrapped.result
 
