@@ -98,6 +98,33 @@ def test_집기_검사는_닫힘_대기후_들어올리기_전이다(fake_api, f
     assert len(fake_api.calls) == 2
 
 
+def test_거치대_재집기는_관절경유없이_하강하고_검사한다(fake_api, fake_gripper, monkeypatch):
+    above = list(HOLDER)
+    above[2] += 50
+    fake_api.current = above
+    monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
+
+    def check():
+        assert fake_gripper.calls == ['open', 'close']
+        assert [c[0] for c in fake_api.calls] == ['movel']
+        assert fake_api.current == HOLDER
+
+    MP.pick_up(Pose('pick.holder', True, task=HOLDER), {'pick_up_mm': 50},
+               via=Pose('via', True, joints=[0] * 6), sol=3,
+               at_holder=True, verify_pick=check)
+    assert [c[0] for c in fake_api.calls] == ['movel', 'movel']
+    assert fake_api.current == above
+
+
+@pytest.mark.parametrize('actual', [None, [0] * 6])
+def test_재집기_상단을_확인못하면_열거나_이동하지_않는다(fake_api, fake_gripper, actual):
+    fake_api.current = actual
+    with pytest.raises(MP.MotionError, match='재집기 상단'):
+        MP.pick_up(Pose('pick.holder', True, task=HOLDER), {}, at_holder=True)
+    assert fake_api.calls == []
+    assert fake_gripper.calls == []
+
+
 def test_sequence_without_standby(fake_api):
     MP.pluck_string(_pose_x(CONTACT), {})
     kinds = [c[0] for c in fake_api.calls]

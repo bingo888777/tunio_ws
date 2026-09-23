@@ -409,7 +409,7 @@ class RobotController(Node):
         self._pick_fault = "피크 파지 상태가 비정상이다"
         raise MP.MotionError(self._pick_fault + ". 그리퍼를 직접 확인하라")
 
-    def _try_pick(self, side=None):
+    def _try_pick(self, side=None, at_holder=False):
         """거치대 집기 1회. 빈손이면 수직 후퇴 후 False, 읽기 실패는 진행한다."""
         holder = self.points.pick_holder()
         standby = self.points.frame("standby")
@@ -418,7 +418,7 @@ class RobotController(Node):
         try:
             MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol,
                        route=self.points.route(), logger=self.get_logger(),
-                       verify_pick=self._require_pick)
+                       verify_pick=self._require_pick, at_holder=at_holder)
         except _PickAbsent:
             # 콜백은 거치대 접촉점에서 실행된다. 그 상태로 관절 이동하지 않는다.
             self._holding_pick = None  # 후퇴 실패 시 자동 재집기도 막는다
@@ -431,20 +431,23 @@ class RobotController(Node):
             self._side = side
         return True
 
-    def _recover_pick(self, side=None):
+    def _recover_pick(self, side=None, at_holder=False):
         """세 검사 구간 공통: 빈손 감지 후 거치대에서 재집기 최대 2회."""
         holder = self.points.pick_holder()
         standby = self.points.frame("standby")
         sol = holder.sol_by_side.get(side) if side else None
-        for attempt in range(1, 3):
-            self.get_logger().warn(f"피크 없음 — 거치대 재집기 {attempt}/2")
+        if not at_holder:
             # 빈손 오판이어도 임의 위치에서 열지 않는다. 거치대에서 열고 다시 집는다.
             self._holding_pick = None
             MP.pick_return(holder, self.points.motion, via=standby, sol=sol,
                            route=self.points.route(), logger=self.get_logger())
-            self._holding_pick = False
             self._side = None
-            if self._try_pick(side):
+            # 반환 후 상승 높이가 다를 수 있어 집기 상단으로 수직 정렬한다.
+            MP.retreat_pick(holder, self.points.motion)
+            self._holding_pick = False
+        for attempt in range(1, 3):
+            self.get_logger().warn(f"피크 없음 — 거치대 재집기 {attempt}/2")
+            if self._try_pick(side, at_holder=True):
                 return
         self._pick_fault = "피크 재집기 2회 모두 빈손"
         self._notify_pick(self._pick_fault + ". 홈 복귀 후 작업을 종료한다")
@@ -504,7 +507,7 @@ class RobotController(Node):
             self._from_pick = False
             return
         if not self._try_pick(side):
-            self._recover_pick(side)
+            self._recover_pick(side, at_holder=True)
 
     def _release_pick(self, side=None):
         """

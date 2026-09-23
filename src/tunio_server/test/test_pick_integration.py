@@ -87,7 +87,7 @@ def test_pick_policy_across_real_actions(stage, outcome, monkeypatch):
                 assert '피크 폭 확인 불가' in manager.robot_notice
             else:
                 assert manager.robot_notice == ''
-        assert events.count('return') == (0 if outcome == 'unreadable' else 2)
+        assert events.count('return') == int(stage != 'pickup' and outcome != 'unreadable')
         assert events.count('pluck') == (0 if outcome == 'exhausted'
                                          and stage != 'post_pluck' else 1)
         assert not manager._active_goals

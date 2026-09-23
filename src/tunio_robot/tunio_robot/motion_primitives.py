@@ -955,7 +955,7 @@ def _pick_points(holder, motion):
 
 
 def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
-            logger=None, verify_pick=None):
+            logger=None, verify_pick=None, at_holder=False):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -975,6 +975,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
               폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
     verify_pick — 닫힘 안정화 뒤, 들어 올리기 전에 호출한다. 예외면 집기를 중단한다.
                   빈손 판정 시의 후퇴·홈 복귀는 호출자가 담당한다.
+    at_holder — 재집기 전용. 거치대 상단 위치를 확인한 뒤 경유 없이 다시 내려간다.
 
     sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
           같은 뜻이다 (#58). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
@@ -1001,14 +1002,18 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
-    flipped = _ensure_solution(above, sol, route, motion, logger)  # J1 뒤집히면 경유
-    if not flipped and via is not None:
-        _movej(via.joints, motion)                      # 경유 자세 (관절 보간)
-    _release()                                          # 열고 간다
-    if sol is None:
-        _movel_base(above, v_app, a_app)                # 거치대 위 (직선, 팔 모양 유지)
+    if at_holder:
+        _check_pick_return_position(above, motion, "재집기 상단", logger)
+        _release()
     else:
-        _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
+        flipped = _ensure_solution(above, sol, route, motion, logger)
+        if not flipped and via is not None:
+            _movej(via.joints, motion)
+        _release()
+        if sol is None:
+            _movel_base(above, v_app, a_app)
+        else:
+            _movejx(above, motion, sol=sol)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다

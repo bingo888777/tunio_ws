@@ -784,12 +784,11 @@ def test_빈손이면_재집기_두번후_홈으로_간다(monkeypatch):
     monkeypatch.setattr(MP, "return_home", lambda *a: events.append("홈"))
     with pytest.raises(MP.MotionError, match="홈 복귀 완료"):
         RobotController._ensure_pick(node)
-    assert events == ["닫힘", "수직후퇴", "거치대반환", "닫힘", "수직후퇴",
-                      "거치대반환", "닫힘", "수직후퇴", "홈"]
+    assert events == ["닫힘", "수직후퇴", "닫힘", "수직후퇴", "닫힘", "수직후퇴", "홈"]
     assert node._holding_pick is False
     with pytest.raises(MP.MotionError):
         RobotController._ensure_pick(node)
-    assert len(events) == 9
+    assert len(events) == 7
 
 
 def test_큰_폭은_빈손이_아니므로_이동하지_않는다(monkeypatch):
@@ -816,7 +815,8 @@ def test_발현후_빈손이면_홈으로_간다(monkeypatch):
 
 
 @pytest.mark.parametrize("width, expected", [
-    (13.0, "empty"), (13.2, "hold"), (13.7, "hold"),
+    (13.0, "empty"), (13.2, "empty"), (13.4, "empty"),
+    (13.5, "hold"), (13.7, "hold"),
     (16.0, "hold"), (19.6, "unknown"), (38.0, "unknown"),
 ])
 def test_실제_폭_판정(width, expected):
@@ -1053,7 +1053,7 @@ def test_세구간_공통_실측판정_재집기_폭실패_분리(
     node._pick_warning_callback = lambda message: events.append(('notice', message))
 
     def pick(*args, **kwargs):
-        events.append(('pick', None))
+        events.append(('pick', kwargs['at_holder']))
         kwargs['verify_pick']()
         events.append(('lift', None))
 
@@ -1076,8 +1076,10 @@ def test_세구간_공통_실측판정_재집기_폭실패_분리(
     else:
         run()
     kinds = [e[0] for e in events]
-    assert kinds.count('holder') == recovery_count
+    assert kinds.count('holder') == int(stage != 'pickup' and recovery_count > 0)
     assert kinds.count('pick') == recovery_count + (1 if stage == 'pickup' else 0)
+    assert [value for kind, value in events if kind == 'pick'] == (
+        ([False] if stage == 'pickup' else []) + [True] * recovery_count)
     assert kinds.count('home') == int(fails)
     assert ('notice' in kinds) == notice
     assert reader.call_count == len(readings)
