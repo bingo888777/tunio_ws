@@ -375,11 +375,23 @@ function renderTuner(state) {
   centsEl.className = 'cents-big ' + (inTune ? 'ok' : (c > 0 ? 'high' : 'low'));
 }
 
+let lastJobErrorKey = null;
+
 function renderJobError(state) {
   const el = $('job-error');
   const message = state && state.phase === PHASE.ERROR ? state.error_message : '';
   el.hidden = !message;
   el.textContent = message ? `작업 중단: ${message}` : '';
+  if (!state) return; // 연결 대기만으로 같은 오류의 팝업을 반복하지 않는다.
+  if (state.phase !== PHASE.ERROR) {
+    lastJobErrorKey = null;
+    return;
+  }
+  if (!message) return;
+  const key = JSON.stringify([state.job_id, message]);
+  if (key === lastJobErrorKey) return;
+  lastJobErrorKey = key;
+  window.alert(`작업을 진행할 수 없습니다.\n\n${message}`);
 }
 
 function renderLive(state) {
