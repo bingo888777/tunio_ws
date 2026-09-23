@@ -583,8 +583,9 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - ⚠️ 둘 다 **v1.2 시점이라 이후 결정이 안 들어가 있다.** 피크 집기·반환,
   TCP 통일, Phase 0 가 대표적이다. 머리말의 '이후 갱신' 항목을 같이 볼 것
 
-**도식** — v2 가 현행이다
+**도식** — 최신 인터페이스 설명은 v4 (웹 후속 연결은 미병합 표시 참조)
 
+- **docs/TUNIO_시스템아키텍처_v4.md · .svg · .png** — #89 준비 분리·#98 강제 재등록 반영. v3 템플릿을 유지하며 웹 후속 연결의 적용 상태는 v4 머리말을 따른다.
 - docs/TUNIO_시스템아키텍처_v2.svg · .png, docs/TUNIO_작업흐름_v2.svg · .png
   - 아키텍처는 **파이썬 생성기**(`TUNIO_시스템아키텍처_v2.py`)가 SVG 를 만든다.
     graphviz 가 아니다. 작업 흐름은 `TUNIO_작업흐름_v2.dot` (graphviz)
