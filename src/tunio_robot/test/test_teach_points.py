@@ -359,10 +359,10 @@ def test_막힘_문턱이_미는_힘보다_낮다():
 
 
 # ------------------------------------------------------------ 거치대 팔 모양 (#58)
-def test_거치대_sol_은_기본이_null_이다():
-    """적기 전까지는 아무것도 안 바뀐다. null 이면 지금 팔 모양을 그대로 쓴다."""
+def test_거치대_왼쪽_sol7_적용과_오른쪽_기존값_유지():
+    """6·5번은 실기한 sol 7, 2·1번은 현재 팔 모양을 유지한다."""
     points = tp.TeachPoints(_data())
-    assert points.pick_holder().sol_by_side == {"left": None, "right": None}
+    assert points.pick_holder().sol_by_side == {"left": 7, "right": None}
 
 
 def test_거치대_sol_에_이상한_값은_거부한다():

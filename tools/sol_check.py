@@ -138,9 +138,6 @@ def main():
     print(f"  TCP 확인됨 — tool='{MP._read_named('tool')}' "
           f"tcp='{MP._read_named('tcp')}'\n")
 
-    route = points.route()
-    route_j1 = route.joints[0] if route and route.joints[0] is not None else None
-
     rows = []
     try:
         from DR_common2 import posx
@@ -180,13 +177,11 @@ def main():
         if r["origins"][2][2] < 0.0:
             bad.append(f"어깨팔꿈치가 베이스 면 아래 {-r['origins'][2][2]:.0f}mm "
                        f"— 받침을 파고든다")
-        if route_j1 is not None and abs(j[0] - route_j1) > 100.0:
-            bad.append(f"경유지 J1({route_j1:.0f})에서 {abs(j[0] - route_j1):.0f}도 "
-                       f"돌아야 한다 — 가는 길이 길다")
+        if not -60.0 <= j[0] <= 240.0:
+            bad.append("J1이 허용 작업 구간 -60~240도 밖이다")
         tag = "  <- 지금 자세" if same else ""
         print(f"sol {sol}   {fmt(j, 7, 2)}{tag}")
-        print(f"        J1 {j[0]:+7.2f}도 — {'왼쪽' if j[0] < 0 else '오른쪽'}"
-              f"  (6·5번은 왼쪽, 2·1번은 오른쪽)")
+        print(f"        J1 {j[0]:+7.2f}도 — 부호가 아니라 작업 구역 범위로 비교")
         if args.point == "pick.holder":
             # **코드와 같은 함수로 판단한다.** 따로 계산하면 도구는 "경유 안 함" 이라
             # 찍고 실기에서는 경유하는 일이 생긴다 (motion_primitives.j1_flip)
@@ -230,10 +225,10 @@ def main():
         print("  ⚠️ 위 판단은 **지금 팔이 서 있는 자세 기준**이다. 실기에서는 직전")
         print("     동작이 남긴 자세에서 출발하므로 줄마다 달라질 수 있다.")
         print()
-        print("  거치대는 **J1 부호**로 고른다 — 다음에 갈 페그 쪽과 같아야")
+        print("  거치대는 실제 J1 작업 범위로 고른다 — 다음에 갈 페그 쪽과 같아야")
         print("  좌우 전환 경유지를 건너뛴다 (#58).")
-        print("    J1 음수 -> sol_by_side.left  (6·5번 쪽)")
-        print("    J1 양수 -> sol_by_side.right (2·1번 쪽)")
+        print("    6·5번: peg_j1_skip_left_deg 범위 -> sol_by_side.left")
+        print("    2·1번: peg_j1_skip_right_deg 범위 -> sol_by_side.right")
         print("  적은 뒤 dry_run 으로 순서를 보고, 실기는 천천히 한 번 —")
         print("    ros2 run tunio_robot robot_controller --ros-args -p dry_run:=true")
         print("    teach_points.yaml 의 pick.holder.sol_by_side 에 적는다")
