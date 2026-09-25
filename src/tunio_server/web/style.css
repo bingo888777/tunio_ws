@@ -895,3 +895,13 @@ main { padding: 20px; max-width: 1180px; margin: 0 auto; }
   background: var(--bg-elev-2); color: var(--text);
   border: 1px solid var(--line); border-radius: 6px;
 }
+
+/* 페그 등록은 조율(파랑)과 구분되는 노랑/황금색으로 표시한다. */
+.scard.current.registering {
+  background: var(--tint-warn);
+  border-color: var(--edge-warn);
+}
+.pdot.current.registering { background: var(--warn); border-color: var(--warn); }
+.gstring.current.registering .gs-line { stroke: var(--warn); }
+.gstring.current.registering .gs-peg { fill: var(--warn); stroke: var(--edge-warn); }
+.gstring.current.registering .gs-note { fill: var(--warn); }

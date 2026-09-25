@@ -42,6 +42,9 @@ const SETTING_FIELDS = [
 const $ = (id) => document.getElementById(id);
 
 let lastState = null;
+let streamReady = false;
+let commandPending = false;
+const registration = new RegistrationTracker();
 let defaults = null;
 let selectedJob = null;
 let historyJobs = [];        // 서버에서 받은 이력 원본. 검색은 이 위에서 한다
@@ -99,6 +102,7 @@ function cents(v) {
 }
 
 function phaseClass(phase) {
+  if (phase === PHASE.REGISTER_PEG) return 'badge badge-warn';
   if (phase === PHASE.DONE) return 'badge badge-ok';
   if (phase === PHASE.ERROR) return 'badge badge-bad';
   if (phase === PHASE.PAUSED || phase === PHASE.CANCELED) return 'badge badge-warn';
@@ -257,7 +261,9 @@ function renderProgress(state) {
     const dot = wrap.children[i];
     const r = byNumber.get(n);
     let cls = 'pdot';
-    if (state && state.current_string === n && running) cls += ' current';
+    if (state && state.current_string === n && running) {
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
+    }
     else if (r && r.result === 1) cls += ' ok';
     else if (r && r.result === 2) cls += ' bad';
     dot.className = cls;
@@ -282,7 +288,7 @@ function renderGuitar(state) {
     if (!TARGET_STRINGS.has(n)) {
       cls += ' off';                       // 4·3번 — 조율하지 않는다
     } else if (state && state.current_string === n && running) {
-      cls += ' current';
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
     } else {
       const r = byNumber.get(n);
       if (r && r.result === 1) cls += ' ok';
@@ -336,7 +342,7 @@ function renderTuner(state) {
   $('now-target').textContent = hz(state.target_hz);
 
   if (!state.measurement_valid) {
-    noteEl.textContent = '측정 불가';
+    noteEl.textContent = [PHASE.REGISTER_PEG, PHASE.PREPARE_PLUCK, PHASE.RETURN].includes(state.phase) ? state.phase_label : '측정 불가';
     noteEl.className = 'note invalid';
     octEl.textContent = '';
     needle.className = 'needle';
@@ -372,7 +378,24 @@ function renderTuner(state) {
   centsEl.className = 'cents-big ' + (inTune ? 'ok' : (c > 0 ? 'high' : 'low'));
 }
 
+let lastJobErrorKey = null;
+
+function renderJobError(state) {
+  const message = state && state.phase === PHASE.ERROR ? state.error_message : '';
+  if (!state) return; // 연결 대기만으로 같은 오류의 팝업을 반복하지 않는다.
+  if (state.phase !== PHASE.ERROR) {
+    lastJobErrorKey = null;
+    return;
+  }
+  if (!message) return;
+  const key = JSON.stringify([state.job_id, message]);
+  if (key === lastJobErrorKey) return;
+  lastJobErrorKey = key;
+  window.alert(`작업을 진행할 수 없습니다.\n\n${message}`);
+}
+
 function renderLive(state) {
+  renderJobError(state);
   markJustDone(state);
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 
@@ -403,7 +426,9 @@ function renderStringCards(state) {
     const card = document.createElement('div');
 
     let cls = 'scard';
-    if (state && state.current_string === n && isRunning(state)) cls += ' current';
+    if (state && state.current_string === n && isRunning(state)) {
+      cls += state.phase === PHASE.REGISTER_PEG ? ' current registering' : ' current';
+    }
     if (r && r.result === 1) cls += ' ok';
     if (r && r.result === 2) cls += ' bad';
     if (isJustDone(n)) cls += ' just-done';
@@ -413,11 +438,14 @@ function renderStringCards(state) {
     // 흘러들어오는 측정값을 보여준다. tuned_hz 는 줄이 끝나야 채워지므로,
     // 그것만 쓰면 진행 중에는 카드가 '측정 불가'로 굳어 보인다.
     const live = state && state.current_string === n && isRunning(state);
-    const note = live ? '진행 중' : (r ? r.result_label : '대기');
+    const registering = live && state.phase === PHASE.REGISTER_PEG;
+    const note = registering ? '등록 중' : live ? '진행 중' : (r ? r.result_label : '대기');
 
     const rows = [];
     rows.push(['목표', `${hz(r ? r.target_hz : null)} Hz`, false]);
-    if (live) {
+    if (registering) {
+      rows.push(['상태', '페그 자세 등록 중', false]);
+    } else if (live) {
       rows.push(['측정', state.measurement_valid ? `${hz(state.measured_hz)} Hz` : '측정 불가',
                  !state.measurement_valid]);
       const c = state.measurement_valid
@@ -437,7 +465,7 @@ function renderStringCards(state) {
     card.innerHTML = `
       <div class="scard-head">
         <span class="scard-name">${n}번 <span class="scard-note">${name}</span></span>
-        <span class="${r && r.result === 1 ? 'badge badge-ok'
+        <span class="${registering ? 'badge badge-warn' : r && r.result === 1 ? 'badge badge-ok'
                        : r && r.result === 2 ? 'badge badge-bad' : 'badge badge-idle'}">${note}</span>
       </div>
       <div class="rows">
@@ -452,22 +480,45 @@ function renderStringCards(state) {
 function renderButtons(state) {
   const running = isRunning(state);
   const paused = state && state.phase === PHASE.PAUSED;
-  $('btn-start').disabled = running;
-  $('btn-pause').disabled = !running || paused;
-  $('btn-resume').disabled = !paused;
-  $('btn-cancel').disabled = !running;
+  const blocked = !streamReady || !state || commandPending;
+  $('btn-start').disabled = blocked || running || registration.busy;
+  $('btn-reregister').disabled = blocked || running || registration.busy;
+  $('registration-status').textContent = registration.message;
+  $('btn-pause').disabled = blocked || !running || paused;
+  $('btn-resume').disabled = blocked || !paused;
+  $('btn-cancel').disabled = blocked || !running;
 }
 
 // ─────────────────────────────── 명령
 
 async function sendCommand(name) {
+  if (commandPending || !streamReady || !lastState) return;
+  const registering = name === 'reregister_pegs';
+  if ((registering || name === 'start') && (isRunning(lastState) || registration.busy)) return;
+  commandPending = true;
+  if (registering) registration.begin(lastState);
+  renderButtons(lastState);
   try {
     const res = await fetch(`/api/command/${name}`, { method: 'POST' });
     const data = await res.json();
-    if (!res.ok) { toast(data.error || '명령 실패', false); return; }
-    toast(data.message || (data.accepted ? '접수' : '거부'), data.accepted);
+    if (registering) {
+      if (res.ok) registration.reply(data.accepted, data.message);
+      else registration.unknown(data.error || '접수 여부 확인 불가');
+    }
+    if (name === 'start' && (!res.ok || !data.accepted)) {
+      window.alert(data.error || data.message || '시작 요청이 거부되었습니다.');
+    } else {
+      if (name === 'start' && data.accepted) {
+        registration.message = '이번 조율에 등록값을 사용합니다. 다음 조율 전에는 다시 등록하세요.';
+      }
+      toast(data.error || data.message || (data.accepted ? '접수' : '거부'), res.ok && data.accepted);
+    }
   } catch (e) {
+    if (registering) registration.unknown('응답 유실 — 접수 여부를 확인할 수 없습니다. 상태와 로그를 확인하세요.');
     toast(`명령을 보내지 못했다: ${e}`, false);
+  } finally {
+    commandPending = false;
+    renderButtons(lastState);
   }
 }
 
@@ -669,10 +720,15 @@ function connect() {
 
   es.onmessage = (ev) => {
     lastState = JSON.parse(ev.data);
+    streamReady = true;
+    registration.observe(lastState);
     renderLive(lastState);
   };
 
   es.onerror = () => {
+    streamReady = false;
+    registration.disconnect();
+    renderButtons(lastState);
     // EventSource 는 스스로 재접속한다. 그 사이 상태 표시만 바꾼다.
     link.textContent = '연결 끊김 — 재접속 중';
     link.className = 'badge badge-bad';
@@ -805,6 +861,7 @@ function init() {
   initCoordMode();
   initTheme();
   initTabs();
+  $('btn-reregister').addEventListener('click', () => sendCommand('reregister_pegs'));
   $('btn-start').addEventListener('click', () => sendCommand('start'));
   $('btn-pause').addEventListener('click', () => sendCommand('pause'));
   $('btn-resume').addEventListener('click', () => sendCommand('resume'));

@@ -37,6 +37,7 @@ from tunio_robot import motion_primitives as MP
 from tunio_robot import peg_state as PS
 from tunio_robot import runlog as RL
 from tunio_robot import teach_points as TP
+from tunio_robot.motion_cancel import CancelSession, request_and_confirm_stop
 
 
 def _plain(msg):
@@ -153,6 +154,23 @@ class RobotController(Node):
         # 팔은 하나뿐이라 여섯 Action 이 같은 락을 쓴다
         self._lock = threading.Lock()
         self._running = None
+        self._cancel_sessions = {}
+        self._recovery_required = False
+        self.declare_parameter('cancel_stop_timeout_sec', 5.0)  # 실측 전 임시값
+        self.declare_parameter('cancel_stop_interval_sec', 0.1)  # 실측 전 임시값
+        self._stop_timeout = float(self.get_parameter('cancel_stop_timeout_sec').value)
+        self._stop_interval = float(self.get_parameter('cancel_stop_interval_sec').value)
+        if not all(math.isfinite(v) and v > 0 for v in
+                   (self._stop_timeout, self._stop_interval)):
+            raise ValueError('정지 확인 시간과 주기는 유한한 양수여야 한다')
+        if not self.dry_run:
+            from dsr_msgs2.srv import CheckMotion, MoveStop
+            stop_group = ReentrantCallbackGroup()
+            prefix = f"/{self.points.robot['id']}/dsr_controller2/motion"
+            self._stop_client = self.create_client(
+                MoveStop, prefix + '/move_stop', callback_group=stop_group)
+            self._motion_client = self.create_client(
+                CheckMotion, prefix + '/check_motion', callback_group=stop_group)
         self._side = None          # 마지막으로 다녀온 헤드스톡 쪽
         # 지금 피크를 쥐고 있는지. 집기·반환 시점은 로봇이 스스로 판단하고
         # 서버는 지시하지 않는다 (CLAUDE.md 2절). 페그를 잡으려면 손가락이
@@ -226,29 +244,37 @@ class RobotController(Node):
     def on_goal(self, goal_request):
         """이미 다른 동작이 돌고 있으면 받지 않는다. 팔이 하나라 겹칠 수 없다."""
         with self._lock:
+            if self._recovery_required:
+                self.get_logger().error("취소 후 현장 복구 확인·노드 재시작 필요 — 새 동작 거부")
+                return GoalResponse.REJECT
+            if not self.dry_run and not (self._stop_client.service_is_ready()
+                                         and self._motion_client.service_is_ready()):
+                self.get_logger().error('정지/상태 서비스 미연결 — 새 동작 거부')
+                return GoalResponse.REJECT
             if self._running is not None:
                 self.get_logger().warn(f"'{self._running}' 실행 중이라 새 goal 을 거부한다")
                 return GoalResponse.REJECT
         return GoalResponse.ACCEPT
 
     def on_cancel(self, goal_handle):
-        """
-        취소 요청 수락.
-
-        cancel_callback 을 지정하지 않으면 rclpy 기본값이 REJECT 다. 그 상태로 두면
-        task_manager 가 /tuning/cancel 을 받아 진행 중인 goal 에 취소를 걸어도
-        로봇이 거부하고 하던 동작을 끝까지 수행한다. 기획 5.1 의 pause/cancel 과
-        명세 6.4 취소 시퀀스가 성립하지 않는다. 페그를 조이는 중에 멈출 수 없다는
-        안전 문제이기도 하다.
-
-        TODO(정묵·성현): 수락만으로는 움직이는 로봇이 멈추지 않는다. 두 가지가 더 필요하다.
-          - 여기서 두산 API 의 정지를 호출한다
-          - _run() 의 work() 가 goal.is_cancel_requested 를 주기적으로 확인하고
-            goal.canceled() 로 빠져나간다. 지금은 MP 함수가 한 번에 블로킹이라
-            확인 지점이 없다. tunio_server 의 fake_hardware.py 가 잘게 나눠 자면서
-            확인하는 형태로 구현돼 있으니 참고할 수 있다.
-        """
-        self.get_logger().info("취소 요청 수락")
+        with self._lock:
+            if not goal_handle.is_active:
+                return CancelResponse.REJECT
+            session = self._cancel_sessions.setdefault(id(goal_handle), CancelSession())
+            if session.requested.is_set():
+                return CancelResponse.ACCEPT
+            session.requested.set()
+            self._prepared_pluck = None
+            if self.dry_run:
+                session.stop_done.set()
+            else:
+                self._recovery_required = True
+                self._holding_pick = None
+                threading.Thread(
+                    target=request_and_confirm_stop,
+                    args=(self._stop_client, self._motion_client, session,
+                          self._stop_timeout, self._stop_interval), daemon=True).start()
+        self.get_logger().info('취소 접수 — Soft Stop 요청 및 종료 확인 중')
         return CancelResponse.ACCEPT
 
     def _run(self, name, goal, result_type, work):
@@ -259,6 +285,9 @@ class RobotController(Node):
         서버가 message 를 화면·DB에 그대로 싣기 때문에 사유를 사람 말로 남긴다.
         """
         with self._lock:
+            if self._recovery_required and id(goal) not in self._cancel_sessions:
+                goal.abort()
+                return result_type(success=False, message='취소 후 현장 복구 확인 필요')
             if self._running is not None:
                 goal.abort()
                 res = result_type()
@@ -269,21 +298,53 @@ class RobotController(Node):
             if name != "play_string":
                 self._prepared_pluck = None
 
+        session = self._cancel_sessions.setdefault(id(goal), CancelSession())
         res = result_type()
         t0 = time.time()
+        failure = None
+        if not self.dry_run:
+            MP._cancel_check = session.check
         try:
+            session.check()
             work()
-            res.success = True
-            res.message = ""
-            goal.succeed()
-        except Exception as e:                      # noqa: B902 — 사유를 Result 로 넘긴다
-            res.success = False
-            res.message = f"{type(e).__name__}: {e}"
-            self.get_logger().error(f"{name} 실패 — {res.message}")
-            goal.abort()
+            session.check()
+        except Exception as exc:                      # noqa: B902
+            failure = exc
         finally:
-            with self._lock:
-                self._running = None
+            session.work_done.set()
+        # 완료 판정과 취소 접수를 같은 락으로 직렬화한다.
+        with self._lock:
+            canceled = session.requested.is_set()
+            if not canceled:
+                if failure is None:
+                    res.success = True
+                    res.message = ''
+                    goal.succeed()
+                else:
+                    res.success = False
+                    res.message = f'{type(failure).__name__}: {failure}'
+                    self.get_logger().error(f'{name} 실패 — {res.message}')
+                    goal.abort()
+        if canceled:
+            confirmed = session.stop_done.wait(self._stop_timeout + self._stop_interval)
+            res.success = False
+            # rclpy가 cancel callback 반환 후 CANCELING으로 전이할 때까지 기다린다.
+            deadline = time.monotonic() + self._stop_timeout
+            while not goal.is_cancel_requested and time.monotonic() < deadline:
+                time.sleep(.001)
+            if confirmed and session.error is None and goal.is_cancel_requested:
+                res.message = ('취소 완료' if self.dry_run else
+                               'Soft Stop·IDLE 확인 완료 — 현장 복구 확인 후 노드 재시작 필요')
+                goal.canceled()
+            else:
+                res.message = '정지 확인 실패: ' + (session.error or '응답 없음')
+                self.get_logger().error(res.message)
+                goal.abort()
+        if not self.dry_run:
+            MP._cancel_check = None
+        with self._lock:
+            self._cancel_sessions.pop(id(goal), None)
+            self._running = None
         took = time.time() - t0
         # 걸린 시간을 **항상** 남긴다. 서버의 play/adjust 타임아웃이 전부 임시값이고,
         # 특히 줄마다 첫 adjust_peg 는 안에서 Phase 0 를 돌아 훨씬 오래 걸린다.

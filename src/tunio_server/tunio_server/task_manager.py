@@ -156,6 +156,8 @@ class TaskManager(Node):
         self._active_goals = []
         self._registered_pegs = set()  # 이번 작업에서 성공 Result를 확인한 줄
         self.job_id = ''
+        self.error_message = ''
+        self._registration_ready = False  # 등록·복귀 성공으로 발급하는 조율 1회 허가
         self.measurement_id = 0
         self.phase = TuningState.PHASE_IDLE
         self._phase_before_pause = TuningState.PHASE_IDLE
@@ -266,6 +268,7 @@ class TaskManager(Node):
         msg.stamp = self.get_clock().now().to_msg()
         msg.job_id = self.job_id
         msg.phase = self.phase
+        msg.error_message = self.error_message
         msg.current_string = self.current_string
         msg.target_hz = L.TARGETS[self.current_string][1] if self.current_string else 0.0
         msg.measured_hz = self.measured_hz
@@ -325,13 +328,21 @@ class TaskManager(Node):
             self._starting = False
 
     def _do_start(self, res, reregister=False):
+        if not reregister and not self._registration_ready:
+            res.accepted = False
+            res.message = '페그 재등록을 먼저 실행하세요. 조율 작업마다 새 등록이 필요합니다.'
+            return res
         missing = self._servers_not_ready(registration_only=reregister)
         if missing:
             res.accepted = False
             res.message = '노드 준비 안 됨: %s' % ', '.join(missing)
             return res
+        # 조율 접수 시 소비한다. 성공·오류·취소 모두 다음 시작은 재등록이 필요하다.
+        # 노드 준비 부족으로 거부된 요청은 위에서 반환하므로 허가를 소비하지 않는다.
+        self._registration_ready = False
         self._pause.clear()
         self._cancel.clear()
+        self.error_message = ''
         self._registered_pegs.clear()
         self._reset_results()
         self.job_id = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -350,7 +361,7 @@ class TaskManager(Node):
         self._worker.start()
         res.accepted = True
         res.message = ('페그 재등록 접수 %s — 조율 없이 등록·복귀만 실행' if reregister
-                       else '작업 시작 %s — 기존 페그 등록값으로 조율') % self.job_id
+                       else '작업 시작 %s — 이번에 등록한 값으로 조율') % self.job_id
         return res
 
     def _servers_not_ready(self, registration_only=False):
@@ -404,7 +415,7 @@ class TaskManager(Node):
         self._pause.clear()
         self._request_goal_cancel()
         res.accepted = True
-        res.message = '취소 요청'
+        res.message = '취소를 요청했습니다. 현재 동작의 종료 응답을 기다립니다.'
         return res
 
     def on_get_settings(self, req, res):
@@ -490,6 +501,9 @@ class TaskManager(Node):
             raise Aborted('%s goal 거부 — 후속 동작 중단' % what)
         self._track(handle)
         try:
+            # 수락 응답을 기다리는 사이 취소가 들어온 경우도 전달한다.
+            if self._cancel.is_set():
+                handle.cancel_goal_async()
             future = handle.get_result_async()
             wrapped = self._wait(future, timeout, '%s 결과' % what)
             if wrapped is None:
@@ -502,9 +516,14 @@ class TaskManager(Node):
                     raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
+        if self._cancel.is_set() and wrapped.status == GoalStatus.STATUS_CANCELED:
+            raise Cancelled()
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED or not wrapped.result.success:
             raise Aborted('%s 실패(status=%s): %s — 후속 동작 중단'
                           % (what, wrapped.status, wrapped.result.message))
+        if self._cancel.is_set():
+            # 현재 동작은 끝났지만 사용자가 요청한 뒤에는 다음 동작을 시작하지 않는다.
+            raise Cancelled()
         self.get_logger().info('%s 성공 Result 확인' % what)
         return wrapped.result
 
@@ -863,12 +882,15 @@ class TaskManager(Node):
         try:
             self._register_pegs(force=True)
             self._return_home()
+            self._gate()  # 복귀 중 취소 요청까지 확인한 뒤에만 다음 조율을 허용한다
+            self._registration_ready = True
             self.job_id = ''
             self._set_phase(TuningState.PHASE_IDLE, 0)
             self.get_logger().info('페그 재등록·복귀 완료')
         except Cancelled:
             self._set_phase(TuningState.PHASE_CANCELED, 0)
         except Exception as exc:                          # noqa: BLE001
+            self.error_message = str(exc)
             self.get_logger().error('페그 재등록 중단: %s' % exc)
             self._set_phase(TuningState.PHASE_ERROR, 0)
 
@@ -895,9 +917,11 @@ class TaskManager(Node):
         except Cancelled:
             self._finish_cancelled()
         except Aborted as exc:
+            self.error_message = str(exc)
             self.get_logger().error('작업 중단: %s' % exc)
             self._finish_error()
         except Exception as exc:                          # noqa: BLE001
+            self.error_message = str(exc) or type(exc).__name__
             self.get_logger().error('예상치 못한 오류로 중단: %r' % exc)
             self._finish_error()
 
@@ -916,6 +940,7 @@ class TaskManager(Node):
             with self._lock:
                 stuck = list(self._active_goals)
             if stuck:
+                self.error_message = '취소 후에도 로봇 동작 종료를 확인하지 못했습니다.'
                 self.get_logger().error(
                     '취소했는데 goal %d개가 남아 있다. 로봇이 취소를 받지 않는 것으로 보인다'
                     % len(stuck))
