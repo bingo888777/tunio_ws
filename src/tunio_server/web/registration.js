@@ -5,7 +5,7 @@
 class RegistrationTracker {
   constructor() {
     this.busy = false;
-    this.message = '사람이 페그를 돌렸다면 재등록 후 시작하세요. 재등록은 등록·복귀만 수행합니다.';
+    this.message = '페그 재등록 후 시작하세요.';
   }
   begin(state) {
     this.busy = true;
