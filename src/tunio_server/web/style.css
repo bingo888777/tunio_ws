@@ -872,6 +872,19 @@ main { padding: 20px 24px 32px; max-width: 1320px; margin: 0 auto; }
   font-size: 13.5px;
 }
 .search input[type="search"] { width: 300px; max-width: 44vw; }
+/* 기본 화살표는 둥근 칸 오른쪽 끝에 붙어 보여서 직접 그린다. 테마 색을 따라간다 */
+.select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 36px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-dim) 50%),
+    linear-gradient(135deg, var(--text-dim) 50%, transparent 50%);
+  background-position: calc(100% - 21px) 55%, calc(100% - 16px) 55%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  cursor: pointer;
+}
 .search input[type="search"]:focus, .select:focus {
   outline: none;
   border-color: var(--wood);
