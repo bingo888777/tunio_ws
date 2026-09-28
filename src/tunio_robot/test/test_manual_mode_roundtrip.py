@@ -5,7 +5,7 @@ tool/tcp 설정을 위한 MANUAL<->AUTONOMOUS 왕복 단위 테스트. 로봇 �
 (2026-09-23 `tools/tcp_diag.py --manual` 실기로 확정 — AUTONOMOUS 에서 셋 다 -1,
 MANUAL 에서 셋 다 0). `ros2_control`이 브링업마다 로봇을 AUTONOMOUS 로 강제
 전환해 두므로, connect() 는 `_ensure_tool_tcp` 안에서 MANUAL 로 잠깐 왕복한 뒤
-tool/tcp 를 맞추고 반드시 원래 모드로 되돌린다.
+tool/tcp 를 맞추고 AUTONOMOUS로 복귀한다. MANUAL에서 시작해도 같다.
 """
 import pytest
 from tunio_robot import motion_primitives as MP
@@ -79,26 +79,33 @@ def test_autonomous에서_manual로_왕복해서_맞춘다(monkeypatch):
     assert ("set_robot_mode", AUTONOMOUS) in api.calls
 
 
-def test_이미_manual이면_왕복하지_않는다(monkeypatch):
+def test_manual에서_시작해도_autonomous로_복귀한다(monkeypatch):
     api = ModeApi(start_mode=MANUAL, tool="Tool Weight", tcp="GripperDA_v1")
     monkeypatch.setattr(MP, "_api", api)
 
     MP._ensure_tool_tcp(CFG)
 
-    assert not any(c[0] == "set_robot_mode" for c in api.calls)
+    assert api.mode == AUTONOMOUS
+    assert [c for c in api.calls if c[0] == "set_robot_mode"] == [
+        ("set_robot_mode", MANUAL), ("set_robot_mode", AUTONOMOUS),
+    ]
 
 
-def test_모드를_못_읽으면_왕복하지_않고_기존_판정에_맡긴다(monkeypatch):
+def test_모드_전환과_조회를_못하면_기존_설정_대조로_판정한다(monkeypatch):
     class NoModeApi(ModeApi):
         def get_robot_mode(self):
             return -1                       # 두산 래퍼가 실패 시 주는 값
 
-    api = NoModeApi(start_mode=AUTONOMOUS, tool="Tool Weight", tcp="GripperDA_v1")
+    api = NoModeApi(start_mode=AUTONOMOUS, tool="Tool Weight", tcp="GripperDA_v1",
+                    allow_mode_switch=False)
     monkeypatch.setattr(MP, "_api", api)
 
     # 왕복은 못 하지만, 이미 값이 맞으므로 set 실패는 get 대조로 통과한다
     MP._ensure_tool_tcp(CFG)
-    assert not any(c[0] == "set_robot_mode" for c in api.calls)
+    assert [c for c in api.calls if c[0] == "set_robot_mode"] == [
+        ("set_robot_mode", MANUAL),
+    ]
+    assert api.mode == AUTONOMOUS
 
 
 def test_manual_전환이_거부되면_왕복_없이_진행한다(monkeypatch):

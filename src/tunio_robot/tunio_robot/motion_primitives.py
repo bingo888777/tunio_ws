@@ -221,15 +221,40 @@ def _ensure_named(kind, want, logger=None):
     if not want:
         return
     api = _require_api()
-    before = _read_named(kind)
+
+    def read_logged(stage):
+        label = f"[{kind} 설정] {stage}: get_{kind}()"
+        if logger:
+            logger.info(f"{label} 호출 시작 — 응답 대기")
+        try:
+            value = _read_named(kind)
+        except Exception as exc:                 # noqa: BLE001 — 진단 후 기존 예외 유지
+            if logger:
+                logger.error(f"{label} 실패: {exc!r}")
+            raise
+        if logger:
+            logger.info(f"{label} 호출 완료 — 현재 이름 {value!r}")
+            if value is None:
+                logger.warning(f"{label}: 유효한 이름을 읽지 못했다")
+        return value
+
+    before = read_logged("1/3 설정 전 조회")
 
     ret, err = None, None
+    label = f"[{kind} 설정] 2/3 설정: set_{kind}({want!r})"
+    if logger:
+        logger.info(f"{label} 호출 시작 — 응답 대기")
     try:
         ret = getattr(api, f"set_{kind}")(want)
     except Exception as e:                       # noqa: BLE001 — UnboundLocalError 포함
         err = e                                  # 실패해도 아래 확인으로 판정한다
+        if logger:
+            logger.warning(f"{label} 예외: {e!r} — 설정 후 조회로 적용 여부 확인")
+    else:
+        if logger:
+            logger.info(f"{label} 호출 완료 — 반환 {ret!r} (0=성공, -1=실패)")
 
-    now = _read_named(kind)
+    now = read_logged("3/3 설정 후 조회")
     if now == want:
         if logger:
             logger.info(f"{kind}='{want}' 확인 (set 반환 {ret}, 직전 '{before}')")
@@ -295,14 +320,14 @@ def _ensure_tool_tcp(robot_cfg, logger=None):
     279행)이 브링업마다 로봇을 AUTONOMOUS 로 강제 전환해 두므로, 여기서 MANUAL
     로 잠깐 왕복한다.
 
-    왕복이 안 되는 경우(모드를 못 읽음 / 이미 MANUAL / 전환 자체가 거부됨)는
-    막지 않고 그냥 진행한다 — `_ensure_named` 가 이미 set 실패를 get 대조로
-    넘기게 돼 있어(펜던트가 미리 맞춰 둔 경우), 왕복 없이도 통과할 수 있다.
-    왕복했는데 원래 모드로 못 돌아오면, 그건 이후 모든 이동 명령이 거부될 수
-    있는 상태라 조용히 넘기지 않고 멈춘다.
+    시작 모드와 관계없이 MANUAL 전환을 요청하고, 전환이 확인되면 설정 후
+    AUTONOMOUS로 복귀한다. MANUAL 전환을 확인하지 못한 경우에는 기존대로
+    `_ensure_named`의 get 대조로 설정을 확인한다 (펜던트가 미리 맞춘 경우).
+    AUTONOMOUS 복귀를 확인하지 못하면 이후 이동을 진행하지 않고 멈춘다.
     """
     api = _require_api()
-    start_mode = _read_mode(api)
+    start_mode = api.ROBOT_MODE_AUTONOMOUS
+    # 시작 모드와 관계없이 설정 후 AUTONOMOUS로 복귀한다 (실기 확인).
     switched = False
 
     if start_mode is None:
@@ -1029,12 +1054,14 @@ def _target_j1(task, sol):
     api = _require_api()
     try:
         from DR_common2 import posx
-        j = api.ikin(posx(list(task)), sol)
+        # 두산 ikin은 NumPy 배열을 반환한다. 배열 전체를 bool로 판단하지 않는다.
+        j = [float(v) for v in api.ikin(posx(list(task)), sol)]
     except Exception:
         return None
-    if not j or len(j) < 6 or all(abs(float(v)) < 1e-9 for v in j):
+    if (len(j) != 6 or not all(math.isfinite(v) for v in j)
+            or all(abs(v) < 1e-9 for v in j)):
         return None
-    return float(j[0])
+    return j[0]
 
 
 def _current_j1():

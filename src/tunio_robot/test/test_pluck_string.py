@@ -6,6 +6,7 @@ pluck_string 단위 테스트. 두산 API 를 가짜 객체로 바꿔 꽂고 호
 import sys
 import types
 
+import numpy as np
 import pytest
 
 from tunio_robot import motion_primitives as MP
@@ -448,7 +449,8 @@ class SolApi(FakeApi):
         return [self.now_j1] + [0.0] * 5
 
     def ikin(self, pos, sol):
-        return [self.J1_OF_SOL.get(sol, 0.0), -30.0, -90.0, 0.0, 60.0, 0.0]
+        # Ikin.Response.conv_posj는 고정 길이 float64 NumPy 배열이다.
+        return np.array([self.J1_OF_SOL.get(sol, 0.0), -30.0, -90.0, 0.0, 60.0, 0.0])
 
 
 def test_pick_up_with_sol_uses_joint_interpolation(monkeypatch, fake_api, fake_gripper):
@@ -781,3 +783,18 @@ def test_prepared_play_skips_standby_before_single_stroke(fake_api):
     relative = [c for c in fake_api.calls if c[2].get('mod') == 'REL']
     assert len(relative) == 2  # 스트로크 한 번 + 즉시 후퇴 한 번
     assert relative[0][1][:3] == [-8.0, 0.0, 0.0]
+
+
+@pytest.mark.parametrize("joints", [
+    None, -1, [], np.zeros(6), np.array([1.0, 2.0]),
+    np.array([float("nan"), 0, 0, 0, 0, 0]),
+])
+def test_target_j1_invalid_result_is_unknown(monkeypatch, fake_api, joints):
+    monkeypatch.setattr(fake_api, "ikin", lambda pos, sol: joints, raising=False)
+    assert MP._target_j1(HOLDER, 7) is None
+
+
+def test_target_j1_accepts_zero_j1_in_valid_numpy_solution(monkeypatch, fake_api):
+    joints = np.array([0.0, -30.0, -90.0, 0.0, 60.0, 0.0])
+    monkeypatch.setattr(fake_api, "ikin", lambda pos, sol: joints, raising=False)
+    assert MP._target_j1(HOLDER, 7) == 0.0
