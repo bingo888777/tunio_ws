@@ -1,5 +1,6 @@
 """실제 로봇 없이 MoveStop 요청·IDLE 판정·후속 명령 차단을 검증한다."""
 from concurrent.futures import Future
+import sys
 import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -180,7 +181,7 @@ def _recovery_node(held, running='adjust_peg'):
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
         _recovery_required=True, _recovering=True, _recovery_plan=(running, held),
         _recovery_done=threading.Event(), _prepared_pluck=(6, 'x'),
-        _holding_pick=None, _side='left', _from_pick=False, _lift_mm=30.0,
+        _holding_pick=None, _side='left', _from_pick=False, _lift_mm=30.0, _lift_max_z=600.0,
         _recovery_wait=1, dry_run=False, _stop_client=Mock(), _motion_client=Mock(),
         points=SimpleNamespace(motion={'m': 1}, frame=lambda name: f'frame:{name}'),
         get_logger=lambda: Mock())
@@ -199,7 +200,7 @@ def test_recovery_after_stop_lifts_and_waits_in_place(monkeypatch, held):
     node, calls = _recovery_node(held)
     monkeypatch.setattr(MP, '_release', lambda: calls.append(('open',)))
     monkeypatch.setattr(MP, 'cancel_recover_lift',
-                        lambda motion, mm, logger=None: calls.append(('lift', mm)))
+                        lambda motion, mm, logger=None, **kw: calls.append(('lift', mm)))
     monkeypatch.setattr(MP, 'return_home', lambda pose, motion: calls.append(('home', pose)))
 
     RobotController._recover_after_cancel(node, node._recovery_plan)
@@ -225,7 +226,7 @@ def test_recovery_after_stop_lifts_and_waits_in_place(monkeypatch, held):
 def test_recovery_failure_keeps_lock_until_restart(monkeypatch):
     node, calls = _recovery_node(True, running='play_string')
 
-    def boom(motion, mm, logger=None):
+    def boom(motion, mm, logger=None, **kw):
         raise MP.MotionError('movel 거부')
     monkeypatch.setattr(MP, 'cancel_recover_lift', boom)
 
@@ -260,6 +261,40 @@ def test_goal_arriving_during_recovery_waits_then_runs():
     t.join(2)
     assert entered.is_set() and results and results[0].success
     goal.succeed.assert_called_once()
+
+
+def _lift_api(monkeypatch, z, movel_ret=0):
+    calls = []
+    api = SimpleNamespace(
+        DR_BASE=0, DR_MV_MOD_REL=1,
+        get_current_posx=lambda: ([100.0, -20.0, z, 0.0, 180.0, 0.0], 2),
+        movel=lambda pos, **kw: calls.append((list(pos), kw)) or movel_ret)
+    monkeypatch.setitem(sys.modules, 'DR_common2', SimpleNamespace(posx=lambda v: list(v)))
+    monkeypatch.setattr(MP, '_require_api', lambda: api)
+    monkeypatch.setattr(MP, '_transit_speed', lambda motion: (50.0, 50.0))
+    return calls
+
+
+def test_recovery_lift_is_a_relative_base_move(monkeypatch):
+    # 절대 목표로 주면 J6 보호 검사가 IK 의 다른 가지(371도)를 골라 거부한다 (9/29 실기).
+    # 상대 이동은 지금 관절에서 이어져 J6 를 더 감지 않는다
+    calls = _lift_api(monkeypatch, z=231.3)
+    assert MP.cancel_recover_lift({'m': 1}, 30.0, logger=Mock(), max_z_mm=600.0) == 0
+    assert calls == [([0.0, 0.0, 30.0, 0.0, 0.0, 0.0],
+                      {'vel': 50.0, 'acc': 50.0, 'ref': 0, 'mod': 1})]
+
+
+def test_recovery_lift_is_skipped_when_already_high(monkeypatch):
+    # 경유 자세(Z 1153)에서는 아무것도 안 닿았고 더 올릴 수도 없다
+    calls = _lift_api(monkeypatch, z=1153.1)
+    assert MP.cancel_recover_lift({'m': 1}, 30.0, logger=Mock(), max_z_mm=600.0) == 0
+    assert calls == []
+
+
+def test_recovery_lift_rejection_is_an_error(monkeypatch):
+    _lift_api(monkeypatch, z=231.3, movel_ret=-1)
+    with pytest.raises(MP.MotionError):
+        MP.cancel_recover_lift({'m': 1}, 30.0, max_z_mm=600.0)
 
 
 def test_ros_cancel_reaches_canceled_result_without_real_robot():

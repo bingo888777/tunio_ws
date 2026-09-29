@@ -168,8 +168,10 @@ class RobotController(Node):
         self._stop_timeout = float(self.get_parameter('cancel_stop_timeout_sec').value)
         self._stop_interval = float(self.get_parameter('cancel_stop_interval_sec').value)
         self.declare_parameter('cancel_lift_mm', 30.0)             # 실측 전 임시값
+        self.declare_parameter('cancel_lift_max_z_mm', 600.0)      # 이 위면 상승 생략. 임시값
         self.declare_parameter('cancel_recovery_wait_sec', 120.0)  # 실측 전 임시값
         self._lift_mm = float(self.get_parameter('cancel_lift_mm').value)
+        self._lift_max_z = float(self.get_parameter('cancel_lift_max_z_mm').value)
         self._recovery_wait = float(self.get_parameter('cancel_recovery_wait_sec').value)
         if not all(math.isfinite(v) and v > 0 for v in
                    (self._stop_timeout, self._stop_interval)):
@@ -426,7 +428,8 @@ class RobotController(Node):
                 MP._release()
                 self.get_logger().info(
                     "정지 복구 — 그리퍼 열림 (페그를 물고 있었다면 그 자리에 남긴다)")
-            MP.cancel_recover_lift(motion, self._lift_mm, logger=self.get_logger())
+            MP.cancel_recover_lift(motion, self._lift_mm, logger=self.get_logger(),
+                                   max_z_mm=self._lift_max_z)
             self._holding_pick = held            # True/False 는 확실하고, None 은 그대로 모름
         except Exception as exc:                      # noqa: B902
             why = f"{type(exc).__name__}: {exc}"
