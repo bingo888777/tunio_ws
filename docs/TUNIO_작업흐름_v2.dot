@@ -1,3 +1,4 @@
+// 역사 기록 (2026-09-21). 현재 흐름은 TUNIO_작업흐름_v3.dot — 페그 재등록 버튼, 발현 준비 분리, 피크 확인, 즉시 정지.
 digraph TUNIO_FLOW {
   graph [rankdir=TB, fontname="Noto Sans CJK KR", labelloc=t, fontsize=28, newrank=true,
          label=<<B>TUNIO 작업 흐름 v2</B><BR/><FONT POINT-SIZE="13" COLOR="#5A635E">2026-09-21 · 브릿지핀 제외 · 피크 집기/반환 방식 · 응답 목표 2.2초</FONT><BR/> >,
