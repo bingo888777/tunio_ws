@@ -47,6 +47,10 @@ _gripper = None
 _j6_motion = None       # 실제 노드가 감시 설정을 연결한다. 단독 도구는 기존 경로 유지
 _j6_sample = None       # (수신 monotonic 시각, J6). joint_states 콜백만 갱신
 _cancel_check = None  # robot_controller의 현재 Action 취소 검사
+# pick_up 이 실제로 집은 뒤 True, _release() 로 연 뒤 False. 노드의 _holding_pick 이
+# 집기·반환 '도중' 엔 None(모름)인데, 그 사이 취소가 오면 복구가 이걸로 판단한다
+# (2026-09-29). 폭 읽기(#88)가 붙으면 그쪽이 더 확실하고 이건 그때까지의 기록이다.
+_pick_gripped = False
 _robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
@@ -900,8 +904,10 @@ def _grip(preset_name):
 
 
 def _release():
-    """그리퍼를 연다."""
-    return _grip("open")
+    """그리퍼를 연다. 열었으니 쥔 것은 없다 — 취소 복구가 보는 플래그도 내린다."""
+    ret = _grip("open")
+    globals()['_pick_gripped'] = False
+    return ret
 
 
 def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=False):
@@ -1212,6 +1218,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
         _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
+    globals()['_pick_gripped'] = True                   # 이 순간부터 쥐고 있다 (취소 복구가 본다)
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
     _movel_base(above, v_app, a_app)                    # 들어 올린다
     _recover_j6(motion)

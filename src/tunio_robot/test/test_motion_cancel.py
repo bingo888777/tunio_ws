@@ -98,6 +98,7 @@ def test_robot_cancel_stops_and_latches_recovery(monkeypatch):
         session.stop_done.set()
     monkeypatch.setattr('tunio_robot.robot_controller.request_and_confirm_stop', stop_request)
     monkeypatch.setattr(MP, '_cancel_check', None)
+    monkeypatch.setattr(MP, '_pick_gripped', True)   # 쥐고 있는 상황
     plans = []
     node = SimpleNamespace(
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
@@ -146,6 +147,31 @@ def test_robot_cancel_stops_and_latches_recovery(monkeypatch):
     assert not r.success and '복구가 끝나지 않았다' in r.message
     late.abort.assert_called_once()
     assert node._running is None
+
+
+@pytest.mark.parametrize('gripped', [True, False])
+def test_cancel_during_pick_transition_uses_gripper_record(monkeypatch, gripped):
+    # _ensure_pick 이 집으러 가는 동안 _holding_pick 은 None 이다. 그 사이 취소가 오면
+    # pick_up 이 실제로 집었는지(MP._pick_gripped)로 복구 계획을 정한다
+    monkeypatch.setattr('tunio_robot.robot_controller.request_and_confirm_stop',
+                        lambda *a: a[2].stop_done.set())
+    monkeypatch.setattr(MP, '_pick_gripped', gripped)
+    node = SimpleNamespace(
+        _lock=threading.Lock(), _running='prepare_pluck', _cancel_sessions={},
+        _recovery_required=False, _prepared_pluck=None, _holding_pick=None,
+        _recovery_plan=None, dry_run=False, _stop_timeout=1, _stop_interval=.001,
+        _stop_client=Mock(), _motion_client=Mock(), get_logger=lambda: Mock())
+    goal = Mock(is_active=True)
+    assert RobotController.on_cancel(node, goal).name == 'ACCEPT'
+    assert node._recovery_plan == ('prepare_pluck', gripped)
+
+
+def test_release_clears_and_pick_up_grip_sets_the_record(monkeypatch):
+    calls = []
+    monkeypatch.setattr(MP, '_grip', lambda preset: calls.append(preset) or 0)
+    monkeypatch.setattr(MP, '_pick_gripped', True)
+    MP._release()
+    assert calls == ['open'] and MP._pick_gripped is False
 
 
 def _recovery_node(held, running='adjust_peg'):

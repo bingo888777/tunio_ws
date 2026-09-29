@@ -280,8 +280,16 @@ class RobotController(Node):
                 session.stop_done.set()
             else:
                 self._recovery_required = True
-                # 복구가 뭘 해야 하는지는 이 순간의 상태가 정한다 — 지우기 전에 남긴다
-                self._recovery_plan = (self._running, self._holding_pick)
+                # 복구가 뭘 해야 하는지는 이 순간의 상태가 정한다 — 지우기 전에 남긴다.
+                # 판단은 노드의 _holding_pick 이 아니라 **그리퍼 기록**(MP._pick_gripped)으로
+                # 한다. 노드 플래그는 집기·반환 '도중' 엔 None(모름)이고, 반환 중엔 피크를
+                # 놓은 뒤에도 True 로 남아 있다. 기록은 pick_up 이 실제로 집은 순간 True,
+                # _release() 로 연 순간 False 라 취소가 어느 틈에 와도 맞다 (2026-09-29).
+                held = bool(MP._pick_gripped)
+                self.get_logger().info(
+                    f"취소 — 그리퍼 기록: {'피크를 쥐고 있음' if held else '빈손'}"
+                    + ("" if self._holding_pick is not None else " (집기/반환 도중)"))
+                self._recovery_plan = (self._running, held)
                 self._holding_pick = None
                 threading.Thread(
                     target=request_and_confirm_stop,
