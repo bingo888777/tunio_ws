@@ -39,8 +39,8 @@ def main(argv=None):
     ap.add_argument('--peg', type=int, choices=[6, 5, 2, 1], default=6)
     ap.add_argument('--high-only', action='store_true', help='전환을 높은 접근점까지만 실행')
     ap.add_argument('--yaml', default=str(ROOT/'src/tunio_robot/config/teach_points.yaml'))
-    ap.add_argument('--speed-scale', type=float, default=.2,
-                    help='YAML 값 대신 쓸 시험 이동 배율. 기본 0.2, 최대 1')
+    ap.add_argument('--speed-scale', type=float, default=.22,
+                    help='YAML 값 대신 쓸 시험 이동 배율. 기본 0.22, 최대 1')
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument('--execute', action='store_true', help='실물 이동, 각 구간 y 확인')
     mode.add_argument('--check-only', action='store_true', help='실제 현재값/IK 조회. 이동 없음')
