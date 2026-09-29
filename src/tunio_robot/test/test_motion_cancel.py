@@ -181,7 +181,8 @@ def _recovery_node(held, running='adjust_peg'):
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
         _recovery_required=True, _recovering=True, _recovery_plan=(running, held),
         _recovery_done=threading.Event(), _prepared_pluck=(6, 'x'),
-        _holding_pick=None, _side='left', _from_pick=False, _lift_mm=30.0, _lift_max_z=600.0,
+        _holding_pick=None, _side='left', _from_pick=True, _lift_mm=30.0, _lift_max_z=600.0,
+        _open_confirm_mm=35.0, _open_wait=.3, _width_reader=lambda: (lambda: 37.6),
         _recovery_wait=1, dry_run=False, _stop_client=Mock(), _motion_client=Mock(),
         points=SimpleNamespace(motion={'m': 1}, frame=lambda name: f'frame:{name}'),
         get_logger=lambda: Mock())
@@ -192,6 +193,7 @@ def _recovery_node(held, running='adjust_peg'):
         calls.append(('release_pick', node._holding_pick))
         node._holding_pick = False
     node._release_pick = release_pick
+    node._wait_gripper_open = RobotController._wait_gripper_open.__get__(node)
     return node, calls
 
 
@@ -220,7 +222,31 @@ def test_recovery_after_stop_lifts_and_waits_in_place(monkeypatch, held):
     assert not node._recovery_required and not node._recovering
     assert node._recovery_done.is_set() and node._prepared_pluck is None
     assert node._recovery_plan is None
+    assert node._from_pick is False          # '반환 직후' 높이 검사 경로를 강제하지 않는다
     assert RobotController.on_goal(node, None).name == 'ACCEPT'
+
+
+@pytest.mark.parametrize('reader', ['still_gripped', 'unreadable'])
+def test_recovery_never_lifts_unless_gripper_confirmed_open(monkeypatch, reader):
+    # 9/29 실기: 열라는 출력 3ms 뒤에 올렸더니 페그째 기타를 들었다.
+    # 폭으로 열림을 못 보면 올리지 않고 잠근다
+    node, calls = _recovery_node(False)
+    if reader == 'still_gripped':
+        node._width_reader = lambda: (lambda: 19.6)       # 아직 손잡이를 물고 있는 폭
+    else:
+        def broken():
+            raise RuntimeError('Compute Box 응답 없음')
+        node._width_reader = lambda: broken
+    monkeypatch.setattr(MP, '_release', lambda: calls.append(('open',)))
+    monkeypatch.setattr(MP, 'cancel_recover_lift',
+                        lambda motion, mm, logger=None, **kw: calls.append(('lift', mm)))
+
+    RobotController._recover_after_cancel(node, node._recovery_plan)
+
+    assert calls == [('open',)]               # 올리지 않았다
+    assert node._recovery_required and not node._recovering
+    assert node._holding_pick is None
+    assert RobotController.on_goal(node, None).name == 'REJECT'
 
 
 def test_recovery_failure_keeps_lock_until_restart(monkeypatch):
@@ -288,6 +314,12 @@ def test_recovery_lift_is_skipped_when_already_high(monkeypatch):
     # 경유 자세(Z 1153)에서는 아무것도 안 닿았고 더 올릴 수도 없다
     calls = _lift_api(monkeypatch, z=1153.1)
     assert MP.cancel_recover_lift({'m': 1}, 30.0, logger=Mock(), max_z_mm=600.0) == 0
+    assert calls == []
+
+
+def test_recovery_lift_zero_means_no_move(monkeypatch):
+    calls = _lift_api(monkeypatch, z=231.3)
+    assert MP.cancel_recover_lift({'m': 1}, 0.0, logger=Mock(), max_z_mm=600.0) == 0
     assert calls == []
 
 

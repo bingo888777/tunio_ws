@@ -1975,6 +1975,10 @@ def cancel_recover_lift(motion, lift_mm, logger=None, max_z_mm=600.0):
     if not isinstance(now, (list, tuple)) or len(now) < 3:
         raise MotionError("현재 TCP 자세를 못 읽어 정지 복구 상승을 할 수 없다")
     z = float(now[2])
+    if float(lift_mm) <= 0:
+        if logger is not None:
+            logger.info("정지 복구 — cancel_lift_mm 이 0 이라 상승 생략")
+        return 0
     if z >= float(max_z_mm):
         if logger is not None:
             logger.info(f"정지 복구 — 이미 높다 (Z {z:.1f} >= {float(max_z_mm):.0f}), 상승 생략")

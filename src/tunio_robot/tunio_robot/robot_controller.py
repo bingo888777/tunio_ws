@@ -169,9 +169,13 @@ class RobotController(Node):
         self._stop_interval = float(self.get_parameter('cancel_stop_interval_sec').value)
         self.declare_parameter('cancel_lift_mm', 30.0)             # 실측 전 임시값
         self.declare_parameter('cancel_lift_max_z_mm', 600.0)      # 이 위면 상승 생략. 임시값
+        self.declare_parameter('cancel_open_confirm_mm', 35.0)     # 이 이상 읽혀야 '열림'. 임시값
+        self.declare_parameter('cancel_open_wait_sec', 3.0)        # 열림 확인 대기 상한. 임시값
         self.declare_parameter('cancel_recovery_wait_sec', 120.0)  # 실측 전 임시값
         self._lift_mm = float(self.get_parameter('cancel_lift_mm').value)
         self._lift_max_z = float(self.get_parameter('cancel_lift_max_z_mm').value)
+        self._open_confirm_mm = float(self.get_parameter('cancel_open_confirm_mm').value)
+        self._open_wait = float(self.get_parameter('cancel_open_wait_sec').value)
         self._recovery_wait = float(self.get_parameter('cancel_recovery_wait_sec').value)
         if not all(math.isfinite(v) and v > 0 for v in
                    (self._stop_timeout, self._stop_interval)):
@@ -397,6 +401,34 @@ class RobotController(Node):
         self._record(name, goal, res, took)
         return res
 
+    def _wait_gripper_open(self):
+        """
+        그리퍼가 실제로 벌어진 것을 폭으로 확인한다. 반환: 읽은 폭(mm).
+
+        cancel_open_wait_sec 안에 cancel_open_confirm_mm 이상이 안 읽히면 MotionError —
+        호출자는 올리지 않고 잠근다. 폭을 못 읽는 것도 같다(확인이 안 된 건 안 열린 것으로
+        본다). 페그 등록이 쓰는 같은 Modbus 폭 읽기다 (CLAUDE.md 3.6, 폭만 믿는다).
+        """
+        read = self._width_reader()
+        deadline = time.monotonic() + self._open_wait
+        last, err = None, None
+        while True:
+            try:
+                last = float(read())
+                err = None
+            except Exception as exc:                  # noqa: B902
+                last, err = None, exc
+            if last is not None and last >= self._open_confirm_mm:
+                return last
+            if time.monotonic() >= deadline:
+                break
+            time.sleep(0.1)
+        why = (f"마지막 폭 {last:.1f}mm < {self._open_confirm_mm:.0f}" if last is not None
+               else f"폭 읽기 실패: {err}")
+        raise MP.MotionError(
+            f"그리퍼가 열린 것을 {self._open_wait:.0f}초 안에 확인하지 못했다 ({why}) — "
+            "페그를 문 채일 수 있어 올리지 않는다")
+
     def _recover_after_cancel(self, plan):
         """
         취소·일시정지로 멈춘 자리에서 접촉만 풀고 **그 자리에서 기다린다** (2026-09-29).
@@ -426,11 +458,17 @@ class RobotController(Node):
             motion = self.points.motion
             if held is False:
                 MP._release()
+                # 열라는 출력은 즉시 돌아온다. 페그를 40N 으로 문 채면 손가락이 벌어지는
+                # 데 시간이 걸리고, 그 전에 올리면 페그째 기타를 든다 (9/29 실기).
+                # 폭을 읽어 실제로 벌어진 것을 본 뒤에만 올린다. 못 보면 올리지 않는다
+                width = self._wait_gripper_open()
                 self.get_logger().info(
-                    "정지 복구 — 그리퍼 열림 (페그를 물고 있었다면 그 자리에 남긴다)")
+                    f"정지 복구 — 그리퍼 열림 확인 (폭 {width:.1f}mm). "
+                    "페그를 물고 있었다면 그 자리에 남긴다")
             MP.cancel_recover_lift(motion, self._lift_mm, logger=self.get_logger(),
                                    max_z_mm=self._lift_max_z)
             self._holding_pick = held            # True/False 는 확실하고, None 은 그대로 모름
+            self._from_pick = False              # '반환 직후' 경로 검사는 이 자리에 안 맞는다
         except Exception as exc:                      # noqa: B902
             why = f"{type(exc).__name__}: {exc}"
             self._holding_pick = None
