@@ -397,22 +397,26 @@ class RobotController(Node):
 
     def _recover_after_cancel(self, plan):
         """
-        취소로 멈춘 자리에서 스스로 풀고 홈으로 간다 (2026-09-29 사용자 결정).
+        취소·일시정지로 멈춘 자리에서 접촉만 풀고 **그 자리에서 기다린다** (2026-09-29).
+
+        홈으로 가지 않는다 — 일시정지는 거기서 재개하고, 취소는 서버가 ReturnHome 으로
+        따로 보낸다. 로봇은 어느 쪽인지 모르고 알 필요도 없다.
 
         취소 순간의 (하던 Action, 피크를 쥐고 있었나) 로 복구를 고른다 —
           쥐고 있었다(True)  — 발현 준비·발현·반환 중. **그리퍼를 열지 않는다.** 열면
                               피크를 놓치고 비전이 없어 되찾을 수 없다(CLAUDE.md 2절).
-                              올라간 뒤 거치대에 반환하고 홈
+                              올라가서 대기. 다음 goal 은 쥔 채로 이어 간다
           빈손(False)        — 등록·조절 중이라 페그를 물고 있을 수 있다. 그리퍼를 열어
-                              페그를 그 자리에 남기고, 올라간 뒤 홈
-          모름(None)         — 이전 집기가 중간에 실패한 상태. 열지 않고 올라가 홈.
+                              페그를 그 자리에 남기고 올라가서 대기
+          모름(None)         — 이전 집기가 중간에 실패한 상태. 열지 않고 올라가서 대기.
                               피크 상태는 '모름' 그대로라 다음 집기가 스스로 거부한다
         올라가는 건 Base +Z 수직이다 — 페그도 줄도 위에서 접근하므로 그 역방향이 접촉을
-        푸는 가장 짧은 길이다 (MP.cancel_recover_lift).
+        푸는 가장 짧은 길이고, 그 자리에서 다음 Action 이 출발하는 건 평소 경로와 같다
+        (조절 뒤 발현 준비는 원래 페그 위에서 출발한다). MP.cancel_recover_lift.
 
-        세 단계가 다 성공해야 잠금을 푼다. 어느 단계든 실패하면 예전처럼 잠긴 채로 두고
-        (노드 재시작이 해제) 사유를 로그에 남긴다. 그 사이 들어온 goal 은 _run 이
-        _recovery_done 을 기다렸다가 결과에 따라 진행하거나 사유를 실어 실패시킨다.
+        올라가기까지 성공해야 잠금을 푼다. 실패하면 예전처럼 잠긴 채로 두고(노드 재시작이
+        해제) 사유를 로그에 남긴다. 그 사이 들어온 goal 은 _run 이 _recovery_done 을
+        기다렸다가 결과에 따라 진행하거나 사유를 실어 실패시킨다.
         """
         running, held = plan if plan else (None, None)
         why = None
@@ -421,16 +425,9 @@ class RobotController(Node):
             if held is False:
                 MP._release()
                 self.get_logger().info(
-                    "취소 복구 — 그리퍼 열림 (페그를 물고 있었다면 그 자리에 남긴다)")
+                    "정지 복구 — 그리퍼 열림 (페그를 물고 있었다면 그 자리에 남긴다)")
             MP.cancel_recover_lift(motion, self._lift_mm, logger=self.get_logger())
-            if held is True:
-                self._holding_pick = True        # 쥔 게 확실하니 반환 루틴이 받아 준다
-                self._release_pick()
-            elif held is False:
-                self._holding_pick = False
-            MP.return_home(self.points.frame("standby"), motion)
-            self._side = None
-            self._from_pick = False
+            self._holding_pick = held            # True/False 는 확실하고, None 은 그대로 모름
         except Exception as exc:                      # noqa: B902
             why = f"{type(exc).__name__}: {exc}"
             self._holding_pick = None
@@ -444,14 +441,15 @@ class RobotController(Node):
         if why is None:
             if held is None:
                 self.get_logger().warn(
-                    "취소 후 홈 복귀 완료 — 피크를 쥐고 있는지 모르는 상태라 "
+                    "정지 복구 완료(그 자리 대기) — 피크를 쥐고 있는지 모르는 상태라 "
                     "그리퍼를 확인하고 노드를 재시작하라")
             else:
                 self.get_logger().info(
-                    f"취소 후 홈 복귀 완료 (취소 시점: {running or '대기'}) — 재등록·시작 가능")
+                    f"정지 복구 완료 — {'피크를 쥔 채' if held else '빈손으로'} 그 자리에서 대기 "
+                    f"(세운 시점: {running or '대기'}). 다음 goal 을 받는다")
         else:
             self.get_logger().error(
-                f"취소 후 복구 실패 ({why}) — 현장 확인·노드 재시작 전까지 새 동작 거부")
+                f"정지 복구 실패 ({why}) — 현장 확인·노드 재시작 전까지 새 동작 거부")
 
     def _record(self, name, goal, res, took):
         """Goal 하나를 실행 기록에 남기고 파일을 덮어쓴다. 실패해도 조용히 넘어간다."""

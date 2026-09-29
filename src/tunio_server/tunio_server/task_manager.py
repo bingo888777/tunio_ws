@@ -407,7 +407,7 @@ class TaskManager(Node):
         # 취소와 같은 경로로 로봇을 즉시 세운다. 로봇은 스스로 복구해 홈으로 간다
         self._request_goal_cancel()
         res.accepted = True
-        res.message = '일시정지 — 로봇을 세우고 홈으로 보낸다. 재개하면 이 줄을 처음부터 다시 한다'
+        res.message = '일시정지 — 로봇을 그 자리에서 세운다(접촉이면 살짝 든다). 재개하면 이 줄을 처음부터'
         return res
 
     def on_resume(self, req, res):
@@ -906,7 +906,7 @@ class TaskManager(Node):
                 except Paused:
                     # 잡다 말았으니 그 줄은 처음부터, 그리고 이전 각도를 믿지 않고 강제로
                     self.get_logger().warning(
-                        '%d번 페그 등록 중 일시정지 — 로봇이 홈으로 간다. 재개하면 이 줄부터 다시' % no)
+                        '%d번 페그 등록 중 일시정지 — 로봇이 그 자리에서 선다. 재개하면 이 줄부터 다시' % no)
                     self._gate()
                     f = True
             if result is None or not result.success:
@@ -927,6 +927,7 @@ class TaskManager(Node):
             self._set_phase(TuningState.PHASE_IDLE, 0)
             self.get_logger().info('페그 재등록·복귀 완료')
         except Cancelled:
+            self._home_after_stop()
             self._set_phase(TuningState.PHASE_CANCELED, 0)
         except Exception as exc:                          # noqa: BLE001
             self.error_message = str(exc)
@@ -991,7 +992,7 @@ class TaskManager(Node):
         """
         where = ('%d번 줄 ' % string_number) if string_number else ''
         self.get_logger().warning(
-            '%s%s 중 일시정지 — 로봇이 홈으로 간다. 재개하면 처음부터 다시' % (where, what))
+            '%s%s 중 일시정지 — 로봇이 그 자리에서 선다. 재개하면 처음부터 다시' % (where, what))
         self._gate()
         if what in ('adjust_peg', 'register_peg') and string_number:
             self.get_logger().info('%d번 페그를 물고 있다 멈췄다 — 강제 재등록 후 재개' % string_number)
@@ -1022,8 +1023,32 @@ class TaskManager(Node):
             if rec.result == StringResult.RESULT_PENDING:
                 rec.result = StringResult.RESULT_FAILED
                 rec.failure_reason = StringResult.FAIL_CANCELED
+        self._home_after_stop()
         self._set_phase(TuningState.PHASE_CANCELED, 0)
         self.get_logger().info('작업 취소. 저장하지 않는다')
+
+    def _home_after_stop(self):
+        """
+        취소로 로봇을 세운 뒤 홈으로 보낸다 (2026-09-29 사용자 결정).
+
+        로봇은 정지·접촉 풀기·상승까지만 하고 그 자리에서 기다린다 — 일시정지는 거기서
+        재개하므로 로봇이 홈에 가면 안 되고, 취소만 서버가 ReturnHome 으로 보낸다.
+        ReturnHome 은 피크를 쥐고 있으면 거치대에 반환하고 대기 자세로 간다.
+
+        _cancel 을 여기서 내린다. 작업은 이미 끝났고 이 goal 만은 취소 대상이 아니다.
+        보내는 중에 또 취소를 누르면 그 goal 이 세워지고(로봇은 다시 그 자리 대기)
+        여기서 사유만 남기고 CANCELED 로 끝낸다 — 다시 홈을 시도하지 않는다.
+        """
+        self._cancel.clear()
+        self._pause.clear()
+        try:
+            self._return_home()
+        except (Cancelled, Aborted) as exc:
+            self.error_message = '취소 후 복귀 실패: %s' % (exc or '사용자가 복귀도 취소')
+            self.get_logger().error(self.error_message)
+        except Exception as exc:                          # noqa: BLE001
+            self.error_message = '취소 후 복귀 실패: %r' % exc
+            self.get_logger().error(self.error_message)
 
     def _finish_error(self):
         self._set_phase(TuningState.PHASE_ERROR, 0)

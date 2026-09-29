@@ -256,10 +256,14 @@ def test_reregister_forces_each_peg_and_never_tunes_or_saves(failure):
         job_id='registration', cli_register=object(), get_logger=lambda: Mock(),
         _gate=lambda: None, _p=lambda key: 180, _run_action=action,
         _set_phase=lambda phase, no: phases.append(phase), _return_home=home,
-        _tune_string=Mock(), _save=Mock())
+        _tune_string=Mock(), _save=Mock(),
+        _cancel=threading.Event(), _pause=threading.Event(), error_message='')
     n._register_pegs = lambda **kw: TM.TaskManager._register_pegs(n, **kw)
+    n._home_after_stop = TM.TaskManager._home_after_stop.__get__(n)
     TM.TaskManager._run_reregister(n)
-    assert calls == ([(6, True)] if failure in ('register', 'cancel') else
+    # 취소면 로봇은 그 자리에서 서 있으니 서버가 홈으로 보낸다 (2026-09-29)
+    assert calls == ([(6, True), 'home'] if failure == 'cancel' else
+                     [(6, True)] if failure == 'register' else
                      [(no, True) for no in (6, 5, 2, 1)] + ['home'])
     expected = (TM.TuningState.PHASE_CANCELED if failure == 'cancel' else
                 TM.TuningState.PHASE_ERROR if failure else TM.TuningState.PHASE_IDLE)

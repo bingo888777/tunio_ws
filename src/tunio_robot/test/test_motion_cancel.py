@@ -195,7 +195,7 @@ def _recovery_node(held, running='adjust_peg'):
 
 
 @pytest.mark.parametrize('held', [True, False, None])
-def test_recovery_after_cancel_lifts_then_returns_home_and_unlocks(monkeypatch, held):
+def test_recovery_after_stop_lifts_and_waits_in_place(monkeypatch, held):
     node, calls = _recovery_node(held)
     monkeypatch.setattr(MP, '_release', lambda: calls.append(('open',)))
     monkeypatch.setattr(MP, 'cancel_recover_lift',
@@ -205,16 +205,16 @@ def test_recovery_after_cancel_lifts_then_returns_home_and_unlocks(monkeypatch, 
     RobotController._recover_after_cancel(node, node._recovery_plan)
 
     if held is True:
-        # 피크를 쥔 채면 절대 열지 않는다 — 올라가서 반환하고 홈
-        assert calls == [('lift', 30.0), ('release_pick', True), ('home', 'frame:standby')]
-        assert node._holding_pick is False
+        # 피크를 쥔 채면 절대 열지 않는다 — 올라가서 그 자리에서 기다린다. 반환도 홈도 없다
+        assert calls == [('lift', 30.0)]
+        assert node._holding_pick is True
     elif held is False:
-        # 페그를 물고 있을 수 있다 — 먼저 열어 페그를 남기고 올라가 홈
-        assert calls == [('open',), ('lift', 30.0), ('home', 'frame:standby')]
+        # 페그를 물고 있을 수 있다 — 먼저 열어 페그를 남기고 올라가서 기다린다
+        assert calls == [('open',), ('lift', 30.0)]
         assert node._holding_pick is False
     else:
         # 모르면 열지 않는다. 피크 상태는 '모름' 그대로 남긴다
-        assert calls == [('lift', 30.0), ('home', 'frame:standby')]
+        assert calls == [('lift', 30.0)]
         assert node._holding_pick is None
     assert not node._recovery_required and not node._recovering
     assert node._recovery_done.is_set() and node._prepared_pluck is None
@@ -224,12 +224,10 @@ def test_recovery_after_cancel_lifts_then_returns_home_and_unlocks(monkeypatch, 
 
 def test_recovery_failure_keeps_lock_until_restart(monkeypatch):
     node, calls = _recovery_node(True, running='play_string')
-    monkeypatch.setattr(MP, 'cancel_recover_lift',
-                        lambda motion, mm, logger=None: calls.append(('lift', mm)))
 
-    def boom(pose, motion):
-        raise MP.MotionError('movej 거부')
-    monkeypatch.setattr(MP, 'return_home', boom)
+    def boom(motion, mm, logger=None):
+        raise MP.MotionError('movel 거부')
+    monkeypatch.setattr(MP, 'cancel_recover_lift', boom)
 
     RobotController._recover_after_cancel(node, node._recovery_plan)
 

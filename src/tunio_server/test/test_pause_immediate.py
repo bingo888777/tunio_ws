@@ -64,7 +64,7 @@ def test_on_pause_requests_cancel_of_active_goals():
     res = n.on_pause(None, SimpleNamespace())
     assert res.accepted and n._pause.is_set()
     assert cancelled == [1]
-    assert '처음부터' in res.message
+    assert '처음부터' in res.message and '그 자리' in res.message
 
 
 @pytest.mark.parametrize('what, expect_reregister', [
@@ -116,3 +116,36 @@ def test_partial_reregister_keeps_other_strings_registered():
               _gate=lambda: None, cli_register=object(), _registered_pegs={6, 5, 2, 1})
     n._register_pegs([5], force=True)
     assert n._registered_pegs == {6, 5, 2, 1}
+
+
+def _cancel_node(**extra):
+    calls = []
+    n = _node(_active_goals=[], results={6: SimpleNamespace(result=0, failure_reason=0)},
+              _return_home=lambda: calls.append('home'), error_message='',
+              _set_phase=lambda phase, no=0: calls.append(('phase', phase)))
+    n._finish_cancelled = TM.TaskManager._finish_cancelled.__get__(n)
+    n._home_after_stop = TM.TaskManager._home_after_stop.__get__(n)
+    for k, v in extra.items():
+        setattr(n, k, v)
+    return n, calls
+
+
+def test_finish_cancelled_sends_robot_home_then_ends_canceled():
+    n, calls = _cancel_node()
+    n._cancel.set()
+    n._pause.set()
+    n._finish_cancelled()
+    assert calls == ['home', ('phase', TM.TuningState.PHASE_CANCELED)]
+    assert not n._cancel.is_set() and not n._pause.is_set()   # 복귀 goal 은 취소 대상이 아니다
+    assert n.results[6].failure_reason == TM.StringResult.FAIL_CANCELED
+    assert n.error_message == ''
+
+
+def test_finish_cancelled_home_failure_is_logged_and_still_canceled():
+    def fail():
+        raise TM.Aborted('피크 반환·대기 복귀 실패')
+    n, calls = _cancel_node(_return_home=fail)
+    n._cancel.set()
+    n._finish_cancelled()
+    assert calls == [('phase', TM.TuningState.PHASE_CANCELED)]
+    assert '복귀 실패' in n.error_message
