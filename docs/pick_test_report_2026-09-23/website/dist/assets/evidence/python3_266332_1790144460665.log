@@ -1,0 +1,21 @@
+[INFO] [1790144460.736034527] [robot_controller]: 교시점 로드: /home/sh/tunio_ws/src/tunio_robot/config/teach_points.yaml
+[INFO] [1790144460.736415239] [robot_controller]: 실행 기록: /home/sh/.tunio/robot_data/2026-09-23_152100_node_session.json
+[INFO] [1790144460.736750200] [robot_controller]: 이동 속도 배율 0.2배 (관절 60deg/s · 직선 250mm/s 에서 자른다). 페그 회전·발현 스트로크·접촉 직전은 배율을 안 탄다
+[INFO] [1790144460.737119546] [robot_controller]: 페그 손잡이 각 등록: 없음 — Phase 0 필요
+[INFO] [1790144463.693481297] [robot_controller]: 서비스 디스커버리 확인 (13개)
+[INFO] [1790144465.238089135] [robot_controller]: set_robot_mode(0) -> 0 (0=성공,-1=실패), 지금 모드 0
+[INFO] [1790144467.665514097] [robot_controller]: tool='Tool Weight' 확인 (set 반환 0, 직전 'Tool Weight')
+[INFO] [1790144467.695232131] [robot_controller]: tcp='GripperDA_v1' 확인 (set 반환 0, 직전 'GripperDA_v1')
+[INFO] [1790144468.238318101] [robot_controller]: set_robot_mode(1) -> 0 (0=성공,-1=실패), 지금 모드 1
+[INFO] [1790144468.240650824] [robot_controller]: 두산 API 연결: dsr01 / m0609 tool='Tool Weight' tcp='GripperDA_v1'
+[INFO] [1790144468.260186468] [robot_controller]: robot_controller 시작
+[WARN] [1790144582.262549895] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.0mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144585.948588197] [robot_controller]: 피크 없음 — 거치대 재집기 1/2
+[INFO] [1790144585.954652597] [robot_controller]: 피크 반환 재집기 상단: 목표 [591.63, -143.75, 214.0], 실제 [591.6273193359375, -143.7483673095703, 213.95774841308594], 오차 0.04mm
+[WARN] [1790144590.060526651] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.0mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144593.748007842] [robot_controller]: 피크 없음 — 거치대 재집기 2/2
+[INFO] [1790144593.752056650] [robot_controller]: 피크 반환 재집기 상단: 목표 [591.63, -143.75, 214.0], 실제 [591.6280517578125, -143.7496337890625, 213.959228515625], 오차 0.04mm
+[WARN] [1790144597.758175084] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.0mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144601.448150967] [robot_controller]: 피크 재집기 2회 모두 빈손. 홈 복귀 후 작업을 종료한다
+[ERROR] [1790144617.648052324] [robot_controller]: play_string 실패 — PickMissingError: 피크 없음. 재집기 2회 실패. 홈 복귀 완료. 작업을 종료한다; 피크 재집기 2회 모두 빈손. 홈 복귀 후 작업을 종료한다
+[INFO] [1790144617.648831054] [robot_controller]: play_string 실패 — 136.5초
