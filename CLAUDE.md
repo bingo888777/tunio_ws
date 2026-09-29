@@ -3,9 +3,10 @@
 이 파일은 Claude Code / AI agent가 이 저장소에서 작업할 때 읽는 맥락 문서다.
 사람이 읽어도 되지만, 1차 독자는 agent다. 아래 규칙과 결정 사항을 어기지 말 것.
 
-> **마지막 갱신 2026-09-22** — 통합 기준 `f1b1f1d` (main, #81·#83·#85·#86 포함).
-> 로컬 피크 확인 변경을 통합했으며 검증 기록은 `docs/피크_통합검증_2026-09-22.md`.
-> **피크 집기 확인은 구현·내부 검증 완료, 실기 검증 전이다** — 2절·3.6.
+> **마지막 갱신 2026-09-30** — 기준 main `190c508` (#110·#111·#113·#114·#115·#116 포함).
+> 9/29 실기 반영: 취소·일시정지 즉시 정지와 "재개 = 그 줄 처음부터", 피크 폭 확인·재집기·보충 대기
+> (`verify_pick:=true`, 기본값은 아직 false), 관제 웹 개편, 홈 생략 이동·경유 블렌딩.
+> 현재 구성은 `README.md` · `docs/TUNIO_시스템아키텍처_v5.md` · `docs/TUNIO_작업흐름_v3.dot`.
 > 그 뒤 커밋이 있으면 여기부터 의심할 것.
 
 ---
@@ -55,21 +56,18 @@
   - 페그를 잡으려면 손가락을 써야 하므로, 발현과 페그 조절 사이마다
     피크를 놓고 다시 집는다. 조절 1회마다 반환·집기가 한 번씩 더 붙는다.
   - 거치대 위치·피크 파지 폭/힘은 교시 대상이다 (tunio_robot 의 teach_points.yaml).
-  - **기본 동작은 "잡았다고 보고 진행" 이다** (기획서 7절, 2026-09-21 결정).
-    결과적으로 실패하면 그 줄을 실패로 처리한다. 후보와 근거는 3.6
-  - **단 폭을 읽을 수 있으면 확인한다** (2026-09-22, 성현 결정).
-    막고 있던 조건이 풀렸다 — Compute Box 가 로봇 제어 PC 에서 보이는 것이
-    확인됐고(3.6) 빈손 13.0 / 피크 13.7mm 로 갈렸다. **범위 결정을 뒤집는 게
-    아니다** — 단 2026-09-23 결정으로 읽기 2회 실패는 피크 없음으로 처리한다.
-    팀 확인 항목은 `TODO.md` 7절
-  - ⚠️ **`verify_pick` 기본값은 `false` 다** (2026-09-23 성현 확정, PR #88 리뷰).
-    아무 옵션 없이 띄우면 **예전 경로 그대로** — 잡았다고 보고 진행한다.
-    실기 검증이 안 끝난 동작을 기본으로 배포하지 않으려는 것이다.
-    폭 읽기가 필요한 회차에서만 `verify_pick:=true` 로 켠다.
-    **실기 검증이 끝나면 기본값을 다시 올린다.**
-  - **대가는 크다.** 놓친 피크는 비전이 없어 되찾을 수 없고, 사람이 다시
-    끼워주기 전까지 **이후 줄도 전부 실패한다.** 제외했다는 사실과 이 문장은
-    항상 같이 읽어야 한다
+  - **피크 확인은 구현됐고 실기로 확인됐다** (#88 → #115, 2026-09-29). 집은 직후·
+    발현 후 후퇴 뒤·재개 직후에 그리퍼 폭으로 본다. 빈손 13.0 / 피크 13.7mm, 하한 13.3mm.
+    읽기 2회 실패는 없음으로 처리한다. 없으면 재집기 2회, 소진하면 홈 복귀 후
+    `pick_refill_required` 로 끝내고 서버는 PAUSED + `robot_notice` 로 사람을 기다린다.
+    사람이 피크를 꽂고 웹 「재개」 → 같은 줄 발현 준비부터, `resumed=true` 로 로봇이 다시 확인.
+    9/29 실기: 정상 흐름 폭 13.5~13.7 · 빈손 → 재집기 → 홈 → 웹 재개 → 이어감 ✓
+  - ⚠️ **`verify_pick` 기본값은 아직 `false` 다** (`robot_controller.py`, 런치 둘 다).
+    아무 옵션 없이 띄우면 **예전 경로 그대로** — 잡았다고 보고 진행하고 실패하면 그 줄을
+    실패로 처리한다. 켜려면 `verify_pick:=true`. 기본값을 올릴지는 정묵 판단(#115).
+  - 폭 문턱은 조건당 2회 표본의 잠정값이다. 장수는 안 가린다(1장만 남아도 '있음').
+  - **대가는 여전히 크다.** `verify_pick` 을 끄고 놓친 피크는 되찾을 수 없고, 사람이
+    다시 끼워주기 전까지 **이후 줄도 전부 실패한다.**
   - 집기·반환을 **언제 할지는 로봇이 스스로 판단한다.** 서버는 지시하지 않는다.
     재개 사실과 알림은 PlayString.resumed/Feedback.warning 및 TuningState.robot_notice로 전달한다.
 - 마이크: **USB 외장 마이크로 확정(구매 완료).** 노트북 내장은 게인 조절 폭이 좁아 쓰지 않는다
@@ -251,11 +249,10 @@
   빈손과 문 상태를 가를 수 있다. **파지 감지 플래그는 못 쓴다** — 위 항목 참조.
   WebLogic 에서 RG2-0 을 조건으로 걸어 `get_digital_input()` 으로 읽는 방법도
   가능하다(2026-09-19 확인). Modbus 가 안 되면 이쪽으로 간다.
-  - **단 확인 기능 자체가 이번 범위에서 빠졌다** (기획서 7절, 2026-09-21 결정).
-    위는 **향후 과제의 후보 순위**이지 지금 만들어야 할 요구사항이 아니다.
-    지금 동작은 2절 그대로 — 잡았다고 보고 진행하고, 실패하면 그 줄을 실패로 처리한다.
-  - 제외의 대가는 그대로 남는다. 놓친 피크는 되찾을 수 없고, 사람이 다시
-    끼워주기 전까지 **이후 줄도 전부 실패한다.** 이슈 #39 가 그 복구 경로 건이다.
+  - **Modbus 폭 읽기로 구현됐다** (#88 → #115, 2026-09-29 실기 확인). 9/21 의 "이번 범위
+    제외" 결정은 Compute Box 도달 확인(2026-09-22)으로 막던 조건이 풀리며 뒤집혔다.
+    `verify_pick:=true` 로 켠다(기본 false). 동작은 2절.
+  - 끈 채로 놓친 피크는 되찾을 수 없고 **이후 줄도 전부 실패한다.** 복구 경로는 이슈 #39.
 - 페그는 **여유를 준 폭**으로 문다. 꽉 물면 손목 회전축과 페그 축이
   어긋날 때 옆힘이 걸려 많이 못 돌린다. 단 그 여유가 그대로 백래시가 되므로
   **파지 폭을 확정한 뒤에 백래시를 잰다** (tools/peg_cal.py --backlash).
@@ -351,7 +348,9 @@
 
 ## 5. 작업 흐름 (3 Phase)
 
-**Phase 0 · 페그 초기 등록 (작업 시작 전 1회)**
+**Phase 0 · 페그 재등록 (관제 웹 「페그 재등록」 버튼 · 조율 1회마다)**
+시작 버튼은 등록하지 않는다(2026-09-23 정정). 재등록은 먼저 ReturnHome 으로 대기 자세에
+선 뒤 6→5→2→1 을 force=true 로 등록하고 복귀한다. 성공해야 시작 허가가 1회 발급된다.
 로봇은 페그 손잡이가 지금 어느 각도로 서 있는지 모른다. 사람이 마지막으로
 돌려놓은 상태라 매번 다르다. 안 맞으면 **물리면서 페그를 교시 각으로 되돌려
 버린다**(2026-09-21 실측 확인 — 헛무는 게 아니라 조용히 틀린다).
@@ -433,7 +432,8 @@ src/
 
 ### 노드 관계
 - task_manager ─ measure_pitch Action ─ audio_analyzer
-- task_manager ─ play_string / adjust_peg / strum_all Action ─ robot_controller
+- task_manager ─ register_peg / prepare_pluck / play_string / adjust_peg / return_home Action ─ robot_controller
+  (strum_all 은 정의만, 정상 흐름에서 호출 안 함 — #84)
 - task_manager ─ /tuning/state Topic ─ web_node ─ 브라우저(localhost)
 - task_manager ─ get_history / save_job Service ─ result_store ─ SQLite
 - 설정 조회·변경 Service는 task_manager 자신이 제공한다 (설정 보유 노드이자
@@ -442,12 +442,12 @@ src/
 ### 2 PC 분산 (동일 Wi-Fi, 같은 ROS_DOMAIN_ID) — 2026-09-22 변경
 **PC 3대에서 2대로 줄었다.** 마이크와 서버를 한 대로 합쳤다. 노드도 인터페이스도
 그대로고 **어느 PC 에서 도는가만 바뀌었다.** 자세한 것은
-`docs/TUNIO_시스템아키텍처_v3.md`.
+`docs/TUNIO_시스템아키텍처_v5.md` (v3 은 역사 기록).
 - 정정인 PC: tunio_server + tunio_audio  (`ros2 launch tunio_bringup station.launch.py`)
 - 로봇 제어 PC: tunio_robot (+ 두산 컨트롤러 유선 LAN)
   (`ros2 launch tunio_robot robot.launch.py dry_run:=false`)
 
-**랜을 건너는 인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다.**
+**랜을 건너는 인터페이스는 `/robot/register_peg`·`prepare_pluck`·`play_string`·`adjust_peg`·`return_home` 다섯이다** (`strum_all` 은 정의만).
 `/audio/measure_pitch` 는 한 PC 안으로 들어와 왕복이 없어졌다 — 측정 응답 2.2초
 예산에 유리하다. 대신 정정인 PC 한 대에서 노드 4개가 도니 **통합 첫 회차에서
 응답 시간이 2.2초를 넘는지 봐야 한다.**
@@ -460,20 +460,24 @@ Discovery Server 를 띄우는 자리도 서버 PC 에서 **정정인 PC** 로 �
 **기준 문서는 `docs/TUNIO_INTERFACE_SPEC.md`다. 코드와 다르면 문서가 기준.**
 아래는 요약이며, 필드 단위는 명세나 `ros2 interface show`로 확인할 것.
 
-**Action (4)**
-- /robot/play_string — 줄 번호 → 발현
+**Action (7)**
+- /robot/register_peg — 줄 번호, force → 손잡이 각도 등록·캐시. 웹 재등록은 force=true
+- /robot/prepare_pluck — 줄 번호, resumed → preparation_id(일회용), pick_refill_required.
+  피크 집기(확인)·줄 위 접근점까지
+- /robot/play_string — 줄 번호, resumed, preparation_id → 발현·5mm 후퇴. Feedback warning
 - /robot/adjust_peg — 줄 번호, direction(±1), angle_deg(양수).
   백래시 마무리(풀었다 조이기)는 **task_manager가 결정**하고 로봇은 시킨 대로만 한다
-- /robot/strum_all — 전체 줄 훑어 화음 (측정 없는 연출)
+- /robot/return_home — 피크 반환·대기 자세. 완료 뒤·취소 뒤·재등록 전
+- /robot/strum_all — 정의만. 정상 흐름에서 호출하지 않는다 (#84, #104 넥 닦기로 대체 검토)
 - /audio/measure_pitch — job_id, string_number, measurement_id, target_hz,
   timeout_sec, onset_timeout_sec → 준비 Feedback, 측정 Result
 
 **Service (5)**
-- /tuning/start, /tuning/pause, /tuning/resume, /tuning/cancel — 넷이 CommandTuning 공유.
-  어느 이름으로 불렸는지가 곧 명령이다
+- /tuning/start, pause, resume, cancel, reregister_pegs — 다섯이 CommandTuning 공유.
+  어느 이름으로 불렸는지가 곧 명령이다. accepted 는 접수이지 완료·물리 정지가 아니다
 - /tuning/get_settings, /tuning/set_settings, /tuning/get_history, /tuning/save_job
 
-**Message (4)** — TuningState, StringResult, TuningSettings, JobSummary
+**Message (4)** — TuningState(+ robot_notice · error_message), StringResult, TuningSettings, JobSummary
 - /tuning/state — reliable, depth 1, **transient local** (늦게 켠 UI도 마지막 상태를 받는다)
 
 > measure_pitch Result에는 요청 식별자(job_id·string_number·measurement_id)를 그대로
@@ -571,12 +575,13 @@ ros2 launch tunio_bringup real_all.launch.py dry_run:=false gripper:=rg2 device:
 조절 단계에서 PHASE_ERROR 로 멈춘다.
 
 `colcon test` 로 돌린다. 테스트 패키지는 `tunio_robot`, `tunio_server`, `tunio_audio`다.
-2026-09-23 기준 로봇 379 / 서버 71 / 오디오 19, 합계 469개다.
+2026-09-29 기준 로봇 601 / 서버 153 / 오디오 28, 합계 782개다 (#114·#115).
+로봇 테스트는 두산 라이브러리(`DR_common2`)가 있어야 전부 돈다.
 
 - ⚠️ **`tunio_bringup` 은 `1 package failed` 로 빨갛게 찍힌다. 깨진 게 아니다.**
   `test/` 디렉터리가 없어서 pytest 가 `Ran 0 tests` 로 끝내고 exit code 5 를 낸다.
   `tunio_interfaces` 도 `test/` 가 없지만 이쪽은 조용히 넘어간다.
-  **469 tests, 0 failures 가 나왔으면 통과한 것이다.** 아래 tunio_server 사건이
+  **782 tests, 0 failures 가 나왔으면 통과한 것이다.** 아래 tunio_server 사건이
   "테스트 0개가 통과처럼 보인" 경우라면, 이건 그 반대로 **통과가 실패처럼 보이는**
   경우다. 처음 돌리는 사람이 여기서 멈추지 않게 적어 둔다.
 
@@ -622,9 +627,13 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - ⚠️ 둘 다 **v1.2 시점이라 이후 결정이 안 들어가 있다.** 피크 집기·반환,
   TCP 통일, Phase 0 가 대표적이다. 머리말의 '이후 갱신' 항목을 같이 볼 것
 
-**도식** — 최신 인터페이스 설명은 v4 (웹 후속 연결은 미병합 표시 참조)
+**도식** — 최신은 아키텍처 v5 · 작업 흐름 v3 (2026-09-30)
 
-- **docs/TUNIO_시스템아키텍처_v4.md · .svg · .png** — #89 준비 분리·#98 강제 재등록 반영. v3 템플릿을 유지하며 웹 후속 연결의 적용 상태는 v4 머리말을 따른다.
+- **docs/TUNIO_시스템아키텍처_v5.md · .py · .svg · .png** — 웹 개편·즉시 정지/재개·피크 확인·
+  보충 대기·새 필드 반영. 생성기가 SVG 를 만들고, PNG 는 rsvg(우분투) 또는 headless Chrome(맥)
+- **docs/TUNIO_작업흐름_v3.dot · .svg · .png** — 페그 재등록 버튼, 발현 준비 분리, 피크 확인,
+  즉시 정지. graphviz `dot` 으로 렌더 (맥에서는 @viz-js/viz 로 만들었다)
+- docs/TUNIO_시스템아키텍처_v4.md · .svg · .png — 역사 기록 (9/23). #89 준비 분리·#98 강제 재등록
 - docs/TUNIO_시스템아키텍처_v2.svg · .png, docs/TUNIO_작업흐름_v2.svg · .png
   - 아키텍처는 **파이썬 생성기**(`TUNIO_시스템아키텍처_v2.py`)가 SVG 를 만든다.
     graphviz 가 아니다. 작업 흐름은 `TUNIO_작업흐름_v2.dot` (graphviz)
@@ -736,13 +745,15 @@ colcon test --packages-select tunio_server && colcon test-result --all
 - 페그 파지 판정 — **폭으로 한다. 회전 토크로는 안 된다**(2026-09-21 허공 회차로 확정).
   `close`(15mm)로 조여 물림 19.6 / 사점 32.8 / 빈손 13.0mm 를 가른다.
   작업용 `peg`(21mm)로는 손잡이보다 넓어 못 잰다. 근거는 3.6
-- 피크 집기 확인 — **기본은 "잡았다고 보고 진행"**(2026-09-21, 기획서 7절).
-  **폭을 읽을 수 있으면 확인한다**(2026-09-22 성현 결정). 빈손 13.0 /
-  피크 13.7mm 로 갈리고, 하한은 13.3mm 다(9/23 피크 13.4 오검출로 낮춤).
-  장수는 안 가린다. 읽기 2회 실패는 없음으로 처리한다(2026-09-23 정정).
-  **범위 결정을 뒤집는 게 아니라 막던 조건이 풀린 것이다** — 팀 확인은 TODO 7절
-  - **`verify_pick` 기본값은 `false`**(2026-09-23 확정, PR #88 리뷰). 실기 검증
-    전이라 켜진 채로 배포하지 않는다. `verify_pick:=true` 로만 켠다. 2절 참조
+- 피크 집기 확인 — **구현·실기 확인 완료** (#88 → #115, 2026-09-29). 그리퍼 폭으로 판정
+  (빈손 13.0 / 피크 13.7mm, 하한 13.3mm). 장수는 안 가린다. 읽기 2회 실패는 없음.
+  없으면 재집기 2회 → 홈 → 웹 보충 대기 → 재개. 2절·3.6
+  - **`verify_pick` 기본값은 아직 `false`** — 켜려면 `verify_pick:=true`. 기본값 승격은 정묵 판단
+- 취소·일시정지 — **로봇 즉시 정지** (MoveStop → IDLE), 접촉만 풀고 대기. 취소는 서버가
+  ReturnHome 후 CANCELED, **재개는 그 줄을 처음부터** (조절·등록 중이었으면 강제 재등록).
+  2026-09-29 사용자 변경. 근거는 아래 "실물 취소 구현" 절
+- 페그 재등록 — 시작 버튼은 등록하지 않는다. 웹 「페그 재등록」이 ReturnHome → RegisterPeg(force)
+  6→5→2→1 → ReturnHome. **조율 1회마다 필요**(허가 1회 소비). 2026-09-23·29
   - 피크 유무를 **모르는** 상태(`_holding_pick is None`)에서는 자동 복구를 하지
     않되, 거부하기 전에 **폭을 한 번 읽어** "물려 있다 / 비어 있다"를 메시지에
     싣는다. 로봇을 안 움직이므로 안전하다 (PR #88 리뷰 제안, 이슈 #39 일부)
@@ -785,11 +796,10 @@ colcon test --packages-select tunio_server && colcon test-result --all
   Modbus **폭 읽기**가 1순위이고 Phase 0 가 이미 그렇게 판정한다. 파지 감지
   플래그는 빈손도 '있음' 으로 읽혀 쓸 수 없다 (3.6). 남은 후보는 정지 baseline
   차이인데 한 세션 반복 측정이 필요하다
-- 피크 집기 확인 — **실기 검증만 남았다**(2026-09-22). Modbus 폭 읽기로 구현했고
-  판정은 도구로 확인했지만, `robot_controller` 경로(Action)로 집기 → 확인 →
-  재집기까지 돌려 본 적이 없다. 문턱도 조건당 2회로 잡은 잠정값이다.
-  Compute Box 도달 확인은 **끝났다**(3.6). 놓치면 되찾을 수 없다는 대가는
-  그대로다 — 복구 경로는 이슈 #39
+- 피크 폭 문턱 13.3mm — 조건당 2회 표본의 잠정값. 20회씩 다시 재서 확정
+  (`teach_points.yaml` `pick_stack.samples_per_state`). `verify_pick` 기본값 승격 여부도 미정
+- 취소 복구 임시값 — `cancel_lift_mm` 30 · `cancel_open_confirm_mm` 35 · `cancel_recovery_wait_sec` 120.
+  `prepare_timeout_sec` 30 은 9/29 실측 50~74초라 짧다(#111)
 - 로봇 오류가 연속으로 날 때 작업 전체를 중단할지 (지금은 줄마다 재시도를 소진한다)
 - GetHistory 응답에 실패 사유 필드를 둘지 (지금은 found=false 만 와서 UI가
   '기록 없음'과 'DB 오류'를 구분하지 못한다)
@@ -914,7 +924,7 @@ colcon test --packages-select tunio_server && colcon test-result --all
 ### 실물 취소 구현 (2026-09-23 사용자 요청)
 
 - MoveStop(mode=2) + CheckMotion(IDLE)로 실물 정지를 요청·확인한다. 이동용 DSR 래퍼와 분리된 ROS 클라이언트를 사용한다. 취소 후 추가 이동/그리퍼 I/O/자동 복귀를 막는다.
-- 정지·Action 종료 확인이 없으면 실패로 보고하며 새 실물 Action을 잠근다. 정상 취소 후에도 현장 접촉 상태 복구·노드 재시작 전에는 새 Action을 거부한다.
+- 정지·Action 종료 확인이 없으면 실패로 보고하며 새 실물 Action을 잠근다. ~~정상 취소 후에도 노드 재시작 전에는 새 Action을 거부한다~~ → 2026-09-29 변경(아래): 접촉 해제까지 성공하면 스스로 잠금을 푼다.
 - 정지 시간 5초·재확인 주기 0.1초는 조정 가능한 임시값이다.
 - **2026-09-29 사용자 변경 — 취소·일시정지 모두 로봇을 즉시 세운다. 로봇은 그 자리에서 기다린다.**
   정지 확인(MoveStop + CheckMotion IDLE)이 성공하면 로봇이 취소 순간의 (하던 Action, 피크를
