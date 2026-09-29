@@ -2701,7 +2701,8 @@ def wipe_strings(points, motion, logger=None):
 
         ret_on = compliance(motion, on=True)             # 넥이 안 수평이어도 뻣뻣하게 안 민다
         if logger:
-            logger.info(f"순응제어 켜기: task_compliance_ctrl 반환={ret_on!r} (0 정상 / -1 거부 / None 은 stx 미설정)")
+            logger.info(f"순응제어 켜기: task_compliance_ctrl 반환={ret_on!r} "
+                        "(0 정상 / -1 거부 / None 은 stx 미설정)")
         try:
             _wipe_stroke(wipe.end.task, motion, logger=logger)
         finally:
