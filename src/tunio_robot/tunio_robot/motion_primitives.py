@@ -2632,8 +2632,15 @@ def wipe_strings(points, motion, logger=None):
     ⚠️ **미교시면 여기서 막힌다.** 아래 `points.wipe()`(pickup·start·end·
     return_box)가 채워져야 실제로 돈다.
 
-    순서 (2026-09-23 사용자 지정)
-      1. 거치대에서 안경닦이 집기 (pick_up 재사용 — 피크 집기와 같은 패턴)
+    순서 (2026-09-23 사용자 지정, 1번 항목은 2026-09-29 실기로 접근 방식 추가)
+      1. **안경닦이 잡으러 가기 전, X·Y 먼저 맞추고 그다음 Z 를 내린다.**
+         지금 자리에서 픽업 자리로 대각선으로 바로 가면 1번 줄을 스쳤다
+         (2026-09-29 실기 확인) — 그래서 두 동작으로 나눴다. 이후
+         `pick_up()`은 이미 X·Y 가 맞은 자리에서 내려가므로 사실상 수직이다.
+         ⚠ 순수 위치 제어 이동이라 힘 제어 관련 멈춤과는 무관하지만, 직전
+         동작이 남긴 손목 방향(자세)까지는 안 바꾼다 — 줄마다 방향이 달라
+         물리적 여유는 실기로 계속 봐야 한다.
+      1-1. 거치대에서 안경닦이 집기 (pick_up 재사용 — 피크 집기와 같은 패턴)
       2. **픽업 자리에서 Z 만 먼저 닦기 높이(시작점 Z)로 올린 뒤, 그다음에
          수평으로 시작점까지 이동한다.** 높이와 수평 이동을 한 번에 섞은
          대각선으로 가면 그 경로가 기타를 쓸고 갈 수 있다 — 픽업 자리
@@ -2648,10 +2655,31 @@ def wipe_strings(points, motion, logger=None):
     ensure_tcp()
     wipe = points.wipe()                                # 미교시면 여기서 막힌다
     v_app, a_app = _transit_speed(motion)
+    travel_z = float(motion.get("wipe_travel_z_mm", wipe.start.task[2]))
+
+    # 지금 자리에서 픽업 자리까지 대각선으로 바로 가면 1번 줄을 스친다
+    # (2026-09-29 실기 확인). X·Y 만 먼저 맞추는 것으로는 부족했다 — verify_pass
+    # 직후라 현재 높이가 줄 근처로 낮을 수 있어, 그 높이에서 수평 이동해도
+    # 여전히 기타 위를 가로지른다. 그래서 먼저 안전 높이(travel_z, pickup→start
+    # 구간에 이미 쓰는 값과 같다)로 Z 만 올리고, 그다음에만 X·Y 를 옮긴다 —
+    # 지금 높이가 이미 더 높으면 굳이 내리지 않는다.
+    cur = list(read_posx()[0][:6])
+    safe_z = max(cur[2], travel_z)
+    if safe_z - cur[2] > 0.5:
+        up_first = list(cur)
+        up_first[2] = safe_z
+        if logger:
+            logger.info(f"안경닦이 픽업 접근 — 먼저 Z 를 안전 높이 {safe_z:.0f}mm 로 올린다")
+        _movel_base(up_first, v_app, a_app)
+        cur[2] = safe_z
+    xy_first = list(cur)
+    xy_first[0], xy_first[1] = wipe.pickup.task[0], wipe.pickup.task[1]
+    if logger:
+        logger.info("안경닦이 픽업 접근 — 그다음 X·Y 를 맞춘다 (기타 위 대각선 이동 방지)")
+    _movel_base(xy_first, v_app, a_app)
 
     pick_up(wipe.pickup, motion, logger=logger)
     try:
-        travel_z = float(motion.get("wipe_travel_z_mm", wipe.start.task[2]))
         mid = list(wipe.pickup.task)
         mid[2] = travel_z
         _movel_base(mid, v_app, a_app)                   # 픽업 자리에서 Z 만 먼저
