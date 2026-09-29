@@ -829,8 +829,11 @@ def test_빈손_복구도_반환위치와_이동실패를_무시하지_않는다
         dry_run=False, _holding_pick=False, _pick_fault=None, _from_pick=False,
         points=SimpleNamespace(pick_holder=lambda: holder, frame=lambda name: standby,
                                motion={}, route=lambda: None),
-        get_logger=lambda: Mock(), _verify_pick=lambda: 'empty')
-    for name in ('_try_pick', '_recover_pick', '_require_pick', '_notify_pick'):
+        get_logger=lambda: Mock(), _verify_pick=lambda: 'empty',
+        _diagnose_pick_width=lambda: '폭 13.0mm — 손은 비어 있다. '
+                                     '떨어진 피크를 찾아 거치대에 올린 뒤 재시작하라')
+    for name in ('_try_pick', '_recover_pick', '_require_pick', '_notify_pick',
+                 '_unknown_pick_error'):
         setattr(node, name, getattr(RobotController, name).__get__(node))
     monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
     home = Mock()

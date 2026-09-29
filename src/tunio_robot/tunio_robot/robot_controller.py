@@ -132,7 +132,12 @@ class RobotController(Node):
         self.declare_parameter("gripper_width_reg", GW.WIDTH_REG)
         # 집은 뒤 폭을 읽어 정말 물었는지 본다 (#39). 교시점에 pick_stack 이
         # 있어야 돈다. false 면 예전처럼 잡았다고 보고 그냥 간다.
-        self.declare_parameter("verify_pick", True)
+        #
+        # 기본값은 **false** 다 (PR #88 리뷰, 2026-09-23 성현 확정). 실기 검증이
+        # 끝나지 않은 동작을 아무 옵션 없이 켜진 채로 배포하지 않으려는 것이다.
+        # 폭 읽기가 필요한 회차에서만 `verify_pick:=true` 로 켠다.
+        # 실기 검증이 끝나면 이 기본값을 다시 올린다.
+        self.declare_parameter("verify_pick", False)
         # 관제는 홈 복귀 Result로 보충 대기를 알린다. 단독 시험은 Enter 입력을 쓴다.
         self.declare_parameter("pick_reload_prompt", False)
         self._pick_reload_prompt = bool(self.get_parameter("pick_reload_prompt").value)
@@ -553,6 +558,63 @@ class RobotController(Node):
             return
         raise PickMissingError("노드 종료로 피크 보충 대기를 끝낸다. 재집기하지 않는다")
 
+    def _diagnose_pick_width(self):
+        """
+        로봇을 **전혀 움직이지 않고** 폭만 읽어 사람에게 줄 진단 문구를 만든다 (#39).
+
+        `_holding_pick is None`(모름) 에는 두 가지가 섞여 있다 —
+          ① 피크를 쥐고 있는지 모른다
+          ② 팔이 안전하게 반환할 수 있는 자리에 있는지 모른다
+        ①은 정지 상태에서 폭만 읽으면 갈리고, 그건 ②와 무관하게 안전하다.
+        ②가 남아 있으니 **자동 복구는 하지 않는다** — 판단 재료만 만들어
+        메시지·로그에 싣고 사람이 정하게 한다 (PR #88 리뷰 제안, 2026-09-23).
+
+        읽기가 안 되면 예외를 올리지 않고 "못 가렸다"는 문구를 돌려준다.
+        이 함수는 이미 실패한 경로에서 불리므로, 여기서 또 터지면 원래 사유가
+        덮인다 (이슈 #52 와 같은 함정).
+        """
+        if self.dry_run:
+            return "dry_run 이라 폭을 읽지 않는다. 그리퍼를 직접 확인하라"
+        if not bool(self.get_parameter("verify_pick").value):
+            return ("폭 검사가 꺼져 있다(verify_pick=false). "
+                    "그리퍼를 직접 확인하라")
+        stack = self.points.pick_stack()
+        if stack is None:
+            return "pick_stack 미교시라 폭으로 못 가린다. 그리퍼를 직접 확인하라"
+        for attempt in range(2):                     # _verify_pick 과 같은 2회 규칙
+            try:
+                width = self._width_reader()()
+                break
+            except GW.WidthError as exc:
+                self.get_logger().warn(f"피크 폭 진단 읽기 {attempt + 1}/2 실패: {exc}")
+        else:
+            return "폭 2회 읽기 실패로 손 상태도 못 가렸다. 그리퍼를 직접 확인하라"
+
+        t = stack["thresholds_mm"]
+        if t["hold_above"] <= width <= t["hold_below"]:
+            return (f"폭 {width:.1f}mm — 피크는 물려 있다. "
+                    "팔 위치만 확인하고 재시작하라")
+        return (f"폭 {width:.1f}mm — 손은 비어 있다. "
+                "떨어진 피크를 찾아 거치대에 올린 뒤 재시작하라")
+
+    def _unknown_pick_error(self, lead):
+        """'모름' 예외를 만든다. 던지지 않고 **돌려준다** — 호출자가 raise 한다.
+
+        진단은 예외 메시지에 실어 보낸다. `_notify_pick` 을 쓰지 않는 이유는
+        `_run` 이 실패 Result 에 `_pick_warnings` 를 한 번 더 이어 붙여서
+        같은 문장이 두 번 나오기 때문이다. 메시지는 Result -> 서버 ->
+        robot_notice 로 그대로 올라간다.
+        """
+        detail = "폭 진단을 못 했다. 그리퍼를 직접 확인하라"
+        try:
+            detail = self._diagnose_pick_width()
+        except Exception as exc:                     # noqa: B902 — 원래 사유를 덮지 않는다
+            detail = (f"폭 진단 중 예외({type(exc).__name__}: {exc}). "
+                      "그리퍼를 직접 확인하라")
+        message = f"{lead} {detail}"
+        self.get_logger().error(message)
+        return MP.MotionError(message)
+
     def _check_pick_or_recover(self, side=None):
         try:
             self._require_pick()
@@ -566,7 +628,7 @@ class RobotController(Node):
         if not pick_required:
             return
         if self._holding_pick is None:
-            raise MP.MotionError("중단된 동작의 피크 상태·위치를 모른다. 직접 확인하라")
+            raise self._unknown_pick_error("중단된 동작의 피크 상태·위치를 모른다.")
         if self._holding_pick and not self.dry_run:
             self._check_pick_or_recover(side)
 
@@ -585,13 +647,14 @@ class RobotController(Node):
         _holding_pick 이 None(모름)이면 거부한다 — 이전 집기가 중간에 실패해
         실제로는 쥐고 있을 수 있다. 그 상태로 또 pick_up() 을 부르면 첫 동작인
         _release() 가 지금 팔 위치에서 피크를 놓아버린다 (이슈 #34-1).
+        거부하기 전에 _diagnose_pick_width() 로 폭을 한 번 읽어 "물려 있다/
+        비어 있다"를 메시지에 싣는다. 움직이지 않으니 안전하고, 사람이 무엇을
+        해야 하는지가 달라진다 (PR #88 리뷰 제안).
         """
         if getattr(self, "_pick_fault", None):
             raise PickMissingError(self._pick_fault + ". 작업을 재시작하기 전에 확인하라")
         if self._holding_pick is None:
-            raise MP.MotionError(
-                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
-                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
+            raise self._unknown_pick_error("피크를 쥐고 있는지 모른다 (이전 집기 중 예외).")
         if self._holding_pick:
             return
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
@@ -611,9 +674,7 @@ class RobotController(Node):
         반환 뒤 페그 접근 경유 여부는 _cross_to가 실제 J1으로 다시 판단한다.
         """
         if self._holding_pick is None:
-            raise MP.MotionError(
-                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
-                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
+            raise self._unknown_pick_error("피크를 쥐고 있는지 모른다 (이전 집기 중 예외).")
         if not self._holding_pick:
             return
         holder = self.points.pick_holder()

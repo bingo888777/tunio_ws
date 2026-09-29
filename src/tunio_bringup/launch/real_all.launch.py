@@ -45,6 +45,7 @@
   device:=2       마이크 장치 번호
   speed_scale:=1.0          이동 속도 배율. 0 이면 teach_points.yaml 값(2.0)
   peg_register_force:=true  페그 진입을 힘 제어로 (기본 false, #51)
+  verify_pick:=true         집은 뒤 폭으로 피크 확인 (기본 false, 실기 검증 전 #88)
   port:=9000      웹 포트
   db:=<경로>      SQLite 파일 위치
   save_on_error_exit:=true
@@ -71,6 +72,7 @@ def generate_launch_description():
     device = LaunchConfiguration('device')
     speed_scale = LaunchConfiguration('speed_scale')
     peg_register_force = LaunchConfiguration('peg_register_force')
+    verify_pick = LaunchConfiguration('verify_pick')
     port = LaunchConfiguration('port')
     db = LaunchConfiguration('db')
     save_on_error = LaunchConfiguration('save_on_error_exit')
@@ -86,6 +88,7 @@ def generate_launch_description():
         DeclareLaunchArgument('speed_scale', default_value='0.0'),
         # 페그 진입을 힘 제어로 할지. 기본 false — 실물 검증이 안 끝났다 (#51)
         DeclareLaunchArgument('peg_register_force', default_value='false'),
+        DeclareLaunchArgument('verify_pick', default_value='false'),
         DeclareLaunchArgument('port', default_value='8080'),
         DeclareLaunchArgument('db', default_value=os.path.expanduser('~/.tunio/tunio.db')),
         DeclareLaunchArgument(
@@ -100,7 +103,8 @@ def generate_launch_description():
              output='screen',
              parameters=[{'dry_run': dry_run, 'gripper': gripper,
                           'speed_scale': speed_scale,
-                          'peg_register_force': peg_register_force}]),
+                          'peg_register_force': peg_register_force,
+                          'verify_pick': verify_pick}]),
         Node(package='tunio_audio', executable='audio_analyzer', name='audio_analyzer',
              output='screen', parameters=[{'device': device}]),
 

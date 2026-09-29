@@ -33,6 +33,7 @@ def generate_launch_description():
     dry_run = LaunchConfiguration('dry_run')
     speed_scale = LaunchConfiguration('speed_scale')
     peg_register_force = LaunchConfiguration('peg_register_force')
+    verify_pick = LaunchConfiguration('verify_pick')
 
     return LaunchDescription([
         DeclareLaunchArgument('dry_run', default_value='true',
@@ -41,6 +42,9 @@ def generate_launch_description():
                               description='이동 속도 배율. 0 이면 teach_points.yaml 값'),
         DeclareLaunchArgument('peg_register_force', default_value='false',
                               description='페그 진입을 힘 제어로 할지 (#51)'),
+        DeclareLaunchArgument('verify_pick', default_value='false',
+                              description='집은 뒤 Modbus 폭으로 피크를 확인할지. '
+                                          '실기 검증 전이라 기본 false (#88 리뷰)'),
 
         LogInfo(msg=['[robot] dry_run=', dry_run,
                      ' (true 면 로봇은 움직이지 않는다)']),
@@ -49,5 +53,6 @@ def generate_launch_description():
              name='robot_controller', output='screen',
              parameters=[{'dry_run': dry_run,
                           'speed_scale': speed_scale,
-                          'peg_register_force': peg_register_force}]),
+                          'peg_register_force': peg_register_force,
+                          'verify_pick': verify_pick}]),
     ])

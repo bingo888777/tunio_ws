@@ -43,6 +43,9 @@ class Harness:
         self.node = RobotController()
         self.node.set_parameters([
             rclpy.parameter.Parameter("teach_points", value=yaml_path),
+            # verify_pick 기본값은 false 다 (#88 리뷰). 이 파일의 통합 테스트는
+            # 확인 기능 자체를 보는 자리라 명시적으로 켠다.
+            rclpy.parameter.Parameter("verify_pick", value=True),
         ])
         # 파라미터는 생성자에서 이미 읽었으므로 교시점을 직접 갈아끼운다
         from tunio_robot import teach_points as tp
@@ -199,12 +202,15 @@ def test_페그_조절_전에_피크를_반환하고_발현하면_다시_집는�
 # 테스트와 같은 방식 — self 에서 쓰는 것만 갖추면 노드·rclpy 없이 검증된다).
 # ---------------------------------------------------------------
 
-def _fake_node(holding, dry_run=False, side="left", verify="skip"):
+def _fake_node(holding, dry_run=False, side="left", verify="skip",
+               diagnose="폭 13.7mm — 피크는 물려 있다. 팔 위치만 확인하고 재시작하라"):
     """
     필요한 속성만 가진 대역 노드를 만든다.
 
     verify — _verify_pick 이 낼 값. 문자열이면 늘 그 값, 리스트면 회차별로 낸다.
              기본 "skip" 은 확인을 안 하는 예전 동작이다 (#39).
+    diagnose — _diagnose_pick_width 가 낼 진단 문구. '모름' 거부 메시지에 실린다.
+               진짜 함수는 Modbus 를 읽으므로 여기서는 문구만 대신 낸다.
     """
     holder = Pose("pick.holder", True, task=[1.0, 2.0, 3.0, 0.0, 0.0, 0.0], tcp="GripperDA_v1")
     standby = Pose("frames.standby", True, joints=[0.0] * 6)
@@ -231,9 +237,10 @@ def _fake_node(holding, dry_run=False, side="left", verify="skip"):
         dry_run=dry_run,
         get_logger=lambda: mock.MagicMock(),
         _verify_pick=_verify,
+        _diagnose_pick_width=lambda: diagnose,
     )
     for name in ('_notify_pick', '_require_pick', '_try_pick', '_recover_pick',
-                 '_check_pick_or_recover'):
+                 '_check_pick_or_recover', '_unknown_pick_error'):
         setattr(node, name, getattr(RobotController, name).__get__(node))
     return node
 
@@ -833,6 +840,88 @@ def test_통신_실패도_피크_없음으로_판정한다():
     )
     node._notify_pick = RobotController._notify_pick.__get__(node)
     assert RobotController._verify_pick(node) == "empty"
+
+
+# ---------------------------------------------------------------
+# verify_pick 기본값과 '모름' 상태의 폭 진단 (PR #88 리뷰, 2026-09-23)
+# ---------------------------------------------------------------
+
+def test_확인은_기본으로_꺼져_있다(ros, taught):
+    """실기 검증 전이라 아무 옵션 없이 띄우면 예전 경로여야 한다 (#88 리뷰)."""
+    node = _node(taught)
+    try:
+        assert node.get_parameter("verify_pick").value is False
+        assert RobotController._verify_pick(node) == "skip"
+    finally:
+        node.destroy_node()
+
+
+@pytest.mark.parametrize("caller", ["_ensure_pick", "_release_pick",
+                                    "_verify_pick_on_resume"])
+def test_모름_거부_메시지에_폭_진단이_실린다(caller):
+    """자동 복구는 안 하되, 무엇을 해야 하는지는 알려 준다 (#39 일부)."""
+    node = _fake_node(holding=None,
+                      diagnose="폭 13.0mm — 손은 비어 있다. "
+                               "떨어진 피크를 찾아 거치대에 올린 뒤 재시작하라")
+    with pytest.raises(MP.MotionError) as caught:
+        getattr(RobotController, caller)(node)
+    assert "손은 비어 있다" in str(caught.value)
+    assert "13.0mm" in str(caught.value)
+
+
+def test_진단이_터져도_원래_모름_사유를_덮지_않는다():
+    """진단은 이미 실패한 경로에서 돈다. 여기서 또 터지면 사유가 바뀐다 (#52)."""
+    node = _fake_node(holding=None)
+    node._diagnose_pick_width = mock.MagicMock(side_effect=RuntimeError("소켓 끊김"))
+    with pytest.raises(MP.MotionError) as caught:
+        RobotController._ensure_pick(node)
+    assert "모른다" in str(caught.value)
+    assert "RuntimeError" in str(caught.value)
+
+
+@pytest.mark.parametrize("width, expected", [
+    (13.7, "피크는 물려 있다"), (13.3, "피크는 물려 있다"),
+    (13.0, "손은 비어 있다"), (38.0, "손은 비어 있다"),
+])
+def test_폭_진단은_있음과_비어있음을_가른다(width, expected):
+    from tunio_robot import teach_points as TP
+    node = SimpleNamespace(
+        dry_run=False,
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG),
+        _width_reader=lambda: lambda: width,
+        get_logger=lambda: mock.MagicMock(),
+    )
+    message = RobotController._diagnose_pick_width(node)
+    assert expected in message
+    assert f"{width:.1f}mm" in message
+
+
+def test_폭_진단은_읽기_실패에도_예외를_올리지_않는다():
+    from tunio_robot import grip_width as GW
+    from tunio_robot import teach_points as TP
+    node = SimpleNamespace(
+        dry_run=False,
+        get_parameter=lambda name: SimpleNamespace(value=True),
+        points=TP.load(CONFIG),
+        _width_reader=lambda: mock.MagicMock(side_effect=GW.WidthError("연결 실패")),
+        get_logger=lambda: mock.MagicMock(),
+    )
+    assert "못 가렸다" in RobotController._diagnose_pick_width(node)
+
+
+def test_확인이_꺼져_있으면_폭_진단도_읽지_않는다():
+    from tunio_robot import teach_points as TP
+    reader = mock.MagicMock()
+    node = SimpleNamespace(
+        dry_run=False,
+        get_parameter=lambda name: SimpleNamespace(value=False),
+        points=TP.load(CONFIG),
+        _width_reader=lambda: reader,
+        get_logger=lambda: mock.MagicMock(),
+    )
+    assert "verify_pick=false" in RobotController._diagnose_pick_width(node)
+    reader.assert_not_called()
 
 
 def test_재개는_기억한_피크를_다시_확인한다():

@@ -532,7 +532,7 @@ PR #2로 인터페이스 13개 확정, 2026-09-18 머지. 기준 문서는 `docs
     가르려면 1장 폭 실측과 3단 문턱이 필요해서 뺐다
   - **넣은 것** — `teach_points.yaml` 의 `pick_stack` 절(문턱 13.2~16.0) ·
     `teach_points.pick_stack()` 조회 · `robot_controller._verify_pick()` ·
-    세 검사 구간 공통 재집기 처리 · `verify_pick` 파라미터(기본 true) ·
+    세 검사 구간 공통 재집기 처리 · `verify_pick` 파라미터(**기본 false**, #88 리뷰) ·
     세 구간 공통 정책 및 실제 ROS Action 통합 테스트
   - **못 읽으면 예전 동작으로 돌아간다.** `WidthError` 를 '빈손' 으로 보지 않는다 —
     Modbus 가 안 붙는 PC 에서 모든 집기가 실패하면 지금보다 나쁘다.
@@ -743,7 +743,8 @@ Modbus 읽기 실패 시 관제에 경고를 보내지만 동작은 계속한다
 **팀에 묻는 것**
 
 - 이 정도를 "범위 밖 기능 추가" 로 볼지, "이미 있던 실패를 빨리 잡는 것" 으로 볼지
-- 시연에서 `verify_pick` 기본값을 **true 로 둘지 false 로 둘지**.
+- ✅ `verify_pick` 기본값은 **false 로 확정**(2026-09-23, PR #88 리뷰). 실기 검증 후 재논의.
+  (원래 항목) 시연에서 `verify_pick` 기본값을 **true 로 둘지 false 로 둘지**.
   지금 코드 기본은 true 다. `peg_register_force` 처럼 실물 검증 뒤에 올리는
   방식이 낫다면 false 로 내린다 (CLAUDE.md 5절 선례)
 - 예외처리 1안(연속 실패 중단)은 **후순위로 미뤘다** (2026-09-22, 성현).
