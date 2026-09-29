@@ -680,6 +680,15 @@ def _compact_left_required(j1, side, motion):
             and _peg_route_required(j1, side, motion))
 
 
+def _check_left_transfer_j5(joints, motion):
+    """컨트롤러에서 확인한 한계다. 펜던트 설정을 바꾸거나 각도를 잘라내지 않는다."""
+    limit = float(motion["peg_transition_left"]["controller_j5_limit_deg"])
+    if not math.isfinite(limit) or not 0 < limit <= 135:
+        raise MotionError("왼쪽 전환: 현장 J5 한계는 0 초과 135도 이하여야 한다")
+    if not math.isfinite(joints[4]) or abs(joints[4]) > limit:
+        raise MotionError(f"왼쪽 전환: J5={joints[4]:+.3f}도, 컨트롤러 한계 ±{limit:g}도 초과")
+
+
 def compact_left_path(start, goal, motion):
     """실제 시작·목표 관절을 잇는 접기→J1 전환→접근 경로(이동 명령 없음).
 
@@ -696,7 +705,7 @@ def compact_left_path(start, goal, motion):
                 or not all(math.isfinite(v) for v in fold + ready + [fraction])
                 or not 0 <= fraction <= 1):
             raise ValueError("유한한 J2~J5 네 값과 0~1 겹침 비율이 필요하다")
-        # M0609 모델 관절 범위. J5의 별도 소프트웨어 제한을 다시 도입하지 않는다.
+        # M0609 모델 범위와 현장에서 확인한 J5 컨트롤러 한계를 함께 검사한다.
         for row in (fold, ready):
             if any(abs(v) > limit for v, limit in zip(row, (95, 150, 360, 360))):
                 raise ValueError("M0609 관절 범위 초과")
@@ -707,6 +716,8 @@ def compact_left_path(start, goal, motion):
             raise ValueError("시작/목표 J1이 오른쪽/왼쪽 작업 범위가 아니다")
     except (TypeError, ValueError, KeyError) as exc:
         raise MotionError(f"오른쪽→왼쪽 접힌 경로 설정/자세 오류: {exc}") from exc
+    for joints in (start, goal, [0, *fold, 0], [0, *ready, 0]):
+        _check_left_transfer_j5(joints, motion)
     early_j1 = start[0] + fraction * (goal[0] - start[0])
     return [list(start), [early_j1, *fold, start[5]],
             [goal[0], *fold, start[5]], [goal[0], *ready, goal[5]], list(goal)]
@@ -916,6 +927,13 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     high = list(approach)  # 높은 이동 중 파지 방향을 만든다. 검사 실패 시 직행하지 않는다
     extra = _orientation_lift(current, approach, motion)
     high[2] = max(current[2], floor + 2 * margin, approach[2]) + extra
+    left_profile = motion.get("peg_transition_left") if side == "left" else None
+    if left_profile is not None:
+        # 출발 높이에 75mm를 더하면 홈 출발에서 J5=-141.72도가 된다.
+        # 접힌 전환으로 자세를 바꾸므로 검증한 상단 높이를 사용한다.
+        high[2] = float(left_profile["high_tcp_z_mm"])
+        if not math.isfinite(high[2]) or high[2] < max(floor + 2 * margin, approach[2]):
+            raise MotionError("왼쪽 전환: 높은 접근점 Z 설정이 유효하지 않다")
     try:
         goal = [float(v) for v in api.ikin(posx(high), pose.sol)]
         if len(goal) != 6 or not all(math.isfinite(v) for v in goal):
@@ -925,6 +943,9 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             raise ValueError(f"IK/FK 위치 대조 오차 {error:.1f}mm")
     except Exception as exc:
         raise MotionError(f"피크→페그 높은 접근점 IK 실패: {exc}") from exc
+    if left_profile is not None:
+        _check_left_transfer_j5(start, motion)
+        _check_left_transfer_j5(goal, motion)
     lower = list(approach)
     # 하강 끝점도 먼저 검사한다. 제한을 풀어 진행하지 않는다.
     j6, _ = _peg_joint_limits(motion)
@@ -938,6 +959,8 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             if abs(joints[5]) > j6:
                 raise ValueError(f"J6={joints[5]:+.2f}(허용 ±{j6:g})")
             _check_transfer_joints(start, joints)
+            if left_profile is not None:
+                _check_left_transfer_j5(joints, motion)
             if math.dist(K.fk(joints)["tcp"], task[:3]) > margin:
                 raise ValueError("IK/FK 위치 불일치")
         except Exception as exc:
@@ -969,6 +992,8 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         logger.info(f"경로 진단: 높은 목표 TCP={high}, sol={pose.sol}, IK 관절={goal}")
         logger.info(f"경로 진단: J6 허용 ±{j6:g}도")
     for target in plan:
+        if left_profile is not None:
+            _check_left_transfer_j5(target, motion)
         if motion.get("j6_recovery_enabled", False):
             _check_peg_turn(target, 0.0, motion)
         if abs(target[5]) > j6:
