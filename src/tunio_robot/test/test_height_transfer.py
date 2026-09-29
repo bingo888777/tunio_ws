@@ -158,3 +158,18 @@ def test_툴방향이_다르면_현재XY위에서_상승후_자세를_바꾼다(
     MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {})
     assert scene.calls[0] == ('movel', [400, 0, 299, 0, 90, 0])
     assert scene.tcp[:3] == [600, 0, 224]
+
+
+def test_높이_이동_계획조회는_실물명령을_보내지_않는다(scene):
+    result = MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {}, execute=False)
+    assert result['sol'] == scene.sol
+    assert len(result['joint_plan']) == 3
+    assert scene.calls == []
+
+
+def test_높이_이동_단계확인_거부시_후속명령이_없다(scene):
+    def reject(message):
+        raise RuntimeError('단계 거부')
+    with pytest.raises(RuntimeError, match='단계 거부'):
+        MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {}, confirm=reject)
+    assert scene.calls == []

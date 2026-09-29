@@ -190,3 +190,10 @@ def test_반환페그의_기준높이는_관절점의_강제하한이_아니다(
     monkeypatch.setattr(K, "fk", low_joint)
     MP._pick_to_peg_approach(pose, "right", None, {})
     assert [c[0] for c in sim.calls] == ["high", "high", "down"]
+
+
+def test_실기_상단전용은_도달확인후_하강없이_종료한다(transfer):
+    sim, pose, _ = transfer
+    MP._pick_to_peg_approach(pose, "right", None, {}, high_only=True)
+    assert [c[0] for c in sim.calls] == ["high", "high"]
+    assert sim.tcp[2] == 299

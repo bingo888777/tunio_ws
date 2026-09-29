@@ -798,7 +798,7 @@ def _check_peg_transfer_path(start, goal, floor, margin):
         pending.extend(((a, mid, depth + 1), (mid, b, depth + 1)))
 
 
-def _transfer_above_floor(target, motion, logger=None):
+def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=True):
     """현재 sol로 상승→공간 이동→수직 하강. 고정 홈/전환 경유는 쓰지 않는다.
 
     높이는 경유점 생성 기준이며 전체 팔에 강제하는 금지선이 아니다.
@@ -862,6 +862,10 @@ def _transfer_above_floor(target, motion, logger=None):
         logger.info(f"고정 홈 생략: sol={sol}, 기준 Z={floor:.1f}mm, "
                     f"상승 Z={raised[2]:.1f}mm, J1 {start[0]:.1f} → {joints[-2][0]:.1f}도")
 
+    if not execute:
+        return {"current_tcp": current, "current_joints": start, "sol": sol,
+                "task_plan": poses, "joint_plan": joints}
+
     def arrived(task, expected):
         actual, _ = read_posx()
         actual_joints = _read_peg_joints(motion)
@@ -873,19 +877,26 @@ def _transfer_above_floor(target, motion, logger=None):
 
     v, a = _transit_speed(motion)
     if raised != current:
+        if confirm:
+            confirm(f"현재 XY에서 Z={raised[2]:.1f}mm까지 수직 이동")
         _movel_base(raised, v, a)
     actual = arrived(raised, joints[0])
     for task, q in zip(poses[1:-1], joints[1:-1]):
         _check_transfer_joints(actual, q)
         if max(abs(x - y) for x, y in zip(actual, q)) > .01:
+            if confirm:
+                confirm(f"높이 경로 관절 이동: {[round(v, 2) for v in q]}")
             _movej(q, motion)
         actual = arrived(task, q)
     if target != high:
+        if confirm:
+            confirm(f"목표 XY에서 Z={target[2]:.1f}mm까지 수직 이동")
         _movel_base(target, v, a)
         arrived(target, joints[-1])
 
 
-def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, execute=True):
+def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, execute=True,
+                          high_only=False):
     """상승 완료 후 높은 접근점까지 이동하고, 그 자리에서만 수직 하강한다."""
     api = _require_api()
     from DR_common2 import posx
@@ -982,13 +993,15 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         _check_transfer_joints(actual, actual)
         if max(abs(a - b) for a, b in zip(actual, target)) > 1.0:
             raise MotionError("피크→페그: 경유 관절 위치 미도달")
-    if confirm:
-        confirm(f"페그 앞 XY={approach[:2]}에서 Z={approach[2]:.1f}mm로 수직 하강")
     actual, _ = read_posx()
     if len(actual) != 6 or not all(math.isfinite(v) for v in actual):
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
     if actual[2] < floor or math.dist(actual[:3], high[:3]) > 2.0:
         raise MotionError("피크→페그: 높은 접근점 미도달, 하강 금지")
+    if high_only:
+        return
+    if confirm:
+        confirm(f"페그 앞 XY={approach[:2]}에서 Z={approach[2]:.1f}mm로 수직 하강")
     # 이미 높은 이동에서 파지 방향을 맞췄으므로 그 자세로 수직 하강한다.
     v, a = _transit_speed(motion)
     _movel_base(lower, v, a)
