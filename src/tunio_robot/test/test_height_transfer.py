@@ -302,6 +302,33 @@ def test_실기도구가_실제_집기발현함수로_홈없이_한번_발현한
     assert result['pick_state'] == 'held_assumed'
 
 
+@pytest.mark.parametrize('shift', [0.0, 360.0])
+def test_높은경유는연결하고_상승완료와하강전도착은확인한다(scene, monkeypatch, shift):
+    scene.joints[5] = -199.8
+
+    def ikin(task, sol):
+        q = scene.make_joints(task)
+        q[5] = 160.2
+        return q
+    monkeypatch.setattr(MP._api, 'ikin', ikin)
+    _keep_j6_on_movel(scene, monkeypatch, shift=shift)
+    monkeypatch.setattr(MP, '_cancel_check', lambda: None)
+    linked = []
+
+    def move_path(targets, motion, radius, logger):
+        linked.append((targets, radius))
+        scene.joints = list(targets[-1])
+        scene.tcp[:3] = K.fk(scene.joints)['tcp']
+    monkeypatch.setattr(MP, '_movej_path', move_path)
+    target = [600, 0, 224, 90, 90, 0]
+    MP._transfer_above_floor(target, {'transit_blend_radius_mm': 10})
+    assert len(linked) == 1 and linked[0][1] == 10
+    assert len(linked[0][0]) == 2  # 자세 전환점 → 목표 위, 그 뒤 하강은 별도
+    assert all(q[5] == pytest.approx(-199.8 + shift) for q in linked[0][0])
+    assert all(kind == 'movel' for kind, _ in scene.calls)
+    assert scene.tcp[:3] == target[:3]
+
+
 def test_현재가_복구로_높아져도_목표위는_J5가_허용하는_높이로_낮춘다(scene):
     """9/29: 취소 복구 +30 → 254.2 에서 재개. 줄 위 254 는 J5 -136, 224 는 통과."""
     scene.tcp = [591.8, -143.8, 254.2, 165.6, -180., -102.9]

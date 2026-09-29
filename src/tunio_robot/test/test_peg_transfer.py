@@ -259,3 +259,21 @@ def test_회전_높이_미도달이면_자세를_바꾸지_않는다(transfer, m
     with pytest.raises(MP.MotionError, match="회전 높이 미도달"):
         MP._pick_to_peg_approach(pose, "right", None, {})
     assert [c[0] for c in sim.calls] == ["high", "down"]
+
+
+def test_경유연결을_켜도_회전높이_수직하강_전후에는_멈춘다(transfer, monkeypatch):
+    sim, pose, back = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=200)
+    monkeypatch.setattr(MP, "_cancel_check", lambda: None)
+    original = MP._movej_path
+    groups = []
+
+    def path(targets, motion, radius, logger, confirm):
+        groups.append((len(targets), radius))
+        return original(targets, motion, radius, logger, confirm)
+    monkeypatch.setattr(MP, "_movej_path", path)
+    MP._pick_to_peg_approach(pose, "right", None, {"transit_blend_radius_mm": 10})
+    # 각 관절 구간은 마지막 반경 0으로 끝난다. 하강을 넘어 이어 붙이지 않는다.
+    assert groups == [(1, 10), (1, 10)]
+    assert [c[0] for c in sim.calls] == ["high", "down", "high", "down"]
+    assert sim.calls[-1][1] == back

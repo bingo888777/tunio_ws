@@ -743,13 +743,13 @@ def test_관절위치를_모르면_기존_느린_설정으로_이동한다(fake_
     assert fake_api.calls[-1][2]["vel"] == 10.0
 
 
-def test_movejx도_TCP목표를_쓰되_기존_관절상한을_지킨다(fake_api, monkeypatch):
+def test_movejx는_계산성공시_30도상한이고_IK실패시_기존속도다(fake_api, monkeypatch):
     api = PosjApi(PEG6_J)
     api.ikin = lambda task, sol: list(TRANSIT_J)
     monkeypatch.setattr(MP, "_api", api)
     MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
     peak = MP._peak_tcp_mm_per_deg(PEG6_J, TRANSIT_J)
-    assert api.calls[-1][2]["vel"] == pytest.approx(min(15.0, 200.0 / peak))
+    assert api.calls[-1][2]["vel"] == pytest.approx(min(30.0, 200.0 / peak))
     api.ikin = lambda task, sol: -1
     MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
     assert api.calls[-1][2]["vel"] == 10.0            # IK 실패는 기존 속도로
@@ -953,3 +953,29 @@ def test_target_j1_accepts_zero_j1_in_valid_numpy_solution(monkeypatch, fake_api
     joints = np.array([0.0, -30.0, -90.0, 0.0, 60.0, 0.0])
     monkeypatch.setattr(fake_api, "ikin", lambda pos, sol: joints, raising=False)
     assert MP._target_j1(HOLDER, 7) == 0.0
+
+
+@pytest.mark.parametrize('peak,expected', [(1.0, 30.0), (20.0, 10.0)])
+def test_movejx_30도상한도_손끝속도에따라_낮춘다(fake_api, monkeypatch, peak, expected):
+    api = PosjApi(PEG6_J)
+    api.ikin = lambda task, sol: list(TRANSIT_J)
+    monkeypatch.setattr(MP, '_api', api)
+    monkeypatch.setattr(MP, '_peak_tcp_mm_per_deg', lambda *a: peak)
+    MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
+    assert api.calls[-1][2]['vel'] == expected
+
+
+@pytest.mark.parametrize('failure', ['ik_nan', 'ik_zero', 'current', 'geometry'])
+def test_movejx_계산실패시_30도상한을_사용하지않는다(fake_api, monkeypatch, failure):
+    api = PosjApi(PEG6_J)
+    api.ikin = lambda task, sol: list(TRANSIT_J)
+    if failure.startswith('ik_'):
+        api.ikin = lambda task, sol: [float('nan') if failure == 'ik_nan' else 0] * 6
+    elif failure == 'current':
+        api.get_current_posj = lambda: -1
+    else:
+        monkeypatch.setattr(MP, '_peak_tcp_mm_per_deg',
+                            lambda *a: (_ for _ in ()).throw(ValueError('경로 계산 실패')))
+    monkeypatch.setattr(MP, '_api', api)
+    MP._movejx(CONTACT, TRANSIT_MOTION, sol=2)
+    assert api.calls[-1][2]['vel'] == 10.0

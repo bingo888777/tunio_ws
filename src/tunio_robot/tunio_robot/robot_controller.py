@@ -411,6 +411,20 @@ class RobotController(Node):
             self._pick_warning_callback = None
             self._pick_reload_goal = None
             session.work_done.set()
+        if not self.dry_run and MP._blend_in_flight and not session.requested.is_set():
+            # 경유 연결은 movej 반환 뒤에도 움직일 수 있다. 오류를 보고하기 전에 세운다.
+            stopped = CancelSession()
+            stopped.work_done.set()
+            request_and_confirm_stop(self._stop_client, self._motion_client, stopped,
+                                     self._stop_timeout, self._stop_interval)
+            if stopped.error is None:
+                MP._blend_in_flight = False
+                failure = failure or MP.MotionError("연속 경유 종료 미확인으로 정지했다")
+            else:
+                with self._lock:
+                    self._recovery_required = True
+                failure = MP.MotionError(f"{failure}; 연속 경유 정지 실패: {stopped.error} "
+                                         "— 현장 확인·노드 재시작 필요")
         # 완료 판정과 취소 접수를 같은 락으로 직렬화한다.
         with self._lock:
             canceled = session.requested.is_set()
@@ -444,6 +458,7 @@ class RobotController(Node):
             while not goal.is_cancel_requested and time.monotonic() < deadline:
                 time.sleep(.001)
             if confirmed and session.error is None and goal.is_cancel_requested:
+                MP._blend_in_flight = False
                 res.message = ('취소 완료' if self.dry_run else
                                'Soft Stop·IDLE 확인 완료 — 홈 복귀 중')
                 start_recovery = not self.dry_run
@@ -580,7 +595,9 @@ class RobotController(Node):
         RL.write(self._runlog_path, self._runlog)
 
     def _cross_to(self, side):
-        """실제 J1을 읽어 페그 쪽 접근에 필요한 경유를 결정한다."""
+        """연속 경유는 접근점까지 묶어 실행한다. 나머지는 기존 J1 경유 판단."""
+        if MP._blend_radius(self.points.motion):
+            return  # MP._approach_peg에서 경유점과 최종 접근점을 함께 검사·실행
         MP.approach_peg_side(side, self.points.route(), self.points.motion,
                              logger=self.get_logger())
 
