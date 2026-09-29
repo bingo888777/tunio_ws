@@ -419,9 +419,8 @@ class RobotController(Node):
         """
         피크가 필요한 동작(발현·화음) 전에 부른다. 이미 쥐고 있으면 아무 일도 안 한다.
 
-        side — 이 다음에 갈 페그가 헤드스톡 어느 쪽인지("left"/"right").
-               pick.holder.sol_by_side 에 그 쪽 해가 적혀 있으면 그 팔 모양으로
-               집는다 (#58). 안 적혀 있으면(기본 null) 예전 그대로다.
+        side — 다음 페그 쪽 정보. 집기 경로는 그 쪽 sol을 강제하지 않고 현재
+               팔 모양과 높이 하한을 사용한다. 페그 전환은 실제 J1으로 따로 판단한다.
 
         집는 시점을 여기서 판단하는 이유 — 서버는 play_string 이 언제 오는지만
         알지, 로봇이 지금 손이 비어 있는지는 모른다. 인터페이스를 안 늘리려면
@@ -438,24 +437,15 @@ class RobotController(Node):
         if self._holding_pick:
             return
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
-        standby = self.points.frame("standby")
         if self.dry_run:
-            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task} (경유 {standby.joints})")
+            self.get_logger().info(f"[dry_run] 피크 집기 {holder.task} (고정 홈 없이 높이 이동)")
             self._holding_pick = True
             return
         self._holding_pick = None                     # 시도 중 — 끝나기 전엔 모른다
-        sol = holder.sol_by_side.get(side) if side else None
-        # via — 거치대로 내려가기 전에 관절 자세를 한 번 거친다. 피크를 가지러 갈 때
-        # 팔은 직전 동작이 남긴 자리에 있고, 페그 조절 직후면 헤드스톡 쪽이다.
-        # 거기서 거치대 위로 바로 movel 하면 기타 넥을 가로지른다. pick_return 이
-        # 반대 방향에 같은 경유를 쓴다(성현, PR #38) — 이쪽만 비어 있었다 (#34 후속)
-        MP.pick_up(holder, self.points.motion, standby=standby, via=standby, sol=sol,
-                   route=self.points.route(), logger=self.get_logger())
+        MP.pick_up(holder, self.points.motion, height_transfer=True,
+                   logger=self.get_logger())
         self._holding_pick = True
         self._from_pick = False
-        # 경유지를 지나며 팔 모양을 그 쪽으로 맞췄다면 거기 서 있는 셈이다
-        if sol is not None:
-            self._side = side
 
     def _release_pick(self, side=None):
         """
@@ -470,19 +460,15 @@ class RobotController(Node):
         if not self._holding_pick:
             return
         holder = self.points.pick_holder()
-        via = self.points.frame("standby")
-        sol = holder.sol_by_side.get(side) if side else None
         if self.dry_run:
-            self.get_logger().info(
-                f"[dry_run] 피크 반환 {holder.task}"
-                + (f" (팔 모양 sol {sol} — 경유지 생략)" if sol is not None else ""))
+            self.get_logger().info(f"[dry_run] 피크 반환 {holder.task} (고정 홈 없이 높이 이동)")
         else:
-            MP.pick_return(holder, self.points.motion, via=via, sol=sol,
-                           route=self.points.route(), logger=self.get_logger())
+            MP.pick_return(holder, self.points.motion, height_transfer=True,
+                           logger=self.get_logger())
         self._holding_pick = False
         self._from_pick = True
-        # 마지막 팔 모양 기록. 페그 경유 판단에는 실제 J1을 사용한다.
-        self._side = side if sol is not None else None
+        # 다음 페그 접근은 기록된 쪽 대신 반환 후 실제 J1으로 판단한다.
+        self._side = None
 
     # ------------------------------------------------------ Action
     def on_return_home(self, goal):
@@ -530,9 +516,8 @@ class RobotController(Node):
             if not self.dry_run and self.pegs.roll_of(no) is None:
                 raise MP.MotionError(f"{no}번 페그 등록값 없음 — 페그 재등록을 먼저 실행하세요")
             self._ensure_pick(TP.side_of(no))
-            standby = self.points.frame("pluck_standby")
             if not self.dry_run:
-                MP.pluck_string(pose, self.points.motion, standby=standby, prepare_only=True)
+                MP.pluck_string(pose, self.points.motion, height_transfer=True, prepare_only=True)
             if goal.is_cancel_requested:
                 raise MP.MotionError("발현 준비 중 취소 — 발현하지 않는다")
             self._prepared_pluck = (no, token)
@@ -557,14 +542,13 @@ class RobotController(Node):
             if not token:
                 # 기존 단독 도구 호환. 서버는 반드시 준비 식별자를 전달한다.
                 self._ensure_pick(TP.side_of(no))
-            standby = self.points.frame("pluck_standby")
             if self.dry_run:
                 self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.task}")
                 return
             if token:
-                MP.pluck_string(pose, self.points.motion, standby=standby, prepared=True)
+                MP.pluck_string(pose, self.points.motion, height_transfer=True, prepared=True)
             else:
-                MP.pluck_string(pose, self.points.motion, standby=standby)
+                MP.pluck_string(pose, self.points.motion, height_transfer=True)
 
         return self._run("play_string", goal, PlayString.Result, work)
 
@@ -583,7 +567,7 @@ class RobotController(Node):
                     f"{r.string_number}번 페그 미등록: register_peg를 먼저 완료하라. "
                     "adjust_peg는 초기 등록을 실행하지 않는다")
             # 페그를 잡으려면 손가락이 필요하다. 피크를 쥐고 있으면 먼저 반환한다.
-            # 갈 쪽을 알려 줘서 그 쪽 팔 모양으로 반환하게 한다 (#58)
+            # 반환은 현재 팔 모양을 유지한다. 이후 필요한 페그 전환만 따로 수행한다.
             self._release_pick(side)
             if self.dry_run:
                 via = "" if side == self._side else f" (경유: {side})"
