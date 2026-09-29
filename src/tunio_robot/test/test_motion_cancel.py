@@ -104,6 +104,7 @@ def test_robot_cancel_stops_and_latches_recovery(monkeypatch):
     node = SimpleNamespace(
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
         _recovery_required=False, _prepared_pluck=None, _holding_pick=True,
+        _pick_fault=None, _pick_refill_pending=False,   # #88 이 _run 에서 읽는다
         _recovery_plan=None, _recovering=False, _recovery_done=threading.Event(),
         _recovery_wait=.05, _lift_mm=30.0,
         _recover_after_cancel=lambda plan: plans.append(plan),   # 끝나지 않는 복구
@@ -160,6 +161,7 @@ def test_cancel_during_pick_transition_uses_gripper_record(monkeypatch, gripped)
     node = SimpleNamespace(
         _lock=threading.Lock(), _running='prepare_pluck', _cancel_sessions={},
         _recovery_required=False, _prepared_pluck=None, _holding_pick=None,
+        _pick_fault=None, _pick_refill_pending=False,   # #88 이 _run 에서 읽는다
         _recovery_plan=None, dry_run=False, _stop_timeout=1, _stop_interval=.001,
         _stop_client=Mock(), _motion_client=Mock(), get_logger=lambda: Mock())
     goal = Mock(is_active=True)
@@ -180,6 +182,7 @@ def _recovery_node(held, running='adjust_peg'):
     node = SimpleNamespace(
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
         _recovery_required=True, _recovering=True, _recovery_plan=(running, held),
+        _pick_fault=None, _pick_refill_pending=False,   # #88 이 _run 에서 읽는다
         _recovery_done=threading.Event(), _prepared_pluck=(6, 'x'),
         _holding_pick=None, _side='left', _from_pick=True, _lift_mm=30.0, _lift_max_z=600.0,
         _open_confirm_mm=35.0, _open_wait=.3, _width_reader=lambda: (lambda: 37.6),

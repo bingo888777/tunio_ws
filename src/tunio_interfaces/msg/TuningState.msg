@@ -14,6 +14,7 @@ uint8 adjust_count             # 현재 줄의 조절 횟수
 StringResult[] results         # 지금까지의 줄별 결과. 처리 전인 줄은 RESULT_PENDING
 uint8 overall_result           # 전체 판정. 검증 패스 완료 전에는 OVERALL_PENDING
 TuningSettings active_settings # 이번 작업에 적용 중인 설정 (작업 중 잠금)
+string robot_notice            # 로봇이 보낸 최근 경고/오류. 새 작업 시작 시 비움
 
 string error_message          # 작업 오류 사유. 새 작업 접수 시 비우며 ERROR 상태에서 표시
 

@@ -14,8 +14,9 @@ def scenario(ready=True, outcomes=(True,)):
     node = SimpleNamespace(
         job_id='prepare-test', measurement_id=0, _registered_pegs={6},
         active_settings=SimpleNamespace(measure_timeout_sec=10., onset_timeout_sec=10.),
-        _cancel=threading.Event(),
-        _pause=threading.Event(), cli_prepare=object(), cli_play=object(),
+        _cancel=threading.Event(), _pause=threading.Event(),
+        _resumed_since_play=threading.Event(), _set_robot_notice=Mock(),
+        cli_prepare=object(), cli_play=object(),
         _gate=Mock(), _set_phase=Mock(), _track=Mock(), _untrack=Mock(),
         _publish_state=Mock(), get_logger=lambda: Mock(),
         _p=lambda key: .01 if key == 'ready_wait_sec' else 30.,
@@ -36,14 +37,15 @@ def scenario(ready=True, outcomes=(True,)):
 
     node.cli_measure = SimpleNamespace(send_goal_async=send)
 
-    def action(client, goal, timeout, name):
+    def action(client, goal, timeout, name, **kwargs):
         calls.append(name)
         if name == 'prepare_pluck':
-            return SimpleNamespace(success=True, preparation_id='one-use')
+            return SimpleNamespace(success=True, message='', preparation_id='one-use')
         assert goal.preparation_id == 'one-use'
-        return SimpleNamespace(success=True)
+        return SimpleNamespace(success=True, message='')
 
     node._run_action = action
+    node._measure_attempt = TM.TaskManager._measure_attempt.__get__(node)
     node._measure_once = lambda n: TM.TaskManager._measure_once(node, n)
     return node, calls
 
@@ -54,17 +56,43 @@ def test_prepare_then_ready_then_exactly_one_play():
     assert calls == ['prepare_pluck', 'measure', 'ready', 'play_string']
 
 
+@pytest.mark.parametrize('after_prepare', [False, True])
+def test_resume_reaches_first_robot_action_after_pause(after_prepare):
+    node, _ = scenario()
+    action = node._run_action
+    seen = []
+
+    def record(client, goal, timeout, name, **kwargs):
+        seen.append((name, goal.resumed))
+        return action(client, goal, timeout, name, **kwargs)
+
+    node._run_action = record
+    if after_prepare:
+        gates = iter([False, True])
+
+        def gate():
+            if next(gates):
+                node._resumed_since_play.set()
+
+        node._gate.side_effect = gate
+    else:
+        node._resumed_since_play.set()
+    assert node._measure_once(6).ok
+    assert seen == [('prepare_pluck', not after_prepare), ('play_string', after_prepare)]
+    assert not node._resumed_since_play.is_set()
+
+
 def test_slow_preparation_never_starts_microphone_early():
     node, calls = scenario()
     entered, release = threading.Event(), threading.Event()
     action = node._run_action
     results = []
 
-    def slow(*args):
+    def slow(*args, **kwargs):
         if args[-1] == 'prepare_pluck':
             entered.set()
             assert release.wait(2)
-        return action(*args)
+        return action(*args, **kwargs)
 
     node._run_action = slow
     worker = threading.Thread(target=lambda: results.append(node._measure_once(6)))
@@ -84,7 +112,7 @@ def test_slow_preparation_never_starts_microphone_early():
 def test_prepare_failure_never_measures_or_plays(failure):
     node, calls = scenario()
 
-    def fail(*args):
+    def fail(*args, **kwargs):
         if failure in ('reject', 'timeout'):
             raise TM.Aborted(failure)
         return SimpleNamespace(success=failure != 'failed', preparation_id='')
