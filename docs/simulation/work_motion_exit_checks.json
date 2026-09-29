@@ -1,0 +1,650 @@
+{
+  "date": "2026-09-29",
+  "step_deg": 0.5,
+  "note": "오프라인 수치 IK/관절 표본 검사. full은 기존 박스 안 출발 상승을 포함하며 above는 첫 상승 후 자세 변경과 이동만 검사. 실물 재실행 아님.",
+  "actual_start_source": "2026-09-29_112435_work_motion_check.json",
+  "checks": [
+    {
+      "result": {
+        "peg": 6,
+        "scene": "holder",
+        "actual": true,
+        "j5_range": [
+          -134.0189334373757,
+          -104.92416345914228
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 32,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            335.2713033743687,
+            -173.8867839577857,
+            250.0,
+            86.45951931144172,
+            89.51088043245905,
+            -178.8840546008468
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            153.52732004006134,
+            -3.4459481322986107,
+            -70.0986265715541,
+            0.0,
+            -106.45542529614272,
+            -115.02267995994316
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            166.92679025546295,
+            -38.03333163977024,
+            -37.042504901088535,
+            0.0,
+            -104.92416345914228,
+            -101.6232097445366
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 6,
+        "scene": "holder",
+        "actual": false,
+        "j5_range": [
+          -134.08242442973264,
+          -104.92416345911587
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 31,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            336.04118713413015,
+            -175.17887266286277,
+            250.0,
+            86.39999999999858,
+            89.49999999999723,
+            1.110000000001254
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            153.4043192536053,
+            -3.627957165662366,
+            -69.90354092588079,
+            0.0,
+            -106.46850190845403,
+            64.8543192536022
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            166.9267902554626,
+            -38.03333163974682,
+            -37.042504901138614,
+            0.0,
+            -104.92416345911587,
+            78.3767902554631
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 6,
+        "scene": "pluck",
+        "actual": true,
+        "j5_range": [
+          -134.0189334373757,
+          -106.4554252961327
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 32,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            335.2713033743687,
+            -173.8867839577857,
+            250.0,
+            86.45951931144172,
+            89.51088043245905,
+            -178.8840546008468
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            153.5273200400809,
+            -3.4459481322950296,
+            -70.09862657156435,
+            0.0,
+            -106.4554252961327,
+            -113.33267995992699
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            177.9714222344278,
+            -48.88843303462758,
+            -17.35383193075188,
+            0.0,
+            -113.75773503462062,
+            -88.88857776557222
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 6,
+        "scene": "pluck",
+        "actual": false,
+        "j5_range": [
+          -134.08242442973264,
+          -106.46850190844945
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 31,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            336.04118713413015,
+            -175.17887266286277,
+            250.0,
+            86.39999999999858,
+            89.49999999999723,
+            1.110000000001254
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            153.40431925361736,
+            -3.627957165660092,
+            -69.90354092588537,
+            0.0,
+            -106.46850190844945,
+            66.54431925361109
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            177.97142223442768,
+            -48.88843303462221,
+            -17.353831930762055,
+            0.0,
+            -113.75773503461569,
+            91.11142223442778
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 5,
+        "scene": "holder",
+        "actual": false,
+        "j5_range": [
+          -134.82036796076238,
+          -104.92416345887831
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 33,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            298.7262332415178,
+            -176.8348529353918,
+            250.0,
+            86.06999999999998,
+            90.0,
+            2.5444437451708134e-14
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            150.3994032926543,
+            0.8427839984879029,
+            -74.50074734883428,
+            0.0,
+            -106.3420366496417,
+            61.84940329265507
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            166.92679025546192,
+            -38.03333163953505,
+            -37.04250490158725,
+            0.0,
+            -104.92416345887831,
+            78.37679025546146
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 5,
+        "scene": "pluck",
+        "actual": false,
+        "j5_range": [
+          -134.82036796076238,
+          -106.34203664959271
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_left_outer_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle",
+            "rg2_right_outer_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 33,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            298.7262332415178,
+            -176.8348529353918,
+            250.0,
+            86.06999999999998,
+            90.0,
+            2.5444437451708134e-14
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            150.399403292722,
+            0.8427839984969125,
+            -74.50074734888604,
+            0.0,
+            -106.34203664959271,
+            63.20940329272452
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            178.85120557627977,
+            -48.47328553530244,
+            -18.148895255556482,
+            0.0,
+            -113.37781920914102,
+            91.66120557627977
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 2,
+        "scene": "holder",
+        "actual": false,
+        "j5_range": [
+          104.92416345932224,
+          134.72697875515956
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 32,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            302.0000000000002,
+            157.49999999999994,
+            245.0,
+            -90.0,
+            90.00000000000004,
+            3.180554681463517e-14
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            26.500071066073872,
+            -1.748838939151284,
+            75.38295369162881,
+            0.0,
+            106.36588524750687,
+            117.95007106607005
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            -14.240143811648096,
+            38.03333163993102,
+            37.042504900746735,
+            0.0,
+            104.92416345932224,
+            77.20985618835186
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 2,
+        "scene": "pluck",
+        "actual": false,
+        "j5_range": [
+          106.36588524753301,
+          134.72697875515956
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 32,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            302.0000000000002,
+            157.49999999999994,
+            245.0,
+            -90.0,
+            90.00000000000004,
+            3.180554681463517e-14
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            26.500071066110706,
+            -1.748838939147845,
+            75.38295369160232,
+            0.0,
+            106.36588524753301,
+            118.70007106610899
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            -0.6393506395138502,
+            48.361700786987285,
+            18.361996228482695,
+            0.0,
+            113.27630298452982,
+            91.5606493604862
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 1,
+        "scene": "holder",
+        "actual": false,
+        "j5_range": [
+          104.92416345932241,
+          134.0296227093516
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 30,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            338.9069682780607,
+            159.87731328946418,
+            245.0,
+            -89.58000000002524,
+            90.00000000009788,
+            3.478318210742131e-10
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            24.307282684957727,
+            3.0260208762649654,
+            70.54615656790276,
+            0.0,
+            106.42782255582961,
+            115.75728268496101
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            -14.240143811648096,
+            38.03333163993102,
+            37.042504900746565,
+            0.0,
+            104.92416345932241,
+            77.20985618835186
+          ]
+        }
+      ]
+    },
+    {
+      "result": {
+        "peg": 1,
+        "scene": "pluck",
+        "actual": false,
+        "j5_range": [
+          106.42782255583052,
+          134.0296227093516
+        ],
+        "full": {
+          "box_links": [
+            "rg2_left_inner_finger",
+            "rg2_left_inner_knuckle",
+            "rg2_right_inner_finger",
+            "rg2_right_inner_knuckle"
+          ],
+          "self_pairs": [],
+          "tcp_blocked": 30,
+          "joint_errors": []
+        },
+        "above": {
+          "box_links": [],
+          "self_pairs": [],
+          "tcp_blocked": 0,
+          "joint_errors": []
+        }
+      },
+      "commands": [
+        {
+          "kind": "movel",
+          "goal": [
+            338.9069682780607,
+            159.87731328946418,
+            245.0,
+            -89.58000000002524,
+            90.00000000009788,
+            3.478318210742131e-10
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            24.307282684959404,
+            3.0260208762661875,
+            70.54615656790094,
+            0.0,
+            106.42782255583052,
+            116.09728268496241
+          ]
+        },
+        {
+          "kind": "movej",
+          "goal": [
+            0.16513524557151982,
+            48.42267402777256,
+            18.24558284056633,
+            0.0,
+            113.33174313166103,
+            91.95513524557146
+          ]
+        }
+      ]
+    }
+  ]
+}

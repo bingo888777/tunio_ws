@@ -478,7 +478,7 @@ def test_피크를_반환하면_어디_있는지_모르는_상태가_된다(ros,
         node.destroy_node()
 
 
-def test_쪽을_모르면_무조건_경유지를_탄다(ros, taught, monkeypatch):
+def test_쪽을_모르면_좌측전환의_목표계획으로_미룬다(ros, taught, monkeypatch):
     from tunio_robot import motion_primitives as MP
     node = _node(taught)
     try:
@@ -487,7 +487,7 @@ def test_쪽을_모르면_무조건_경유지를_탄다(ros, taught, monkeypatch
         node._side = None
         monkeypatch.setattr(MP, "_current_j1", lambda: None)
         node._cross_to("left")
-        assert went, "경유지를 안 탔다"
+        assert went == [], "목표 IK 계획 전에 기존 기지개 경유를 실행하면 안 된다"
     finally:
         node.destroy_node()
 
@@ -804,3 +804,19 @@ def test_강제재등록은_이전각도를_디스크에서도_지우고_실행�
 def test_잘못된_경유범위는_거부한다(bounds):
     with pytest.raises(MP.MotionError, match="생략 범위 오류"):
         MP._peg_route_required(0, "right", {"peg_j1_skip_right_deg": bounds})
+
+
+@pytest.mark.parametrize("holding", [False, True])
+def test_집기와_반환은_고정홈과_다음페그_sol을_강제하지_않는다(monkeypatch, holding):
+    node = _fake_node(holding=holding)
+    node.points.pick_holder().sol_by_side = {"left": 7, "right": 2}
+    node.points.frame = mock.Mock(side_effect=AssertionError("고정 홈 조회 금지"))
+    node.points.route = mock.Mock(side_effect=AssertionError("전환 경유 조회 금지"))
+    name = "pick_return" if holding else "pick_up"
+    operation = mock.Mock()
+    monkeypatch.setattr(MP, name, operation)
+    method = RobotController._release_pick if holding else RobotController._ensure_pick
+    method(node, "left")
+    operation.assert_called_once()
+    assert operation.call_args.kwargs["height_transfer"] is True
+    assert not {"standby", "via", "sol", "route"} & operation.call_args.kwargs.keys()

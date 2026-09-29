@@ -1,0 +1,11 @@
+{
+  "description": "/home/mook/ws_cobot_pjt/ws_dsr/src/doosan-robot2/dsr_description2",
+  "srdf": "/home/mook/ws_cobot_pjt/ws_dsr/src/doosan-robot2/dsr_moveit2/dsr_moveit_config_m0609/config/dsr.srdf.xacro",
+  "tool_model": {
+    "urdf": "build/zone_motion/m0609_rg2.urdf",
+    "description": "/home/mook/ws_cobot_pjt/ws_dsr/src/onrobot-ros2/onrobot_rg_description",
+    "width_mm": 38.0,
+    "source_xacro": "/home/mook/ws_cobot_pjt/ws_dsr/src/rg2/m0609_rg2_bringup/xacro/my_m0609_rg2.urdf.xacro",
+    "excluded": "rubber finger caps, cables, pick; fixed-width internal RG2 mechanism self pairs"
+  }
+}
