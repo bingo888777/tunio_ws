@@ -66,3 +66,25 @@ def test_집기와_발현은_현재_sol_높이경로로_상단까지만_간다(t
     tool.run(points, scene, 6, points.motion, execute=False)
     assert got[0][0][0][2] == 224
     assert got[0][1]['execute'] is False
+
+
+def test_탐색후에도_정지응답을_처리할_실행기에_노드가_남는다(tool, monkeypatch, tmp_path):
+    import rclpy.executors
+    original = rclpy.executors.SingleThreadedExecutor
+    executors = []
+
+    def create():
+        executor = original()
+        executors.append(executor)
+        return executor
+
+    def diagnostic(*args, **kwargs):
+        assert any(n.get_name() == 'work_motion_check' for n in executors[0].get_nodes())
+        return {}
+    monkeypatch.setattr(rclpy.executors, 'SingleThreadedExecutor', create)
+    monkeypatch.setattr(tool, 'confirm', lambda message: None)
+    monkeypatch.setattr(tool, 'run', diagnostic)
+    monkeypatch.setattr(MP, 'connect', lambda *a, **k: None)
+    monkeypatch.setattr(MP, '_node', None)
+    monkeypatch.setattr(tool.RL, 'session_path', lambda *a: str(tmp_path/'check.json'))
+    assert tool.main(['--check-only']) == 0

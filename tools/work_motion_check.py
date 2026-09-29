@@ -78,7 +78,7 @@ def main(argv=None):
     moving = False
     try:
         for _ in range(20):
-            rclpy.spin_once(node, timeout_sec=.1)
+            rclpy.spin_once(node, executor=executor, timeout_sec=.1)
         busy = set(node.get_node_names()) & {'robot_controller', 'task_manager', 'single_string_test'}
         if busy:
             raise RuntimeError(f'통합 노드를 먼저 종료하세요: {sorted(busy)}')

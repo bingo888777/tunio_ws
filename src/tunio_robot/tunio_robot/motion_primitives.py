@@ -988,11 +988,14 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             confirm(f"높은 경로 관절 이동: {[round(v, 2) for v in target]}")
         # 직전 실행의 실제 관절각으로 재검사. 실패해도 직행으로 폴백하지 않는다.
         _check_transfer_joints(_read_peg_joints(motion), target)
-        _movej(target, motion)
+        move_result = _movej(target, motion)
         actual = _read_peg_joints(motion)
         _check_transfer_joints(actual, actual)
         if max(abs(a - b) for a, b in zip(actual, target)) > 1.0:
-            raise MotionError("피크→페그: 경유 관절 위치 미도달")
+            raise MotionError(
+                f"피크→페그: 경유 관절 위치 미도달. movej 반환={move_result!r}, "
+                f"목표={target}, 실제={actual}, "
+                f"최대 오차={max(abs(a - b) for a, b in zip(actual, target)):.3f}도")
     actual, _ = read_posx()
     if len(actual) != 6 or not all(math.isfinite(v) for v in actual):
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
