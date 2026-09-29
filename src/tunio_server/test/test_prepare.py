@@ -94,7 +94,7 @@ def test_robot_timeout_waits_for_terminal_result_before_continuing(ended):
             if ended else None)
     waits = Mock(side_effect=[handle, None, late])
     n = SimpleNamespace(
-        _wait=waits, _p=lambda key: 120.0, _cancel=threading.Event(),
+        _wait=waits, _p=lambda key: 120.0, _cancel=threading.Event(), _pause=threading.Event(),
         _track=Mock(), _untrack=Mock(),
         get_logger=lambda: Mock())
     client = Mock()
@@ -122,7 +122,7 @@ def test_failed_or_canceled_robot_result_aborts(status, success, late):
     result = SimpleNamespace(status=status, result=SimpleNamespace(success=success, message='실패'))
     responses = [handle, None, result] if late else [handle, result]
     n = SimpleNamespace(_wait=Mock(side_effect=responses), _p=lambda key: 120,
-                        _cancel=threading.Event(),
+                        _cancel=threading.Event(), _pause=threading.Event(),
                         _track=Mock(), _untrack=Mock(), get_logger=lambda: Mock())
     with pytest.raises(TM.Aborted, match='후속 동작 중단'):
         TM.TaskManager._run_action(n, Mock(), object(), 120, 'adjust_peg')
@@ -154,7 +154,7 @@ def test_next_robot_request_waits_for_success_result():
         response.set_result(SimpleNamespace(accepted=True, get_result_async=get_result))
         return response
 
-    n = SimpleNamespace(_p=lambda key: 2, _cancel=threading.Event(),
+    n = SimpleNamespace(_p=lambda key: 2, _cancel=threading.Event(), _pause=threading.Event(),
                         _track=Mock(), _untrack=Mock(),
                         get_logger=lambda: Mock())
     n._wait = lambda *args: TM.TaskManager._wait(n, *args)
@@ -219,7 +219,7 @@ def test_job_skips_unimplemented_strum_and_requires_home_success_before_save(hom
         _strum=Mock(side_effect=NotImplementedError('화음 미구현')),
         _set_phase=lambda phase, no: phases.append(phase),
         cli_home=Mock(), _wait=Mock(side_effect=[handle, wrapped]),
-        _cancel=threading.Event(),
+        _cancel=threading.Event(), _pause=threading.Event(),
         _track=Mock(), _untrack=Mock(),
         _save=lambda: calls.append('save'), _finish_error=lambda: calls.append('error'))
     n._run_action = lambda *a, **k: TM.TaskManager._run_action(n, *a, **k)
@@ -330,7 +330,8 @@ def test_cancel_requires_confirmed_terminal_result(status, success, expected):
     event.set()
     handle = Mock(accepted=True)
     result = SimpleNamespace(status=status, result=SimpleNamespace(success=success, message='응답'))
-    n = SimpleNamespace(_cancel=event, _wait=Mock(side_effect=[handle, result]),
+    n = SimpleNamespace(_cancel=event,
+                        _pause=threading.Event(), _wait=Mock(side_effect=[handle, result]),
                         _p=lambda key: 1, _track=Mock(), _untrack=Mock(),
                         get_logger=lambda: Mock())
     with pytest.raises(expected):
@@ -342,7 +343,8 @@ def test_user_cancel_with_unknown_robot_end_stays_error():
     event = threading.Event()
     event.set()
     handle = Mock(accepted=True)
-    n = SimpleNamespace(_cancel=event, _wait=Mock(side_effect=[handle, None, None]),
+    n = SimpleNamespace(_cancel=event,
+                        _pause=threading.Event(), _wait=Mock(side_effect=[handle, None, None]),
                         _p=lambda key: 1, _track=Mock(), _untrack=Mock(),
                         get_logger=lambda: Mock())
     with pytest.raises(TM.Aborted, match='동작 종료 불명'):
