@@ -82,6 +82,8 @@ def test_탐색후에도_정지응답을_처리할_실행기에_노드가_남는
         assert any(n.get_name() == 'work_motion_check' for n in executors[0].get_nodes())
         return {}
     monkeypatch.setattr(rclpy.executors, 'SingleThreadedExecutor', create)
+    # 실행기 소속 검사만 한다. 외부/다른 테스트의 ROS 노드 탐색에 의존하지 않는다.
+    monkeypatch.setattr(rclpy.node.Node, 'get_node_names', lambda self: [self.get_name()])
     monkeypatch.setattr(tool, 'confirm', lambda message: None)
     monkeypatch.setattr(tool, 'run', diagnostic)
     monkeypatch.setattr(MP, 'connect', lambda *a, **k: None)

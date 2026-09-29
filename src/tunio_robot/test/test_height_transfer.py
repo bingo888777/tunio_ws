@@ -173,3 +173,41 @@ def test_높이_이동_단계확인_거부시_후속명령이_없다(scene):
     with pytest.raises(RuntimeError, match='단계 거부'):
         MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {}, confirm=reject)
     assert scene.calls == []
+
+
+@pytest.mark.parametrize('sol,raise_z', [(7, 250), (2, 245)])
+def test_페그_자세로_제한높이까지_상승후_320에서_방향을_바꾼다(scene, sol, raise_z):
+    scene.sol = sol
+    scene.tcp[4] = 90
+    scene.joints = scene.make_joints(scene.tcp)
+    motion = {'work_orientation_raise_z_mm': 250, 'work_orientation_raise_z_right_mm': 245,
+              'work_orientation_pivot_z_mm': 320}
+    result = MP._transfer_above_floor([600, 0, 224, 0, 180, 0], motion, execute=False)
+    assert result['task_plan'] == [
+        [400, 0, raise_z, 0, 90, 0], [400, 0, 320, 0, 180, 0],
+        [600, 0, 224, 0, 180, 0], [600, 0, 224, 0, 180, 0]]
+    assert not scene.calls
+
+
+@pytest.mark.parametrize('bad_step', [0, 1, 2])
+def test_높이이동의_어느목표든_J5한계초과면_첫명령전_차단한다(scene, monkeypatch, bad_step):
+    tasks = []
+
+    def ikin(task, sol):
+        q = scene.make_joints(task)
+        if len(tasks) == bad_step:
+            q[4] = -137.03
+        tasks.append(task)
+        return q
+    monkeypatch.setattr(MP._api, 'ikin', ikin)
+    with pytest.raises(MP.MotionError, match='J5=-137.030'):
+        MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {})
+    assert not scene.calls
+
+
+@pytest.mark.parametrize('key', ['work_orientation_raise_z_mm', 'work_orientation_pivot_z_mm'])
+def test_자세변경_높이_NaN은_이동전에_거부한다(scene, key):
+    scene.tcp[4] = 90
+    with pytest.raises(MP.MotionError, match='유한한 양수'):
+        MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {key: float('nan')})
+    assert not scene.calls

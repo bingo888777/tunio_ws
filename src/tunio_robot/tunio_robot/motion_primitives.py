@@ -680,13 +680,13 @@ def _compact_left_required(j1, side, motion):
             and _peg_route_required(j1, side, motion))
 
 
-def _check_left_transfer_j5(joints, motion):
+def _check_transfer_j5(joints, motion):
     """컨트롤러에서 확인한 한계다. 펜던트 설정을 바꾸거나 각도를 잘라내지 않는다."""
-    limit = float(motion["peg_transition_left"]["controller_j5_limit_deg"])
+    limit = float(motion.get("controller_j5_limit_deg", 135.0))
     if not math.isfinite(limit) or not 0 < limit <= 135:
-        raise MotionError("왼쪽 전환: 현장 J5 한계는 0 초과 135도 이하여야 한다")
+        raise MotionError("이동: 현장 J5 한계는 0 초과 135도 이하여야 한다")
     if not math.isfinite(joints[4]) or abs(joints[4]) > limit:
-        raise MotionError(f"왼쪽 전환: J5={joints[4]:+.3f}도, 컨트롤러 한계 ±{limit:g}도 초과")
+        raise MotionError(f"이동: J5={joints[4]:+.3f}도, 컨트롤러 한계 ±{limit:g}도 초과")
 
 
 def compact_left_path(start, goal, motion):
@@ -717,7 +717,7 @@ def compact_left_path(start, goal, motion):
     except (TypeError, ValueError, KeyError) as exc:
         raise MotionError(f"오른쪽→왼쪽 접힌 경로 설정/자세 오류: {exc}") from exc
     for joints in (start, goal, [0, *fold, 0], [0, *ready, 0]):
-        _check_left_transfer_j5(joints, motion)
+        _check_transfer_j5(joints, motion)
     early_j1 = start[0] + fraction * (goal[0] - start[0])
     return [list(start), [early_j1, *fold, start[5]],
             [goal[0], *fold, start[5]], [goal[0], *ready, goal[5]], list(goal)]
@@ -838,9 +838,20 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
     # 현재 XY 위에서 먼저 방향을 만든다. 멀리 있는 목표까지 높일 필요는 없다.
     extra = _orientation_lift(current, target, motion)
     if extra:
-        raised[2] += extra
+        pivot_z = float(motion.get("work_orientation_pivot_z_mm", z + extra))
+        raise_z = float(motion.get("work_orientation_raise_z_mm", max(z + extra, pivot_z)))
+        if not _peg_route_required(start[0], "right", motion):
+            raise_z = float(motion.get("work_orientation_raise_z_right_mm", raise_z))
+        if not all(math.isfinite(v) and v > 0 for v in (pivot_z, raise_z)):
+            raise MotionError("높이 이동: 자세 변경 높이는 유한한 양수여야 한다")
+        pivot_z = max(z + extra, pivot_z)
+        # 수평 손목을 유지한 채 높이 올리면 J5 한계에 걸린다. 먼저 이탈한 뒤
+        # 자세 변경과 추가 상승을 함께 수행해 그리퍼가 박스를 쓸지 않게 한다.
+        raised[2] = max(current[2], min(pivot_z, raise_z))
+        pivot = raised[:2] + [pivot_z] + target[3:]
         high[2] = max(target[2], floor + 2 * margin)
-        poses = [raised, raised[:3] + target[3:], high, target]
+        poses = [raised, pivot, high, target]
+    _check_transfer_j5(start, motion)
     joints = []
     previous = start
     limit, _ = _peg_joint_limits(motion)
@@ -856,6 +867,7 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
                          if -60 <= q[0] + 360 * k <= 240), q[0])
             if not -60 <= q[0] <= 240 or j1_flip(previous[0], q[0], motion)[0]:
                 raise ValueError("현재 쪽에서 이어갈 수 없는 J1 전환")
+            _check_transfer_j5(q, motion)
             if abs(q[5]) > limit:
                 raise ValueError("J6 관절 제한 초과")
             if motion.get("j6_recovery_enabled", False):
@@ -883,7 +895,9 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
         if (len(actual) != 6 or not all(math.isfinite(v) for v in actual)
                 or math.dist(actual[:3], task[:3]) > 2.0
                 or max(abs(a - b) for a, b in zip(actual_joints, expected)) > 1.0):
-            raise MotionError("높이 이동: 목표 미도달 — 후속 이동 차단")
+            raise MotionError(
+                f"높이 이동: 목표 미도달 — 후속 이동 차단. 목표 TCP={task}, 실제 TCP={actual}, "
+                f"목표 관절={expected}, 실제 관절={actual_joints}")
         return actual_joints
 
     v, a = _transit_speed(motion)
@@ -943,9 +957,8 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             raise ValueError(f"IK/FK 위치 대조 오차 {error:.1f}mm")
     except Exception as exc:
         raise MotionError(f"피크→페그 높은 접근점 IK 실패: {exc}") from exc
-    if left_profile is not None:
-        _check_left_transfer_j5(start, motion)
-        _check_left_transfer_j5(goal, motion)
+    _check_transfer_j5(start, motion)
+    _check_transfer_j5(goal, motion)
     lower = list(approach)
     # 하강 끝점도 먼저 검사한다. 제한을 풀어 진행하지 않는다.
     j6, _ = _peg_joint_limits(motion)
@@ -959,8 +972,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
             if abs(joints[5]) > j6:
                 raise ValueError(f"J6={joints[5]:+.2f}(허용 ±{j6:g})")
             _check_transfer_joints(start, joints)
-            if left_profile is not None:
-                _check_left_transfer_j5(joints, motion)
+            _check_transfer_j5(joints, motion)
             if math.dist(K.fk(joints)["tcp"], task[:3]) > margin:
                 raise ValueError("IK/FK 위치 불일치")
         except Exception as exc:
@@ -992,8 +1004,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         logger.info(f"경로 진단: 높은 목표 TCP={high}, sol={pose.sol}, IK 관절={goal}")
         logger.info(f"경로 진단: J6 허용 ±{j6:g}도")
     for target in plan:
-        if left_profile is not None:
-            _check_left_transfer_j5(target, motion)
+        _check_transfer_j5(target, motion)
         if motion.get("j6_recovery_enabled", False):
             _check_peg_turn(target, 0.0, motion)
         if abs(target[5]) > j6:
