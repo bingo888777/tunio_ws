@@ -42,13 +42,14 @@ def transfer(monkeypatch):
     back = TP.backed_off(pose.task, 100)
     high = list(back)
     high[2] = 299
-    sim = SimpleNamespace(joints=[0] * 6, tcp=[400, 0, 224, 0, 180, 0], calls=[])
+    sim = SimpleNamespace(joints=[0] * 6, tcp=[400, 0, 224, 0, 180, 0], calls=[],
+                          j5=lambda task: 90)  # 가짜 IK 의 J5. 테스트가 규칙을 바꾼다
     solutions = {}
 
     def ikin(task, sol):
         key = tuple(task)
         if key not in solutions:
-            solutions[key] = [20, len(solutions) + 1, 10, 10, 90, 0]
+            solutions[key] = [20, len(solutions) + 1, 10, 10, sim.j5(task), 0]
         return list(solutions[key])
     monkeypatch.setitem(sys.modules, "DR_common2", SimpleNamespace(posx=list))
     monkeypatch.setattr(MP, "_api", SimpleNamespace(
@@ -197,3 +198,64 @@ def test_실기_상단전용은_도달확인후_하강없이_종료한다(transf
     MP._pick_to_peg_approach(pose, "right", None, {}, high_only=True)
     assert [c[0] for c in sim.calls] == ["high", "high"]
     assert sim.tcp[2] == 299
+
+
+# ---- 오른쪽 파지 방향은 상단이 아니라 J5 가 허용하는 높이에서 만든다 (2026-09-29)
+def _peg_orientation_too_high(pose, above_z, j5=138.0):
+    """페그 파지 방향(손목 수평)은 above_z 보다 높으면 J5 가 한계를 넘는 가짜 IK 규칙."""
+    return lambda task: j5 if (task[3:] == pose.task[3:] and task[2] > above_z) else 90
+
+
+def test_상단에서_J5가_넘으면_손목_아래로_내려온_뒤_회전한다(transfer):
+    sim, pose, back = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=200)
+    MP._pick_to_peg_approach(pose, "right", None, {})
+    # 상단(손목 아래) → 회전 높이까지 수직 하강 → 파지 방향 회전 → 접근점 하강
+    assert [c[0] for c in sim.calls] == ["high", "down", "high", "down"]
+    turn = sim.calls[1][1]
+    assert turn[:2] == back[:2] and turn[3:] == [0, 180, 0]   # 손목은 그대로
+    assert 195 <= turn[2] <= 200                                # 5mm 간격으로 찾은 첫 높이
+    assert sim.calls[-1][1] == back
+
+
+def test_회전_높이는_IK가_정하고_계획조회에_드러난다(transfer):
+    sim, pose, back = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=200)
+    plan = MP._pick_to_peg_approach(pose, "right", None, {}, execute=False)
+    assert plan["pivot_tcp"][2] == 299 and plan["pivot_tcp"][3:] == [0, 180, 0]
+    assert plan["high_tcp"][2] == plan["turn_low_tcp"][2] < 200
+    assert plan["high_tcp"][3:] == pose.task[3:]
+    assert all(abs(q[4]) <= 130 for q in plan["joint_plan"])
+    assert sim.calls == []
+
+
+def test_J5_여유는_한계에서_뺀_값으로_판정한다(transfer):
+    sim, pose, _ = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=200, j5=132.0)  # 135 안이지만 여유 5 밖
+    plan = MP._pick_to_peg_approach(pose, "right", None, {}, execute=False)
+    assert plan["high_tcp"][2] < 200
+    plan = MP._pick_to_peg_approach(pose, "right", None, {"j5_turn_margin_deg": 1.0},
+                                    execute=False)
+    assert plan["high_tcp"][2] == 299 and plan["turn_low_tcp"] is None
+
+
+def test_접근점까지_내려와도_J5가_안되면_이동하지_않는다(transfer):
+    sim, pose, _ = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=0)
+    with pytest.raises(MP.MotionError, match="돌릴 높이가 없다"):
+        MP._pick_to_peg_approach(pose, "right", None, {})
+    assert sim.calls == []
+
+
+def test_회전_높이_미도달이면_자세를_바꾸지_않는다(transfer, monkeypatch):
+    sim, pose, _ = transfer
+    sim.j5 = _peg_orientation_too_high(pose, above_z=200)
+    original = MP._movel_base
+
+    def short(p, v, a):
+        original(p, v, a)
+        sim.tcp[2] += 10  # 덜 내려왔다
+    monkeypatch.setattr(MP, "_movel_base", short)
+    with pytest.raises(MP.MotionError, match="회전 높이 미도달"):
+        MP._pick_to_peg_approach(pose, "right", None, {})
+    assert [c[0] for c in sim.calls] == ["high", "down"]
