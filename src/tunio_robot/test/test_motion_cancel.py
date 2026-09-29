@@ -98,11 +98,16 @@ def test_robot_cancel_stops_and_latches_recovery(monkeypatch):
         session.stop_done.set()
     monkeypatch.setattr('tunio_robot.robot_controller.request_and_confirm_stop', stop_request)
     monkeypatch.setattr(MP, '_cancel_check', None)
+    plans = []
     node = SimpleNamespace(
         _lock=threading.Lock(), _running=None, _cancel_sessions={},
         _recovery_required=False, _prepared_pluck=None, _holding_pick=True,
+        _recovery_plan=None, _recovering=False, _recovery_done=threading.Event(),
+        _recovery_wait=.05, _lift_mm=30.0,
+        _recover_after_cancel=lambda plan: plans.append(plan),   # 끝나지 않는 복구
         dry_run=False, _stop_timeout=1, _stop_interval=.001,
         _stop_client=Mock(), _motion_client=Mock(), get_logger=lambda: Mock(), _record=Mock())
+    node._recovery_done.set()
     goal = Mock(is_active=True)
     goal.canceled.side_effect = lambda: setattr(goal, 'is_active', False)
 
@@ -126,10 +131,111 @@ def test_robot_cancel_stops_and_latches_recovery(monkeypatch):
     goal.canceled.assert_called_once()
     goal.succeed.assert_not_called()
     assert not results[0].success
+    assert '홈 복귀 중' in results[0].message
     assert node._holding_pick is None
     assert node._recovery_required
-    assert RobotController.on_goal(node, None).name == 'REJECT'
+    # 취소 순간의 (하던 일, 쥐고 있었나) 가 복구 계획으로 넘어간다
+    assert plans == [('play_string', True)]
+    assert node._recovering and not node._recovery_done.is_set()
+    # 복구 중엔 새 goal 을 거부하지 않는다 — 받아서 복구가 끝나길 기다린다
+    assert RobotController.on_goal(node, None).name == 'ACCEPT'
     assert RobotController.on_cancel(node, goal).name == 'REJECT'
+    # 복구가 안 끝나면 그 goal 은 기다리다 사유를 싣고 실패한다
+    late = Mock(is_active=True)
+    r = RobotController._run(node, 'register_peg', late, result_type, lambda: None)
+    assert not r.success and '복구가 끝나지 않았다' in r.message
+    late.abort.assert_called_once()
+    assert node._running is None
+
+
+def _recovery_node(held, running='adjust_peg'):
+    calls = []
+    node = SimpleNamespace(
+        _lock=threading.Lock(), _running=None, _cancel_sessions={},
+        _recovery_required=True, _recovering=True, _recovery_plan=(running, held),
+        _recovery_done=threading.Event(), _prepared_pluck=(6, 'x'),
+        _holding_pick=None, _side='left', _from_pick=False, _lift_mm=30.0,
+        _recovery_wait=1, dry_run=False, _stop_client=Mock(), _motion_client=Mock(),
+        points=SimpleNamespace(motion={'m': 1}, frame=lambda name: f'frame:{name}'),
+        get_logger=lambda: Mock())
+    node._stop_client.service_is_ready.return_value = True
+    node._motion_client.service_is_ready.return_value = True
+
+    def release_pick(side=None):
+        calls.append(('release_pick', node._holding_pick))
+        node._holding_pick = False
+    node._release_pick = release_pick
+    return node, calls
+
+
+@pytest.mark.parametrize('held', [True, False, None])
+def test_recovery_after_cancel_lifts_then_returns_home_and_unlocks(monkeypatch, held):
+    node, calls = _recovery_node(held)
+    monkeypatch.setattr(MP, '_release', lambda: calls.append(('open',)))
+    monkeypatch.setattr(MP, 'cancel_recover_lift',
+                        lambda motion, mm, logger=None: calls.append(('lift', mm)))
+    monkeypatch.setattr(MP, 'return_home', lambda pose, motion: calls.append(('home', pose)))
+
+    RobotController._recover_after_cancel(node, node._recovery_plan)
+
+    if held is True:
+        # 피크를 쥔 채면 절대 열지 않는다 — 올라가서 반환하고 홈
+        assert calls == [('lift', 30.0), ('release_pick', True), ('home', 'frame:standby')]
+        assert node._holding_pick is False
+    elif held is False:
+        # 페그를 물고 있을 수 있다 — 먼저 열어 페그를 남기고 올라가 홈
+        assert calls == [('open',), ('lift', 30.0), ('home', 'frame:standby')]
+        assert node._holding_pick is False
+    else:
+        # 모르면 열지 않는다. 피크 상태는 '모름' 그대로 남긴다
+        assert calls == [('lift', 30.0), ('home', 'frame:standby')]
+        assert node._holding_pick is None
+    assert not node._recovery_required and not node._recovering
+    assert node._recovery_done.is_set() and node._prepared_pluck is None
+    assert node._recovery_plan is None
+    assert RobotController.on_goal(node, None).name == 'ACCEPT'
+
+
+def test_recovery_failure_keeps_lock_until_restart(monkeypatch):
+    node, calls = _recovery_node(True, running='play_string')
+    monkeypatch.setattr(MP, 'cancel_recover_lift',
+                        lambda motion, mm, logger=None: calls.append(('lift', mm)))
+
+    def boom(pose, motion):
+        raise MP.MotionError('movej 거부')
+    monkeypatch.setattr(MP, 'return_home', boom)
+
+    RobotController._recover_after_cancel(node, node._recovery_plan)
+
+    assert node._recovery_required and not node._recovering
+    assert node._recovery_done.is_set()
+    assert node._holding_pick is None            # 어디서 멈췄는지 모른다 — 다시 '모름'
+    assert RobotController.on_goal(node, None).name == 'REJECT'
+    r = RobotController._run(node, 'register_peg', Mock(is_active=True),
+                             lambda **kw: SimpleNamespace(**kw), lambda: None)
+    assert not r.success and '노드 재시작' in r.message
+
+
+def test_goal_arriving_during_recovery_waits_then_runs():
+    node, _ = _recovery_node(False)
+    node._record = Mock()
+    entered = threading.Event()
+    goal = Mock(is_active=True, is_cancel_requested=False)
+    results = []
+
+    def work():
+        entered.set()
+    t = threading.Thread(target=lambda: results.append(RobotController._run(
+        node, 'register_peg', goal, lambda **kw: SimpleNamespace(**kw), work)))
+    t.start()
+    assert not entered.wait(.2)                   # 복구가 끝나기 전엔 시작하지 않는다
+    with node._lock:                              # 복구 성공을 흉내 낸다
+        node._recovery_required = False
+        node._recovering = False
+        node._recovery_done.set()
+    t.join(2)
+    assert entered.is_set() and results and results[0].success
+    goal.succeed.assert_called_once()
 
 
 def test_ros_cancel_reaches_canceled_result_without_real_robot():

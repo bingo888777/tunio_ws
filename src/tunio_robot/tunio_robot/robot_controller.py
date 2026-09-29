@@ -156,10 +156,21 @@ class RobotController(Node):
         self._running = None
         self._cancel_sessions = {}
         self._recovery_required = False
+        # 취소 뒤 복구 — 정지 확인이 끝나면 (취소 순간 하던 일, 피크를 쥐고 있었나) 를
+        # 보고 스스로 풀고 홈으로 간다. 그동안 들어온 goal 은 거부하지 않고 기다리게
+        # 한다 (2026-09-29 사용자 결정 — 그 전엔 노드 재시작이 유일한 해제였다).
+        self._recovery_plan = None
+        self._recovering = False
+        self._recovery_done = threading.Event()
+        self._recovery_done.set()
         self.declare_parameter('cancel_stop_timeout_sec', 5.0)  # 실측 전 임시값
         self.declare_parameter('cancel_stop_interval_sec', 0.1)  # 실측 전 임시값
         self._stop_timeout = float(self.get_parameter('cancel_stop_timeout_sec').value)
         self._stop_interval = float(self.get_parameter('cancel_stop_interval_sec').value)
+        self.declare_parameter('cancel_lift_mm', 30.0)             # 실측 전 임시값
+        self.declare_parameter('cancel_recovery_wait_sec', 120.0)  # 실측 전 임시값
+        self._lift_mm = float(self.get_parameter('cancel_lift_mm').value)
+        self._recovery_wait = float(self.get_parameter('cancel_recovery_wait_sec').value)
         if not all(math.isfinite(v) and v > 0 for v in
                    (self._stop_timeout, self._stop_interval)):
             raise ValueError('정지 확인 시간과 주기는 유한한 양수여야 한다')
@@ -244,8 +255,8 @@ class RobotController(Node):
     def on_goal(self, goal_request):
         """이미 다른 동작이 돌고 있으면 받지 않는다. 팔이 하나라 겹칠 수 없다."""
         with self._lock:
-            if self._recovery_required:
-                self.get_logger().error("취소 후 현장 복구 확인·노드 재시작 필요 — 새 동작 거부")
+            if self._recovery_required and not self._recovering:
+                self.get_logger().error("취소 후 복구 실패 — 현장 확인·노드 재시작 전까지 새 동작 거부")
                 return GoalResponse.REJECT
             if not self.dry_run and not (self._stop_client.service_is_ready()
                                          and self._motion_client.service_is_ready()):
@@ -269,6 +280,8 @@ class RobotController(Node):
                 session.stop_done.set()
             else:
                 self._recovery_required = True
+                # 복구가 뭘 해야 하는지는 이 순간의 상태가 정한다 — 지우기 전에 남긴다
+                self._recovery_plan = (self._running, self._holding_pick)
                 self._holding_pick = None
                 threading.Thread(
                     target=request_and_confirm_stop,
@@ -285,9 +298,10 @@ class RobotController(Node):
         서버가 message 를 화면·DB에 그대로 싣기 때문에 사유를 사람 말로 남긴다.
         """
         with self._lock:
-            if self._recovery_required and id(goal) not in self._cancel_sessions:
+            if (self._recovery_required and not self._recovering
+                    and id(goal) not in self._cancel_sessions):
                 goal.abort()
-                return result_type(success=False, message='취소 후 현장 복구 확인 필요')
+                return result_type(success=False, message='취소 후 복구 실패 — 노드 재시작 필요')
             if self._running is not None:
                 goal.abort()
                 res = result_type()
@@ -297,6 +311,16 @@ class RobotController(Node):
             self._running = name
             if name != "play_string":
                 self._prepared_pluck = None
+
+        if self._recovering:
+            self.get_logger().info(f"{name} — 취소 복구(홈 복귀)가 끝나길 기다린다")
+            self._recovery_done.wait(self._recovery_wait)
+            if self._recovery_required:
+                with self._lock:
+                    self._running = None
+                goal.abort()
+                return result_type(success=False,
+                                   message='취소 후 복구가 끝나지 않았다 — 현장 확인·노드 재시작 필요')
 
         session = self._cancel_sessions.setdefault(id(goal), CancelSession())
         res = result_type()
@@ -325,6 +349,7 @@ class RobotController(Node):
                     res.message = f'{type(failure).__name__}: {failure}'
                     self.get_logger().error(f'{name} 실패 — {res.message}')
                     goal.abort()
+        start_recovery = False
         if canceled:
             confirmed = session.stop_done.wait(self._stop_timeout + self._stop_interval)
             res.success = False
@@ -334,10 +359,12 @@ class RobotController(Node):
                 time.sleep(.001)
             if confirmed and session.error is None and goal.is_cancel_requested:
                 res.message = ('취소 완료' if self.dry_run else
-                               'Soft Stop·IDLE 확인 완료 — 현장 복구 확인 후 노드 재시작 필요')
+                               'Soft Stop·IDLE 확인 완료 — 홈 복귀 중')
+                start_recovery = not self.dry_run
                 goal.canceled()
             else:
-                res.message = '정지 확인 실패: ' + (session.error or '응답 없음')
+                res.message = ('정지 확인 실패: ' + (session.error or '응답 없음')
+                               + ' — 현장 확인·노드 재시작 필요')
                 self.get_logger().error(res.message)
                 goal.abort()
         if not self.dry_run:
@@ -345,6 +372,12 @@ class RobotController(Node):
         with self._lock:
             self._cancel_sessions.pop(id(goal), None)
             self._running = None
+            if start_recovery:
+                self._recovering = True
+                self._recovery_done.clear()
+        if start_recovery:
+            threading.Thread(target=self._recover_after_cancel,
+                             args=(self._recovery_plan,), daemon=True).start()
         took = time.time() - t0
         # 걸린 시간을 **항상** 남긴다. 서버의 play/adjust 타임아웃이 전부 임시값이고,
         # 특히 줄마다 첫 adjust_peg 는 안에서 Phase 0 를 돌아 훨씬 오래 걸린다.
@@ -353,6 +386,64 @@ class RobotController(Node):
             f"{name} {'성공' if res.success else '실패'} — {took:.1f}초")
         self._record(name, goal, res, took)
         return res
+
+    def _recover_after_cancel(self, plan):
+        """
+        취소로 멈춘 자리에서 스스로 풀고 홈으로 간다 (2026-09-29 사용자 결정).
+
+        취소 순간의 (하던 Action, 피크를 쥐고 있었나) 로 복구를 고른다 —
+          쥐고 있었다(True)  — 발현 준비·발현·반환 중. **그리퍼를 열지 않는다.** 열면
+                              피크를 놓치고 비전이 없어 되찾을 수 없다(CLAUDE.md 2절).
+                              올라간 뒤 거치대에 반환하고 홈
+          빈손(False)        — 등록·조절 중이라 페그를 물고 있을 수 있다. 그리퍼를 열어
+                              페그를 그 자리에 남기고, 올라간 뒤 홈
+          모름(None)         — 이전 집기가 중간에 실패한 상태. 열지 않고 올라가 홈.
+                              피크 상태는 '모름' 그대로라 다음 집기가 스스로 거부한다
+        올라가는 건 Base +Z 수직이다 — 페그도 줄도 위에서 접근하므로 그 역방향이 접촉을
+        푸는 가장 짧은 길이다 (MP.cancel_recover_lift).
+
+        세 단계가 다 성공해야 잠금을 푼다. 어느 단계든 실패하면 예전처럼 잠긴 채로 두고
+        (노드 재시작이 해제) 사유를 로그에 남긴다. 그 사이 들어온 goal 은 _run 이
+        _recovery_done 을 기다렸다가 결과에 따라 진행하거나 사유를 실어 실패시킨다.
+        """
+        running, held = plan if plan else (None, None)
+        why = None
+        try:
+            motion = self.points.motion
+            if held is False:
+                MP._release()
+                self.get_logger().info(
+                    "취소 복구 — 그리퍼 열림 (페그를 물고 있었다면 그 자리에 남긴다)")
+            MP.cancel_recover_lift(motion, self._lift_mm, logger=self.get_logger())
+            if held is True:
+                self._holding_pick = True        # 쥔 게 확실하니 반환 루틴이 받아 준다
+                self._release_pick()
+            elif held is False:
+                self._holding_pick = False
+            MP.return_home(self.points.frame("standby"), motion)
+            self._side = None
+            self._from_pick = False
+        except Exception as exc:                      # noqa: B902
+            why = f"{type(exc).__name__}: {exc}"
+            self._holding_pick = None
+        with self._lock:
+            if why is None:
+                self._recovery_required = False
+            self._recovering = False
+            self._prepared_pluck = None
+            self._recovery_plan = None
+            self._recovery_done.set()
+        if why is None:
+            if held is None:
+                self.get_logger().warn(
+                    "취소 후 홈 복귀 완료 — 피크를 쥐고 있는지 모르는 상태라 "
+                    "그리퍼를 확인하고 노드를 재시작하라")
+            else:
+                self.get_logger().info(
+                    f"취소 후 홈 복귀 완료 (취소 시점: {running or '대기'}) — 재등록·시작 가능")
+        else:
+            self.get_logger().error(
+                f"취소 후 복구 실패 ({why}) — 현장 확인·노드 재시작 전까지 새 동작 거부")
 
     def _record(self, name, goal, res, took):
         """Goal 하나를 실행 기록에 남기고 파일을 덮어쓴다. 실패해도 조용히 넘어간다."""
