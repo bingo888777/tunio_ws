@@ -6,8 +6,43 @@
 TUNIO는 협동로봇(두산 M0609 + RG2)이 기타 줄을 튕겨 주파수를 측정하고 페그를 돌려 조율하는 시스템이다.
 PC 2대가 ROS 2 Jazzy로 통신한다(2026-09-22, PC 3대에서 축소). 정정인 PC(task_manager,
 web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). 랜을 건너는
-인터페이스는 `/robot/play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 다섯이다 — `measure_pitch`는
+인터페이스는 `/robot/prepare_pluck`·`play_string`·`adjust_peg`·`strum_all`·`register_peg`·`return_home` 여섯이다 — `measure_pitch`는
 정정인 PC 한 대 안에서 돈다. 근거는 `CLAUDE.md` 6절.
+
+---
+
+## 2026-09-22 추가: 로봇 내부 피크 확인 (성현)
+
+피크 측정·판정·알람·홈 복귀는 robot_controller가 담당한다.
+피크 확인용 Service/Topic과 정상 피크 상태 보고는 추가하지 않는다.
+PlayString Feedback.warning은 재집기 소진·홈 복귀·보충 안내를 전달한다.
+기존 CommandTuning(start/pause/resume/cancel)은 그대로 둔다.
+
+PreparePluck과 PlayString Goal의 `resumed`는 재개 사실을 나타내는 bool이다.
+서버는 준비 전에 재개했다면 PreparePluck에 전달하고, 준비 이후 재개했다면 PlayString에 전달한다.
+두 Action의 Feedback.warning과 Result.message는 피크 경고를 동일하게 관제에 전달한다.
+서버는 이 사실만 전달하며 피크 보유 여부·폭을 판단하지 않는다.
+로봇은 resumed=true이고 피크를 들고 있던 경우에만 발현 전에 재확인한다.
+이미 반환한 상태라면 기존 집기 직후 확인을 사용한다. 페그에는 적용하지 않는다.
+정상일 때 별도 확인 응답 없이 작업을 수행하고 기존 Action Result를 반환한다.
+2026-09-23 성현 정정: 피크 판정은 있음/없음 두 가지다. 정상 폭 범위 밖과
+폭 읽기 2회 실패 모두 없음으로 처리한다. 읽기 실패는 로봇 로그에 원인을 남긴다.
+세 검사 구간에서 없음이면 거치대 재집기를 추가 2회 시도한다.
+두 번 모두 없으면 홈 복귀를 완료한 뒤 PreparePluck/PlayString Result에
+`success=false`, `pick_refill_required=true`, 보충 안내 message를 반환한다(ABORTED).
+홈 복귀 실패·일반 이동 오류에서는 `pick_refill_required=false`를 유지한다.
+서버는 이 bool 필드로만 보충 대기를 구분하며 메시지 문자열을 파싱하지 않는다.
+기존 녹음이 있으면 취소·종료 확인 후 PHASE_PAUSED로 기다린다. Action을 실행 중인
+채로 사람 입력을 기다리지 않으므로 보충 대기에는 로봇 Action 시간 제한을 적용하지 않는다.
+웹은 robot_notice로 "피크 없음. 피크를 재보충하고 재개 버튼을 누르세요"를 표시한다.
+기존 `/tuning/resume`을 누르면 새 PreparePluck(resumed=true)부터 시작한다.
+로봇은 홈 복귀가 확인된 보충 대기 상태에서만 오류를 해제하고 새 집기를 수행한다.
+또 재집기가 소진되면 홈 복귀·보충 대기를 반복한다. 대기 중 취소는 이동 없이 종료한다.
+보충 재개는 새로운 측정으로 진행하며 측정 실패 횟수에는 포함하지 않는다.
+두 Action의 Result 필드가 추가되므로 관련 PC 모두 인터페이스 재빌드·노드 재시작이 필요하다.
+TuningState.robot_notice(string)를 추가해 로봇 알람을 기존 상태 Topic으로 관제 화면에
+전달한다. 최근 문구를 유지하며 새 작업 시작 시 비운다. 열거 상수 번호는 바꾸지 않는다.
+기존 Action 취소·통신 오류 처리는 유지한다.
 
 ---
 
@@ -82,7 +117,7 @@ src/tunio_interfaces/
 - `string_number` — 배열 인덱스가 아니라 **실제 줄 번호** (6, 5, 2, 1)
 - 실패 표현 — `bool success` + `string message`. 단, `MeasurePitch`만 `failure_reason` 상수를 쓴다
 - 열거 상수를 나중에 바꿀 때 기존 번호를 재사용하거나 당기지 않는다. 뒤에 추가만 한다
-- Feedback은 `MeasurePitch`에만 있다
+- Feedback: `MeasurePitch.ready`는 마이크 준비, `PlayString.warning`은 로봇 알림이다. 보충 대기 판정은 Result.pick_refill_required를 쓴다
 
 ---
 
@@ -150,12 +185,14 @@ bool ready
 
 ```
 uint8 string_number
+bool resumed
 ---
 bool success
 string message
 string preparation_id
+bool pick_refill_required
 ---
-# Feedback 사용하지 않음
+string warning
 ```
 
 피크 집기가 필요하면 로봇이 판단해 집고, 대상 줄의 접촉점 위 접근점까지 이동한다.
@@ -171,14 +208,17 @@ string preparation_id
 ```
 # --- Goal ---
 uint8 string_number
+bool resumed
+
 string preparation_id
 ---
 # --- Result ---
 bool success
 string message
+bool pick_refill_required
 ---
 # --- Feedback ---
-# 사용하지 않음
+string warning
 ```
 
 - 발현 직후 5mm 이상 후퇴(버징 방지)는 로봇 내부에서 처리하며 인터페이스에 드러나지 않는다
@@ -328,6 +368,7 @@ uint8 adjust_count
 StringResult[] results
 uint8 overall_result
 TuningSettings active_settings
+string robot_notice
 string error_message
 
 uint8 PHASE_IDLE=0

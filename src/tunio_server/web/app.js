@@ -551,6 +551,10 @@ function renderJobError(state) {
 
 function renderLive(state) {
   renderJobError(state);
+  // 로봇이 보낸 알림(피크 없음·재집기·보충 대기). 팝업이 아니라 띠로 계속 보인다 (#88)
+  const notice = $('robot-notice');
+  notice.textContent = state?.robot_notice || '';
+  notice.hidden = !notice.textContent;
   markJustDone(state);
   $('job-id').textContent = state && state.job_id ? state.job_id : '작업 없음';
 
