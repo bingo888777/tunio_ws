@@ -1,5 +1,8 @@
 # TUNIO 시스템 아키텍처 v4
 
+> **역사 기록 (2026-09-23).** 현재 구성은 [TUNIO_시스템아키텍처_v5.md](TUNIO_시스템아키텍처_v5.md)를 본다.
+> 이 문서의 "미병합" 표시, 시작 시 RegisterPeg(force=false), PlayString 필드, 일시정지·취소 정책은 그 뒤 바뀌었다.
+
 2026-09-23. v3의 2 PC 구성을 유지하고 현재 인터페이스·웹 재등록 흐름을 반영한다.
 기준은 main `7be7f8f` + PR #98 `b4dac49` + `feat/web-peg-reregister`의 웹 변경이다.
 #98은 main에 병합됐다(병합 커밋 `9ab4e3f`). 웹 후속 변경은 `feat/web-peg-reregister`의 로컬 작업이며 아직 미병합이다.
