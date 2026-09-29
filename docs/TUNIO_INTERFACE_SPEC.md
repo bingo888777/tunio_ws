@@ -16,7 +16,7 @@ web_node, result_store, audio_analyzer) / 로봇 제어 PC(robot_controller). �
 피크 측정·판정·알람·홈 복귀는 robot_controller가 담당한다.
 피크 확인용 Service/Topic과 정상 피크 상태 보고는 추가하지 않는다.
 PlayString Feedback.warning은 재집기 소진·홈 복귀·보충 안내를 전달한다.
-기존 CommandTuning(start/pause/resume/cancel)은 그대로 둔다.
+기존 CommandTuning(start/pause/resume/cancel/reregister_pegs)은 그대로 둔다.
 
 PreparePluck과 PlayString Goal의 `resumed`는 재개 사실을 나타내는 bool이다.
 서버는 준비 전에 재개했다면 PreparePluck에 전달하고, 준비 이후 재개했다면 PlayString에 전달한다.
@@ -230,8 +230,8 @@ string warning
 - 빈 preparation_id는 기존 단독 도구의 준비+발현 동작을 유지한다. 새 서버는 빈 값을 보내지 않는다.
   이 호환은 새 인터페이스로 재빌드한 도구에 대한 것이며, 구버전 바이너리 혼용을 보장하지 않는다.
 - 준비 단계는 PHASE_PREPARE_PLUCK=13이다. 기존 열거 번호는 유지한다.
-- 준비 완료 뒤 취소/일시정지는 서버 단계 경계에서 확인한다. 진행 중 로봇의 물리 정지를
-  새로 구현한 것은 아니다. 준비 중 취소가 들어오면 이동 종료 후 발현을 차단한다.
+- 취소/일시정지는 진행 중인 로봇 goal 에 취소를 걸어 **즉시 정지**한다 (2026-09-29, 문서 끝
+  "취소·일시정지 즉시 정지·재개" 절). 9/23 의 "단계 경계에서 확인" 정책은 대체됐다.
 - 마이크 ready 뒤에는 접촉 직전 접근·스트로크·즉시 후퇴·복귀를 수행한다.
   마이크는 기존처럼 소리 onset부터 분석 제한을 센다.
 - 관제 PC와 로봇 PC 양쪽 tunio_interfaces 및 관련 패키지를 재빌드하고 노드를 재시작한다.
@@ -606,9 +606,9 @@ AdjustPeg는 등록을 수행하지 않는다. 미등록이면 이동 전에 실
 3. 복귀까지 성공하면 **`PHASE_IDLE=0`, 빈 job_id**로 돌아온다. 웹은 재등록 요청 접수부터
    상태를 추적해 '재등록 완료'로 표시한다. 기존 대기 상태만 보고 완료로 판정하면 안 된다.
    구독을 먼저 연결하고 응답 대기 중 도착한 상태도 처리한다.
-4. 실패·거부·동작 종료 불명은 `PHASE_ERROR=11`, 단계 경계에서 취소되면
-   `PHASE_CANCELED=10`이다. 실패/취소 시 후속 등록·자동 복귀는 하지 않는다.
-   취소는 즉시 물리 정지를 보장하지 않는다. 일시정지·재개·취소는 기존 서비스로 요청한다.
+4. 실패·거부·동작 종료 불명은 `PHASE_ERROR=11`, 취소되면 `PHASE_CANCELED=10`이다.
+   취소는 로봇을 즉시 세운 뒤 서버가 ReturnHome 을 보낸다(2026-09-29). 실패 시 후속 등록은
+   하지 않는다. 일시정지·재개·취소는 기존 서비스로 요청한다.
 
 `results`는 판정 전이며 `overall_result`도 OVERALL_PENDING이다. 조율 성공으로 표시하지 않는다.
 사람이 페그를 만진 뒤 재등록을 요청하고, 성공 후 별도로 조율을 시작한다.
@@ -665,8 +665,23 @@ ReturnHome 실패/거부/종료 불명은 기존 성공 Result 정책에 따라 
 
 - 웹 `/tuning/cancel` → task_manager의 활성 Action 취소 요청 → robot_controller. 취소 접수 자체는 정지 완료가 아니다.
 - robot_controller는 별도 Reentrant 클라이언트로 `/{robot_id}/dsr_controller2/motion/move_stop` (`dsr_msgs2/srv/MoveStop`, stop_mode=2 Soft Stop)을 요청한다. DSR_ROBOT2의 동기 이동용 노드/executor를 재사용하지 않는다.
-- 취소 플래그 이후에는 API 호출 전후 검사로 추가 이동·그리퍼 I/O를 차단한다. 기존 힘/순응 해제 호출은 허용하되 자동 후퇴·그리퍼 열기·복귀는 하지 않는다. 이미 전송된 I/O를 되돌리거나 그리퍼를 즉시 정지시키는 기능은 아니다.
+- 취소 플래그 이후에는 API 호출 전후 검사로 추가 이동·그리퍼 I/O를 차단한다. 기존 힘/순응 해제 호출은 허용한다. 이미 전송된 I/O를 되돌리거나 그리퍼를 즉시 정지시키는 기능은 아니다. *(2026-09-29 변경: 정지 확인 뒤 접촉 해제·상승은 한다 — 아래 절)*
 - 작업 코드가 종료되기 전까지 Stop을 반복 요청하여 명령 전 검사/전송 사이 취소 경합을 다룬다. 작업 코드 종료 후 `check_motion` (`dsr_msgs2/srv/CheckMotion`)의 success=true와 status=0(IDLE)을 확인해야 Action을 CANCELED로 종료한다. status=1/2는 기다리고, 그 외 값·거부·무응답은 ABORTED다.
 - 정지/상태 서비스가 준비되지 않으면 새 실물 Action을 받지 않는다. 정지 결과 불명은 정상 취소로 숨기지 않는다.
-- 실물 취소 후에는 정지 성공 여부와 무관하게 새 Action을 거부한다. 피크/그리퍼/페그 접촉 상태를 확인하고 복구한 뒤 노드를 재시작해야 한다. 자동 재개/자동 복귀는 없다. 관제에서도 다시 등록해야 한다.
+- ~~실물 취소 후에는 정지 성공 여부와 무관하게 새 Action을 거부한다. … 노드를 재시작해야 한다.~~ **2026-09-29 대체**: 정지 확인과 접촉 해제가 성공하면 잠금을 스스로 푼다. 잠기는 것은 정지 확인·복구 실패 때뿐이고 그때만 노드 재시작이 해제다. 관제에서는 다시 등록해야 한다(허가 소비).
 - `cancel_stop_timeout_sec=5.0`, `cancel_stop_interval_sec=0.1`은 실측 전 임시 파라미터다. robot.launch.py에서 설정 가능하다. 네트워크/드라이버 응답이 없으면 소프트웨어만으로 정지를 보장할 수 없다. 안전 인증된 비상정지는 별도다.
+
+### 취소·일시정지 즉시 정지·재개 (2026-09-29 사용자 변경, PR #111 · #115)
+
+**서비스·필드는 바뀌지 않았다.** `/tuning/pause`·`/tuning/resume`·`/tuning/cancel`(CommandTuning)과 기존 Action 취소 요청을 그대로 쓴다. 바뀐 것은 동작 계약이다.
+
+- **일시정지와 취소 모두 로봇을 즉시 세운다.** 서버 `on_pause`/`on_cancel`이 진행 중인 로봇 goal에 취소를 건다. 로봇은 MoveStop(mode=2) → CheckMotion IDLE 확인(9/23 경로 그대로)까지 한다. 로봇 동작이 없을 때의 일시정지는 예전처럼 단계 경계에서 멈춘다.
+- **정지가 확인되면 로봇은 접촉만 풀고 그 자리에서 대기한다.** 취소 순간 피크를 쥐고 있었으면(`MP._pick_gripped`) 그리퍼를 열지 않고 Base +Z `cancel_lift_mm`(30, 임시값) 상승. 빈손이면(등록·조절 중이라 페그를 물고 있을 수 있다) 열어서 폭 `cancel_open_confirm_mm`(35, 임시값) 이상을 확인한 뒤 상승. 모르면 열지 않고 상승(피크 상태 '모름' 유지). 여기까지 성공해야 잠금을 푼다. **홈으로 가지 않는다.**
+- **취소** → 서버가 `ReturnHome`을 보내 피크 반환·대기 자세 → `PHASE_CANCELED`. 저장하지 않는다. 노드 재시작 없이 다음 재등록·시작이 된다.
+- **일시정지** → `PHASE_PAUSED`. 서버 대기 예산은 멈춘다. **재개 → 그 줄을 처음부터**(PreparePluck부터, `resumed=true`). 세운 것이 `adjust_peg`/`register_peg`였으면 손잡이가 반쯤 돌아간 상태라 재개 전에 **그 줄만 강제 재등록**(RegisterPeg force=true)한다. 재등록 중 일시정지도 같다. 멈춘 자리에서 남은 이동을 잇는 방식(#106 비동기 이동)은 9/29 실기에서 "목표 미도달"로 막혀 쓰지 않는다.
+- **피크 보충 대기와의 구분** — `pick_refill_required`로 들어간 PAUSED는 로봇이 홈 복귀까지 끝낸 상태라, `/tuning/resume`이 로봇 서비스를 부르지 않고 서버에서 바로 푼다. 이때 취소하면 서버가 보내는 ReturnHome만은 로봇이 받아 보충 대기 플래그를 푼다(#115).
+- **재등록은 먼저 ReturnHome** — 홈이 아닌 자리(정지한 곳, 페그 앞, 거치대 위)에서 첫 페그로 바로 가지 않는다(#115).
+- 정지 확인 실패·복구 실패는 예전 그대로 잠기며 노드 재시작이 해제다. 복구 중 들어온 goal은 거부하지 않고 `cancel_recovery_wait_sec`(120, 임시값)까지 기다렸다가 진행한다.
+- `cancel_lift_mm` · `cancel_lift_max_z_mm`(600) · `cancel_open_confirm_mm` · `cancel_open_wait_sec`(3) · `cancel_recovery_wait_sec`는 실측 전 임시값이다. 소프트웨어 정지이며 안전 인증된 비상정지를 대체하지 않는다.
+
+9/29 실기에서 확인: 피크 있음/없음 취소 → 복구, 재등록 중·발현 준비 중·페그 조절 중 일시정지 → 재개, 일시정지 후 취소 → 홈, 피크 없음 → 재집기 2회 → 홈 → 웹 재개(`verify_pick:=true`).
