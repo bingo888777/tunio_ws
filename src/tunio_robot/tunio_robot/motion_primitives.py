@@ -47,6 +47,7 @@ _gripper = None
 _j6_motion = None       # 실제 노드가 감시 설정을 연결한다. 단독 도구는 기존 경로 유지
 _j6_sample = None       # (수신 monotonic 시각, J6). joint_states 콜백만 갱신
 _cancel_check = None  # robot_controller의 현재 Action 취소 검사
+_blend_in_flight = False  # 연속 경유 종료 미확인. 실패 시 컨트롤러가 독립 정지 요청
 # pick_up 이 실제로 집은 뒤 True, _release() 로 연 뒤 False. 노드의 _holding_pick 이
 # 집기·반환 '도중' 엔 None(모름)인데, 그 사이 취소가 오면 복구가 이걸로 판단한다
 # (2026-09-29). 폭 읽기(#88)가 붙으면 그쪽이 더 확실하고 이건 그때까지의 기록이다.
@@ -116,6 +117,8 @@ _WAIT_SERVICES = [
     ("GetCurrentPosj", "dsr_controller2/aux_control/get_current_posj"),
     ("MoveJoint", "dsr_controller2/motion/move_joint"),
     ("MoveLine", "dsr_controller2/motion/move_line"),
+    ("MoveWait", "dsr_controller2/motion/move_wait"),
+    ("CheckMotion", "dsr_controller2/motion/check_motion"),
     # tool/tcp 설정은 MANUAL 모드에서만 받아줘서(2026-09-23 tcp_diag.py --manual
     # 실기로 확정) connect() 가 왕복에 쓴다. 못 기다리면 이 두 호출에서도
     # 똑같이 영원히 멈춘다
@@ -375,6 +378,8 @@ def ensure_tcp(name=None, logger=None):
 def _require_api():
     if _api is None:
         raise MotionError("두산 API가 초기화되지 않았다. connect() 를 먼저 부르거나 dry_run 으로 돌려라")
+    if _blend_in_flight:
+        raise MotionError("연속 경유 종료 미확인 — 정지 확인 전 후속 명령 금지")
     if _cancel_check is not None:
         from .motion_cancel import GuardedAPI
         return GuardedAPI(_api, _cancel_check)
@@ -428,6 +433,7 @@ SPEED_CAP_LINEAR = 250.0      # mm/s  — 직선 이동(movel)
 SPEED_CAP_TCP = 250.0         # mm/s
 # 지금 관절각을 못 읽어 기하를 못 볼 때. 실측 자세에서 360mm/s 쯤 나오는 값이다.
 SPEED_CAP_JOINT_BLIND = 15.0  # deg/s
+SPEED_CAP_JOINT_APPROACH = 30.0  # IK/경로 계산 성공한 movejx 상한 (사용자 지정)
 
 
 def _peak_tcp_mm_per_deg(start, goal, n=64):
@@ -455,7 +461,7 @@ def _peak_tcp_mm_per_deg(start, goal, n=64):
 
 
 def _joint_vel_for(goal, want_vel, tcp_cap=SPEED_CAP_TCP,
-                   fallback_vel=SPEED_CAP_JOINT_BLIND):
+                   fallback_vel=SPEED_CAP_JOINT_BLIND, *, start=None):
     """
     손끝이 SPEED_CAP_TCP 를 넘지 않도록 관절 속도를 낮춘다 (#58).
 
@@ -464,7 +470,7 @@ def _joint_vel_for(goal, want_vel, tcp_cap=SPEED_CAP_TCP,
     """
     api = _require_api()
     try:
-        start = [float(v) for v in api.get_current_posj()]
+        start = [float(v) for v in (api.get_current_posj() if start is None else start)]
         goal = [float(v) for v in goal]
         if len(start) != 6 or len(goal) != 6 or not all(math.isfinite(v) for v in start + goal):
             return min(want_vel, fallback_vel)
@@ -489,13 +495,14 @@ def _transit_speed(motion, vel_key="pick_vel_approach", acc_key="pick_acc_approa
             _fast(motion, acc, SPEED_CAP_LINEAR * 2))
 
 
-def _transit_joint_speed(goal, motion, cap):
+def _transit_joint_speed(goal, motion, cap, *, start=None):
     """같은 관절 경로에서 목표 TCP 속도로 환산. 경로를 모르면 기존 느린 속도 유지."""
     tcp_vel, tcp_acc = _transit_speed(motion)
     fallback = _fast(motion, motion.get("vel", 30), min(cap, SPEED_CAP_JOINT_BLIND))
     if goal is None:
-        return fallback, _fast(motion, motion.get("acc", 30), cap * 2)
-    vel = _joint_vel_for(goal, cap, tcp_cap=tcp_vel, fallback_vel=fallback)
+        return fallback, _fast(motion, motion.get("acc", 30),
+                               min(cap, SPEED_CAP_JOINT_BLIND) * 2)
+    vel = _joint_vel_for(goal, cap, tcp_cap=tcp_vel, fallback_vel=fallback, start=start)
     return vel, min(vel * tcp_acc / tcp_vel, cap * 2)
 
 
@@ -557,7 +564,7 @@ def _guard_j6_task(task, sol=None):
     _guard_j6_goal(list(api.ikin(posx(list(task)), sol)))
 
 
-def _movej(joints, motion, relative=False):
+def _movej(joints, motion, relative=False, *, cap=SPEED_CAP_JOINT):
     """관절 이동. relative=True 면 현재 자세 기준 상대 이동."""
     api = _require_api()
     from DR_common2 import posj
@@ -567,10 +574,10 @@ def _movej(joints, motion, relative=False):
     elif not relative:
         _guard_j6_goal(joints)
     mod = api.DR_MV_MOD_REL if relative else api.DR_MV_MOD_ABS
-    vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT)
-    acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT * 2)
+    vel = _fast(motion, motion.get("vel", 30), cap)
+    acc = _fast(motion, motion.get("acc", 30), cap * 2)
     if not relative and "transit_tcp_vel" in motion:
-        vel, acc = _transit_joint_speed(joints, motion, SPEED_CAP_JOINT)
+        vel, acc = _transit_joint_speed(joints, motion, cap)
     elif not relative:
         # 상대 이동은 목표 관절각을 여기서 모른다 — 절대 이동에만 건다.
         # 상대 movej 는 페그 회전(turn_motion, 배율 1.0)에만 쓰여서 원래 느리다.
@@ -610,19 +617,19 @@ def _movejx(task, motion, sol=None):
     from DR_common2 import posx
     if sol is None:
         sol = api.get_current_solution_space()
-    # movejx 도 관절 보간이지만 목표가 작업 좌표라 목표 관절각을 여기서 모른다.
-    # ikin 을 부르면 알 수 있으나 그건 또 한 번의 서비스 왕복이고, 실패하면
-    # 이동 자체가 막힌다. 기하를 못 보는 이동이므로 느린 쪽 상한을 쓴다 (#58).
+    # 목표 관절각/경로 계산 실패 시 기존 15도/s 이하의 느린 설정을 유지한다.
     vel = _fast(motion, motion.get("vel", 30), SPEED_CAP_JOINT_BLIND)
     acc = _fast(motion, motion.get("acc", 30), SPEED_CAP_JOINT_BLIND * 2)
     if "transit_tcp_vel" in motion:
         # 목표 해를 읽어 속도만 환산한다. 경로/sol은 기존 movejx 그대로 유지한다.
-        # 실제 보간과 IK의 차이를 고려해 기존 15deg/s 상한은 유지한다.
         try:
-            goal = list(api.ikin(posx(list(task)), sol))
+            goal = [float(v) for v in api.ikin(posx(list(task)), sol)]
+            if (len(goal) != 6 or not all(math.isfinite(v) for v in goal)
+                    or all(abs(v) < 1e-9 for v in goal)):
+                raise ValueError("유효한 IK 관절각이 아니다")
         except Exception:
             goal = None
-        vel, acc = _transit_joint_speed(goal, motion, SPEED_CAP_JOINT_BLIND)
+        vel, acc = _transit_joint_speed(goal, motion, SPEED_CAP_JOINT_APPROACH)
     _guard_j6_task(task, sol)
     return _moved(api.movejx(posx(list(task)), vel=vel, acc=acc, sol=sol), "movejx")
 
@@ -744,6 +751,133 @@ def approach_peg_side(side, route, motion, logger=None):
     if route is None or route.joints[0] != 90.0:
         raise MotionError("페그 접근에는 J1=+90도인 routes.transit이 필요하다")
     goto_route(route, motion)
+
+
+def _blend_radius(motion, *, compact=False):
+    """반경은 mm. 독립 정지 경로가 있는 Action에서만 연속 이동한다."""
+    config = motion.get("peg_transition_left", {}) if compact else motion
+    key = "blend_radius_mm" if compact else "transit_blend_radius_mm"
+    try:
+        radius = float(config.get(key, 0.0))
+        if not math.isfinite(radius) or radius < 0:
+            raise ValueError("유한한 0 이상의 값이어야 한다")
+    except (TypeError, ValueError) as exc:
+        raise MotionError(f"경유 반경 {key} 설정 오류: {exc}") from exc
+    # 단독 도구에는 robot_controller의 오류 시 MoveStop/IDLE 경로가 없다.
+    return radius if _cancel_check is not None else 0.0
+
+
+def _movej_path(targets, motion, radius=0.0, logger=None, confirm=None,
+                *, cap=SPEED_CAP_JOINT):
+    """비접촉 경유만 연결한다. 마지막 점은 정지하고 실제 관절각까지 대조한다.
+
+    속도와 경유점을 먼저 계산해 블렌딩 구간에서 서비스 조회로 시간을 쓰지 않는다.
+    ponytail: 속도 환산은 기존 관절 선분 모델이다. 블렌딩 곡선의 TCP 극값·외형 충돌은
+    이 모델의 보증 범위 밖이며, 반경별 실기 검증이 필요하다.
+    """
+    global _blend_in_flight
+    from . import kinematics as K
+    api = _require_api()
+    start = _read_peg_joints(motion)
+    targets = [list(map(float, q)) for q in targets]
+    # 대화형 확인은 정지한 상태에서만 받는다. 전체 경로를 첫 이동 전에 검사한다.
+    radius = 0.0 if confirm is not None or _cancel_check is None else radius
+    if not math.isfinite(radius) or radius < 0:
+        raise MotionError("경유 반경은 유한한 0 이상의 값이어야 한다")
+    previous = start
+    for target in targets:
+        _check_transfer_joints(previous, target)
+        _check_transfer_j5(target, motion)
+        limit, _ = _peg_joint_limits(motion)
+        if abs(target[5]) > limit:
+            raise MotionError("경유 목표의 J6 한계 초과")
+        if motion.get("j6_recovery_enabled", False):
+            _check_peg_turn(target, 0.0, motion)
+        _guard_j6_goal(target)
+        previous = target
+    if not targets:
+        return
+
+    radii = [0.0] * len(targets)
+    commands = []
+    if radius and len(targets) > 1:
+        from DR_common2 import posj
+        positions = [K.fk(q)["tcp"] for q in [start] + targets]
+        for i in range(len(targets) - 1):
+            # 짧은 구간은 반경을 줄인다. 앞뒤 이동 거리 절반보다 여유 있게 잡는다.
+            radii[i] = min(radius, math.dist(positions[i], positions[i + 1]) / 4,
+                           math.dist(positions[i + 1], positions[i + 2]) / 4)
+        previous = start
+        for target in targets:
+            vel, acc = _transit_joint_speed(target, motion, cap, start=previous)
+            commands.append((posj(target), vel, acc))
+            previous = target
+    blended = any(radii)
+    if logger:
+        logger.info(f"경유 반경(mm): {radii}")
+    if blended:
+        # 모든 명령/API 존재를 시작 전에 확인한다. 실패하면 아직 움직이지 않았다.
+        move, wait, status = api.movej, api.mwait, api.check_motion
+        absolute, override = api.DR_MV_MOD_ABS, api.DR_MV_RA_OVERRIDE
+        # 예외/취소 시 이 표시를 남겨 _run이 독립 정지와 IDLE을 확인하게 한다.
+        _blend_in_flight = True
+        for (target, vel, acc), r in zip(commands, radii):
+            _guard_j6_goal(target)
+            _moved(move(target, vel=vel, acc=acc, mod=absolute, radius=r, ra=override),
+                   "경유 movej")
+        _moved(wait(0), "경유 mwait")
+        if status() != 0:
+            raise MotionError("연속 경유의 IDLE을 확인하지 못했다")
+        _blend_in_flight = False
+        actual = _read_peg_joints(motion)
+        _check_transfer_joints(actual, targets[-1])
+        if max(abs(a - b) for a, b in zip(actual, targets[-1])) > 1.0:
+            raise MotionError(f"경유 관절 위치 미도달 — 목표={targets[-1]}, 실제={actual}")
+        return
+
+    for target in targets:
+        if confirm:
+            confirm(f"경유 관절 이동: {[round(v, 2) for v in target]}")
+        _check_transfer_joints(_read_peg_joints(motion), target)
+        if cap == SPEED_CAP_JOINT:
+            _movej(target, motion)
+        else:
+            _movej(target, motion, cap=cap)
+        actual = _read_peg_joints(motion)
+        _check_transfer_joints(actual, target)
+        if max(abs(a - b) for a, b in zip(actual, target)) > 1.0:
+            raise MotionError(f"경유 관절 위치 미도달 — 목표={target}, 실제={actual}")
+
+
+def _approach_peg(pose, motion, from_pick=False, side=None, route=None, logger=None):
+    """페그 앞 접근점까지만 이동. 파지·진입 전에 반드시 정지한다."""
+    if from_pick or _compact_left_required(_current_j1(), side, motion):
+        _pick_to_peg_approach(pose, side, route, motion, logger)
+        return
+    back = TP.backed_off(pose.task, motion.get("approach_mm", 100.0))
+    radius = _blend_radius(motion)
+    if radius and side is not None and _peg_route_required(_current_j1(), side, motion):
+        if route is None or route.joints[0] != 90.0:
+            raise MotionError("페그 접근에는 J1=+90도인 routes.transit이 필요하다")
+        from DR_common2 import posx
+        api = _require_api()
+        sol = getattr(pose, "sol", None)
+        if sol is None:
+            sol = api.get_current_solution_space()
+        from . import kinematics as K
+        target = [float(v) for v in api.ikin(posx(back), sol)]
+        if (len(target) != 6 or not all(math.isfinite(v) for v in target)
+                or math.dist(K.fk(target)["tcp"], back[:3]) >
+                float(motion.get("pick_to_peg_margin_mm", 5.0))):
+            raise MotionError("페그 접근점 IK/FK 불일치 — 이동 금지")
+        _movej_path([route.resolve(_read_peg_joints(motion)), target], motion, radius, logger,
+                    cap=SPEED_CAP_JOINT_APPROACH)
+        actual, _ = read_posx()
+        if (len(actual) != 6 or not all(math.isfinite(v) for v in actual)
+                or math.dist(actual[:3], back[:3]) > 2.0):
+            raise MotionError("페그 접근점 미도달 — 진입 금지")
+        return
+    _movejx(back, motion, sol=getattr(pose, "sol", None))
 
 
 def _peg_transfer_floor(motion):
@@ -910,13 +1044,18 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
             confirm(f"현재 XY에서 Z={raised[2]:.1f}mm까지 수직 이동")
         _movel_base(raised, v, a)
     actual = arrived(raised, joints[0])
-    for task, q in zip(poses[1:-1], joints[1:-1]):
-        _check_transfer_joints(actual, q)
-        if max(abs(x - y) for x, y in zip(actual, q)) > .01:
-            if confirm:
-                confirm(f"높이 경로 관절 이동: {[round(v, 2) for v in q]}")
-            _movej(q, motion)
-        actual = arrived(task, q)
+    radius = _blend_radius(motion)
+    if radius and len(joints[1:-1]) > 1 and confirm is None:
+        _movej_path(joints[1:-1], motion, radius, logger)
+        actual = arrived(poses[-2], joints[-2])
+    else:
+        for task, q in zip(poses[1:-1], joints[1:-1]):
+            _check_transfer_joints(actual, q)
+            if max(abs(x - y) for x, y in zip(actual, q)) > .01:
+                if confirm:
+                    confirm(f"높이 경로 관절 이동: {[round(v, 2) for v in q]}")
+                _movej(q, motion)
+            actual = arrived(task, q)
     if target != high:
         if confirm:
             confirm(f"목표 XY에서 Z={target[2]:.1f}mm까지 수직 이동")
@@ -1023,19 +1162,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     if not execute:
         return {"current_tcp": current, "current_joints": start, "high_tcp": high,
                 "approach_tcp": approach, "lower_tcp": lower, "joint_plan": plan}
-    for target in plan:
-        if confirm:
-            confirm(f"높은 경로 관절 이동: {[round(v, 2) for v in target]}")
-        # 직전 실행의 실제 관절각으로 재검사. 실패해도 직행으로 폴백하지 않는다.
-        _check_transfer_joints(_read_peg_joints(motion), target)
-        move_result = _movej(target, motion)
-        actual = _read_peg_joints(motion)
-        _check_transfer_joints(actual, actual)
-        if max(abs(a - b) for a, b in zip(actual, target)) > 1.0:
-            raise MotionError(
-                f"피크→페그: 경유 관절 위치 미도달. movej 반환={move_result!r}, "
-                f"목표={target}, 실제={actual}, "
-                f"최대 오차={max(abs(a - b) for a, b in zip(actual, target)):.3f}도")
+    _movej_path(plan, motion, _blend_radius(motion, compact=compact), logger, confirm)
     actual, _ = read_posx()
     if len(actual) != 6 or not all(math.isfinite(v) for v in actual):
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
@@ -1085,6 +1212,8 @@ def _grip(preset_name):
     조금만 어긋나도 옆힘이 걸려 많이 못 돌린다. 대신 그 여유(와 고무 골무의
     비틀림)가 그대로 헛돎이 되어 백래시에 더해진다.
     """
+    if _blend_in_flight:
+        raise MotionError("연속 경유 종료 미확인 — 그리퍼 명령 금지")
     if _gripper is None:
         raise MotionError("그리퍼가 초기화되지 않았다. connect() 를 먼저 불러라")
     if _cancel_check is not None:
@@ -1826,11 +1955,7 @@ def register_peg(pose, motion, handle, read_width, logger=None,
     pose, _ = _j6_pose(pose, motion)
     _grip("open")
     approach_mm = float(motion.get("approach_mm", 100.0))
-    back = TP.backed_off(pose.task, approach_mm)
-    if from_pick or _compact_left_required(_current_j1(), side, motion):
-        _pick_to_peg_approach(pose, side, route, motion, logger)
-    else:
-        _movejx(back, motion, sol=getattr(pose, "sol", None))
+    _approach_peg(pose, motion, from_pick, side, route, logger)
 
     # 먼 구간은 **순응을 켜기 전에** 위치 제어로 간다. 순서가 중요하다 —
     # 순응이 켜진 뒤에 위치 명령을 주면 스프링이 흡수해 팔이 그 자리에 선다.
@@ -2102,11 +2227,9 @@ def adjust_peg(pose, joint, delta_deg, motion, roll_deg=0.0,
     # 치고, 줄이면 눕힌 손잡이도 못 지난다. 창이 5mm 도 안 된다 (#31)
     _grip("open")
     transfer = from_pick or _compact_left_required(_current_j1(), side, motion)
-    if transfer:
-        _pick_to_peg_approach(entry, side, route, motion, logger)
+    if transfer or joint == 6:
+        _approach_peg(entry, motion, from_pick, side, route, logger)
     if joint == 6:
-        if not transfer:
-            _movejx(TP.backed_off(entry.task, back), motion, sol=getattr(entry, "sol", None))
         recovered = _prepare_peg_turn(delta_deg, motion) or 0.0
         entry = _rolled(entry, recovered)
         exit_ = _rolled(exit_, recovered)

@@ -241,3 +241,20 @@ def test_실기도구가_실제_집기발현함수로_홈없이_한번_발현한
     # 높이 경유로 하강 거리가 늘어도 최종 접촉 좌표는 교시점 그대로다.
     assert ('movel', points.pluck(6).task) in scene.calls
     assert result['pick_state'] == 'held_assumed'
+
+
+def test_높은경유는연결하고_상승완료와하강전도착은확인한다(scene, monkeypatch):
+    monkeypatch.setattr(MP, '_cancel_check', lambda: None)
+    linked = []
+
+    def move_path(targets, motion, radius, logger):
+        linked.append((targets, radius))
+        scene.joints = list(targets[-1])
+        scene.tcp[:3] = K.fk(scene.joints)['tcp']
+    monkeypatch.setattr(MP, '_movej_path', move_path)
+    target = [600, 0, 224, 90, 90, 0]
+    MP._transfer_above_floor(target, {'transit_blend_radius_mm': 10})
+    assert len(linked) == 1 and linked[0][1] == 10
+    assert len(linked[0][0]) == 2  # 자세 전환점 → 목표 위, 그 뒤 하강은 별도
+    assert all(kind == 'movel' for kind, _ in scene.calls)
+    assert scene.tcp[:3] == target[:3]
