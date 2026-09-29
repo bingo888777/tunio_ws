@@ -327,3 +327,60 @@ def test_높은경유는연결하고_상승완료와하강전도착은확인한�
     assert all(q[5] == pytest.approx(-199.8 + shift) for q in linked[0][0])
     assert all(kind == 'movel' for kind, _ in scene.calls)
     assert scene.tcp[:3] == target[:3]
+
+
+def test_현재가_복구로_높아져도_목표위는_J5가_허용하는_높이로_낮춘다(scene):
+    """9/29: 취소 복구 +30 → 254.2 에서 재개. 줄 위 254 는 J5 -136, 224 는 통과."""
+    scene.tcp = [591.8, -143.8, 254.2, 165.6, -180., -102.9]
+    scene.joints = scene.make_joints(scene.tcp)
+    target = [645.23, -19.14, 224., 31.81, 180., 124.62]
+    base_ikin = MP._api.ikin
+
+    def ikin(task, sol):
+        q = base_ikin(task, sol)
+        if abs(task[0] - target[0]) < 1e-6 and task[2] > 230:   # 줄 위 254 만 한계 초과
+            q[4] = -136.183
+        return q
+    MP._api.ikin = ikin
+    result = MP._transfer_above_floor(target, {}, execute=False)
+    raised, high, final = result['task_plan']
+    assert all(abs(q[4]) <= 135 for q in result['joint_plan'])
+    # 현재 위는 그대로 254.2, 목표 위는 224~230 사이로 내려온다
+    assert raised[2] == pytest.approx(254.2)
+    assert 224 <= high[2] <= 230 and final == target
+
+
+def test_목표위를_바닥까지_낮춰도_J5가_안되면_이동하지_않는다(scene):
+    scene.tcp = [591.8, -143.8, 254.2, 165.6, -180., -102.9]
+    scene.joints = scene.make_joints(scene.tcp)
+    target = [645.23, -19.14, 224., 31.81, 180., 124.62]
+    base_ikin = MP._api.ikin
+
+    def ikin(task, sol):
+        q = base_ikin(task, sol)
+        if abs(task[0] - target[0]) < 1e-6 and task[2] > 223:
+            q[4] = -136.183
+        return q
+    MP._api.ikin = ikin
+    with pytest.raises(MP.MotionError, match="높이 이동 목표 위"):
+        MP._transfer_above_floor(target, {}, execute=False)
+    assert scene.calls == []
+
+
+def test_목표위_IK가_엉뚱한_해를_주면_그_높이도_낮춘다(scene):
+    """9/29: 줄 위 254 에서 IK/FK 위치 불일치. J5 가 아니라 대조 실패로도 내려와야 한다."""
+    scene.tcp = [591.6, -143.8, 254.0, 165.5, -180., -103.1]
+    scene.joints = scene.make_joints(scene.tcp)
+    target = [645.85, -29.08, 224., 18.53, -180., 111.67]
+    base_ikin = MP._api.ikin
+
+    def ikin(task, sol):
+        q = base_ikin(task, sol)
+        if abs(task[0] - target[0]) < 1e-6 and task[2] > 230:   # fk 가 다른 자리를 가리킴
+            q[3] += 3.0
+        return q
+    MP._api.ikin = ikin
+    result = MP._transfer_above_floor(target, {}, execute=False)
+    raised, high, final = result['task_plan']
+    assert raised[2] == pytest.approx(254.0)
+    assert 224 <= high[2] <= 230 and final == target

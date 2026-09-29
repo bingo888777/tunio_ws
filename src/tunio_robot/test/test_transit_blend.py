@@ -120,6 +120,7 @@ def test_연속경유_오류는_정지후보고하고_정지실패면잠근다(r
                            _recovery_required=False, _recovering=False, _prepared_pluck=None,
                            dry_run=False, _stop_client=Mock(), _motion_client=Mock(),
                            _stop_timeout=.1, _stop_interval=.001,
+                           _pick_fault=None, _pick_refill_pending=False,
                            get_logger=lambda: Mock(), _record=Mock())
     rig.reject = 2
     goal = Mock()

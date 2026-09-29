@@ -995,12 +995,33 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
         pivot = raised[:2] + [pivot_z] + target[3:]
         high[2] = max(target[2], floor + 2 * margin)
         poses = [raised, pivot, high, target]
-    _check_transfer_j5(start, motion)
+    else:
+        # "이미 높으면 낮추지 않는다" 가 목표 쪽까지 번지면 안 된다. 취소 복구가 +30 올려
+        # 254 에 세운 뒤 재개하면 줄 위 지점도 254 가 되는데, 6번 발현 자세는 224 에선
+        # J5 가 한계 안이고 254 에선 -136 이다 (9/29 실기). 목표 위만 5mm 씩 내려오며
+        # 실제 IK 의 J5 가 한계 안인 첫 높이로 잡는다 — 평소 높이(기준+여유)가 바닥이다.
+        min_z = max(target[2], floor + 2 * margin)
+        if high[2] > min_z:
+            ok_z = _turn_height(high, high[:2] + [min_z] + high[3:], sol, motion,
+                                what="높이 이동 목표 위", margin=0.0)
+            if ok_z < high[2]:
+                if logger:
+                    logger.info(f"높이 이동: 목표 위 Z {high[2]:.1f} → {ok_z:.1f}mm 로 낮춤 "
+                                f"(그 높이의 J5 가 한계 안)")
+                high[2] = ok_z
+    labels = (["현재 위", "자세 변경", "목표 위", "목표"] if len(poses) == 4
+              else ["현재 위", "목표 위", "목표"])
+    try:
+        _check_transfer_j5(start, motion)
+    except MotionError as exc:
+        # 어느 자세가 걸렸는지 없으면 실기 로그로 못 가른다 (9/29 재개 실패)
+        raise MotionError(f"높이 이동: 출발 관절 검사 실패 — 현재 TCP={[round(v, 2) for v in current]}, "
+                          f"현재 관절={[round(v, 2) for v in start]}: {exc}") from exc
     joints = []
     previous = start
     limit, _ = _peg_joint_limits(motion)
     # 하강 끝점까지 풀어 본 뒤에만 첫 상승을 보낸다.
-    for task in poses:
+    for label, task in zip(labels, poses):
         try:
             q = list(map(float, api.ikin(posx(task), sol)))
             if len(q) != 6 or not all(math.isfinite(v) for v in q):
@@ -1026,7 +1047,10 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
             if not math.isfinite(error) or error > margin:
                 raise ValueError("IK/FK 위치 불일치")
         except Exception as exc:
-            raise MotionError(f"높이 이동: sol={sol} 경로 검사 실패: {exc}") from exc
+            raise MotionError(
+                f"높이 이동: sol={sol} 경로 검사 실패 [{label} TCP={[round(v, 2) for v in task]}, "
+                f"현재 TCP={[round(v, 2) for v in current]}, 현재 관절={[round(v, 2) for v in start]}]: "
+                f"{exc}") from exc
         joints.append(q)
         previous = q
     for a, b in zip([start] + joints, joints):
@@ -1093,20 +1117,27 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
 _TURN_SEARCH_STEP_MM = 5.0   # 회전 높이 탐색 간격. 물리값이 아니라 탐색 해상도다
 
 
-def _turn_height(high, approach, sol, motion):
+def _turn_height(high, approach, sol, motion, what="피크→페그", margin=None):
     """오른쪽 페그의 파지 방향(손목 수평)으로 돌릴 높이 — 값이 아니라 IK 로 찾는다.
 
     그 자세는 높이 올릴수록 J5 가 커진다 — 2번은 Z 108 에서 124도, 224 에서 133도,
     299 에서 138.9도라 컨트롤러 한계 ±135 를 넘는다(9/29 실기, 알람 1207 과 같은 한계).
     상단에서 5mm 씩 내려오며 실제 IK 의 J5 가 한계에서 `j5_turn_margin_deg` 만큼
     안쪽인 첫 높이를 고른다. 접근점 높이까지 없으면 이동하지 않는다.
+
+    what — 오류 문구 머리. margin — 여유(도). None 이면 설정값, 0 이면 한계 그대로
+    (높이 이동의 "목표 위" 낮추기가 쓴다 — 평소 통과하던 높이까지 내려와야 하므로).
     """
     api = _require_api()
     from DR_common2 import posx
     limit = float(motion.get("controller_j5_limit_deg", 135.0))
-    margin = float(motion.get("j5_turn_margin_deg", 5.0))
+    if margin is None:
+        margin = float(motion.get("j5_turn_margin_deg", 5.0))
+    margin = float(margin)
     if not math.isfinite(margin) or not 0 <= margin < limit:
-        raise MotionError("피크→페그: J5 회전 여유는 0 이상 한계 미만이어야 한다")
+        raise MotionError(f"{what}: J5 회전 여유는 0 이상 한계 미만이어야 한다")
+    from . import kinematics as K
+    _, margin_mm = _peg_transfer_floor(motion)
     z = float(high[2])
     while True:
         task = high[:2] + [z] + high[3:]
@@ -1115,13 +1146,21 @@ def _turn_height(high, approach, sol, motion):
             if len(q) != 6 or not all(math.isfinite(v) for v in q):
                 raise ValueError("유한한 관절각 6개가 아니다")
         except Exception as exc:
-            raise MotionError(f"피크→페그 회전 높이 IK 실패 (Z={z:.1f}mm): {exc}") from exc
-        if abs(q[4]) <= limit - margin:
+            raise MotionError(f"{what} 회전 높이 IK 실패 (Z={z:.1f}mm): {exc}") from exc
+        # 닿지 않는 자세에 IK 가 엉뚱한 해를 돌려주는 판이 있다 (9/29 재개 실기: 줄 위
+        # 254 에서 "IK/FK 위치 불일치"). J5 만 보면 그 높이를 통과시키니 대조도 같이 본다
+        fk_error = math.dist(K.fk(q)["tcp"], task[:3])
+        reason = None
+        if not math.isfinite(fk_error) or fk_error > margin_mm:
+            reason = f"IK/FK 위치 불일치 {fk_error:.1f}mm"
+        elif abs(q[4]) > limit - margin:
+            reason = f"J5={q[4]:+.1f}도, 허용 ±{limit - margin:g}도"
+        if reason is None:
             return z
         if z <= approach[2]:
             raise MotionError(
-                f"피크→페그: 파지 방향으로 돌릴 높이가 없다 — 접근점 Z={approach[2]:.1f}mm "
-                f"까지 내려와도 J5={q[4]:+.1f}도, 허용 ±{limit - margin:g}도. 이동하지 않는다")
+                f"{what}: 파지 방향으로 돌릴 높이가 없다 — 접근점 Z={approach[2]:.1f}mm "
+                f"까지 내려와도 {reason}. 이동하지 않는다")
         z = max(float(approach[2]), z - _TURN_SEARCH_STEP_MM)
 
 
@@ -1341,8 +1380,8 @@ def _release():
     return ret
 
 
-def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=False,
-                 height_transfer=False):
+def pluck_string(pose, motion, standby=None, verify_pick=None, *,
+                 prepare_only=False, prepared=False, height_transfer=False):
     """
     줄 튕기기 1차 구현 (위치 제어만). 힘 제어·피크 집기는 2단계에서 붙인다.
 
@@ -1423,6 +1462,8 @@ def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=Fal
         raise
 
     _movel_base(above, v_app, a_app)                    # 다시 2cm 위
+    if verify_pick is not None:
+        verify_pick()                                 # 줄에서 후퇴한 뒤에만 판정
     _recover_j6(motion)
     if not height_transfer:
         _goto_standby(standby, motion, v_app, a_app)
@@ -1602,7 +1643,8 @@ def _pick_points(holder, motion):
 
 
 def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
-            logger=None, *, height_transfer=False):
+            logger=None, verify_pick=None, *, at_holder=False,
+            height_transfer=False):
     """
     거치대에서 피크를 집는다 (성현 2026-09-20).
 
@@ -1620,7 +1662,9 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     holder  — 거치대 자세 (teach_points.Pose, x). holder.grip_preset 이 있으면 그 프리셋으로,
               없으면 motion["pick_preset"], 그것도 없으면 "close" 로 잡는다.
               폭·힘은 WebLogic 에 박힌 값이라 코드가 못 정한다 (gripper.py).
-    파지 확인은 하지 않는다 (CLAUDE.md 3.6, 잡았다고 가정).
+    verify_pick — 닫힘 안정화 뒤, 들어 올리기 전에 호출한다. 예외면 집기를 중단한다.
+                  빈손 판정 시의 후퇴·홈 복귀는 호출자가 담당한다.
+    at_holder — 재집기 전용. 거치대 상단 위치를 확인한 뒤 경유 없이 다시 내려간다.
 
     sol — 거치대 위 대기점에 **어느 팔 모양으로** 설 지 (IK 해 0~7). 페그의 sol 과
           같은 뜻이다 (#58). 주면 그 대기점까지 movejx(관절 보간)로 간다 —
@@ -1651,7 +1695,13 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     v_fine, a_fine = motion.get("pick_vel_fine", 30), motion.get("pick_acc_fine", 50)
     settle_sec = float(motion.get("pick_settle_sec", 1.0))
 
-    if height_transfer:
+    # 접근은 세 갈래다 — 재집기(#88)는 이미 거치대 상단에 서 있고, 높이 이동(#110)은
+    # 현재 sol 의 높은 경로로 가며, 나머지는 예전대로 경유·팔 모양을 거친다
+    if at_holder:
+        # 발현 뒤 빈손 복구는 높이 이동으로 224 에 서 있다 — 상단(214)보다 높은 건 허용하고
+        # 열고 나서 수직으로 상단까지 내려온다 (재집기 사이 후퇴는 214 라 그대로 통과)
+        _check_pick_return_position(above, motion, "재집기 상단", logger, allow_higher=True)
+    elif height_transfer:
         floor, margin = _peg_transfer_floor(motion)
         above[2] = max(above[2], floor + 2 * margin)
         _transfer_above_floor(above, motion, logger)
@@ -1660,7 +1710,11 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
         if not flipped and via is not None:
             _movej(via.joints, motion)
     _release()
-    if not height_transfer:
+    if at_holder:
+        now = _current_xyz()
+        if now is not None and now[2] > above[2] + 0.5:
+            _movel_base(above, v_app, a_app)            # 224 → 214, 수직
+    elif not height_transfer:                           # 높이 이동은 이미 상단에 있다
         if sol is None:
             _movel_base(above, v_app, a_app)
         else:
@@ -1669,29 +1723,48 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
     _grip(preset)                                       # 집는다
     globals()['_pick_gripped'] = True                   # 이 순간부터 쥐고 있다 (취소 복구가 본다)
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
+    if verify_pick is not None:
+        verify_pick()
     _movel_base(above, v_app, a_app)                    # 들어 올린다
     _recover_j6(motion)
     if standby is not None and not height_transfer:
         _movej(standby.joints, motion)                  # 기타 위 대기
 
 
-def _check_pick_return_position(target, motion, stage, logger=None):
-    """반환 위치를 못 확인하면 그리퍼를 열지 않는다. mm 단위 임시 허용값."""
+def _check_pick_return_position(target, motion, stage, logger=None, allow_higher=False):
+    """반환 위치를 못 확인하면 그리퍼를 열지 않는다. mm 단위 임시 허용값.
+
+    allow_higher — XY 는 그대로 재고 Z 는 **목표보다 높은 것만** 허용한다. 발현 뒤 빈손을
+    알아채면 높이 이동이 거치대 위 224(기준 214+여유 2배)에 세우는데, 재집기 상단은 214 라
+    정확히 10mm 차로 막혔다(9/29 실기). 위에 있으면 수직으로 내려오면 되므로 허용한다.
+    """
     tolerance = float(motion.get("pick_return_tolerance_mm", 2.0))
     if not math.isfinite(tolerance) or tolerance <= 0:
         raise MotionError("pick_return_tolerance_mm 는 유한한 양수여야 한다")
     actual = _current_xyz()
     if actual is None or not all(math.isfinite(v) for v in actual):
         raise MotionError(f"피크 반환 {stage}: 현재 위치를 읽지 못해 중단")
-    error = sum((a - b) ** 2 for a, b in zip(actual, target[:3])) ** 0.5
+    delta = [a - b for a, b in zip(actual, target[:3])]
+    if allow_higher and delta[2] > 0:
+        delta[2] = 0.0
+    error = sum(d ** 2 for d in delta) ** 0.5
     if logger:
         logger.info(f"피크 반환 {stage}: 목표 {target[:3]}, 실제 {actual}, 오차 {error:.2f}mm")
     if error > tolerance:
         raise MotionError(f"피크 반환 {stage}: 위치 오차 {error:.2f}mm > {tolerance:.2f}mm")
 
 
+def retreat_pick(holder, motion):
+    """집기 위치에서 빈손이 확인됐을 때 거치대 위로 수직 후퇴한다."""
+    _require_api()
+    ensure_tcp()
+    _, above = _pick_points(holder, motion)
+    vel, acc = _transit_speed(motion)
+    _movel_base(above, vel, acc)
+
+
 def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
-                logger=None, *, height_transfer=False):
+                logger=None, *, approach_only=False, height_transfer=False):
     """
     피크를 거치대에 돌려놓는다.
 
@@ -1708,6 +1781,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
     순서: (via 가 있으면) 경유 자세 → 거치대 위 pick_up_mm → 거치대(느리게)
           → 그리퍼 열기 → 수직 상승/도착 확인 → (home 이 있으면) 홈 자세.
     pick_to_peg_min_z_mm 설정 시 빈손 상승은 하한+모델 여유 2배 이상으로 한다.
+    approach_only — 빈손 복구 전용. 상단 도착 확인까지만 한다. 이어지는 pick_up이
+                    상단에서 그리퍼를 열고 내려가므로 닫힌 채 반환점에 진입하지 않는다.
     height_transfer=True는 via/sol/route를 거치지 않고 현재 sol의 높은 경로로 반환한다.
     """
     _require_api()
@@ -1730,6 +1805,8 @@ def pick_return(holder, motion, via=None, home=None, sol=None, route=None,
         else:
             _movejx(above, motion, sol=sol)
     _check_pick_return_position(above, motion, "거치대 위", logger)
+    if approach_only:
+        return
     _movel_base(contact, v_fine, a_fine)                # 수직으로 내려가서
     _check_pick_return_position(contact, motion, "반환점", logger)
     _release()                                          # 위치 확인 후 놓는다
