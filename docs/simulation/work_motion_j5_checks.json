@@ -1,0 +1,150 @@
+{
+  "date": "2026-09-29",
+  "step_deg": 0.5,
+  "fold_j5_deg": 130,
+  "high_tcp_z_mm": 250,
+  "controller_j5_limit_deg": 135,
+  "note": "오프라인 수치 IK 및 메시 표본 검사. 실제 두산 보간/현장 안전 보장 아님. 하강의 기존 박스 중첩 유지.",
+  "checks": [
+    {
+      "peg": 6,
+      "start": "standby",
+      "high_only": true,
+      "box_links": [],
+      "self_pairs": [],
+      "tcp_blocked": 0,
+      "joint_errors": [],
+      "j5_range": [
+        -134.0824244297322,
+        130.0
+      ],
+      "samples": 949
+    },
+    {
+      "peg": 6,
+      "start": "standby",
+      "high_only": false,
+      "box_links": [
+        "rg2_left_inner_finger",
+        "rg2_left_inner_knuckle",
+        "rg2_left_outer_knuckle",
+        "rg2_right_inner_finger",
+        "rg2_right_inner_knuckle",
+        "rg2_right_outer_knuckle"
+      ],
+      "self_pairs": [],
+      "tcp_blocked": 30,
+      "joint_errors": [],
+      "j5_range": [
+        -134.0824244297322,
+        130.0
+      ],
+      "samples": 995
+    },
+    {
+      "peg": 6,
+      "start": "work",
+      "high_only": true,
+      "box_links": [],
+      "self_pairs": [],
+      "tcp_blocked": 0,
+      "joint_errors": [],
+      "j5_range": [
+        -134.0824244297322,
+        130.0
+      ],
+      "samples": 970
+    },
+    {
+      "peg": 6,
+      "start": "work",
+      "high_only": false,
+      "box_links": [
+        "rg2_left_inner_finger",
+        "rg2_left_inner_knuckle",
+        "rg2_left_outer_knuckle",
+        "rg2_right_inner_finger",
+        "rg2_right_inner_knuckle",
+        "rg2_right_outer_knuckle"
+      ],
+      "self_pairs": [],
+      "tcp_blocked": 30,
+      "joint_errors": [],
+      "j5_range": [
+        -134.0824244297322,
+        130.0
+      ],
+      "samples": 1016
+    },
+    {
+      "peg": 5,
+      "start": "standby",
+      "high_only": true,
+      "box_links": [],
+      "self_pairs": [],
+      "tcp_blocked": 0,
+      "joint_errors": [],
+      "j5_range": [
+        -134.82036796076238,
+        130.0
+      ],
+      "samples": 952
+    },
+    {
+      "peg": 5,
+      "start": "standby",
+      "high_only": false,
+      "box_links": [
+        "rg2_left_inner_finger",
+        "rg2_left_inner_knuckle",
+        "rg2_left_outer_knuckle",
+        "rg2_right_inner_finger",
+        "rg2_right_inner_knuckle",
+        "rg2_right_outer_knuckle"
+      ],
+      "self_pairs": [],
+      "tcp_blocked": 32,
+      "joint_errors": [],
+      "j5_range": [
+        -134.82036796076238,
+        130.0
+      ],
+      "samples": 1000
+    },
+    {
+      "peg": 5,
+      "start": "work",
+      "high_only": true,
+      "box_links": [],
+      "self_pairs": [],
+      "tcp_blocked": 0,
+      "joint_errors": [],
+      "j5_range": [
+        -134.82036796076238,
+        130.0
+      ],
+      "samples": 974
+    },
+    {
+      "peg": 5,
+      "start": "work",
+      "high_only": false,
+      "box_links": [
+        "rg2_left_inner_finger",
+        "rg2_left_inner_knuckle",
+        "rg2_left_outer_knuckle",
+        "rg2_right_inner_finger",
+        "rg2_right_inner_knuckle",
+        "rg2_right_outer_knuckle"
+      ],
+      "self_pairs": [],
+      "tcp_blocked": 32,
+      "joint_errors": [],
+      "j5_range": [
+        -134.82036796076238,
+        130.0
+      ],
+      "samples": 1022
+    }
+  ]
+}

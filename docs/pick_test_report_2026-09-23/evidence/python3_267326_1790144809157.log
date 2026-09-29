@@ -1,0 +1,20 @@
+[INFO] [1790144809.232083343] [robot_controller]: 교시점 로드: /home/sh/tunio_ws/src/tunio_robot/config/teach_points.yaml
+[INFO] [1790144809.232476370] [robot_controller]: 실행 기록: /home/sh/.tunio/robot_data/2026-09-23_152649_node_session.json
+[INFO] [1790144809.232843650] [robot_controller]: 페그 손잡이 각 등록: 없음 — Phase 0 필요
+[INFO] [1790144812.158178028] [robot_controller]: 서비스 디스커버리 확인 (13개)
+[INFO] [1790144820.773387958] [robot_controller]: set_robot_mode(0) -> 0 (0=성공,-1=실패), 지금 모드 0
+[INFO] [1790144821.951179416] [robot_controller]: tool='Tool Weight' 확인 (set 반환 0, 직전 'Tool Weight')
+[INFO] [1790144821.980781157] [robot_controller]: tcp='GripperDA_v1' 확인 (set 반환 0, 직전 'GripperDA_v1')
+[INFO] [1790144822.523469372] [robot_controller]: set_robot_mode(1) -> 0 (0=성공,-1=실패), 지금 모드 1
+[INFO] [1790144822.525433546] [robot_controller]: 두산 API 연결: dsr01 / m0609 tool='Tool Weight' tcp='GripperDA_v1'
+[INFO] [1790144822.541418656] [robot_controller]: robot_controller 시작
+[WARN] [1790144851.552315780] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.0mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144853.143749332] [robot_controller]: 피크 없음 — 거치대 재집기 1/2
+[INFO] [1790144853.147726167] [robot_controller]: 피크 반환 재집기 상단: 목표 [591.63, -143.75, 214.0], 실제 [591.743408203125, -143.77114868164062, 214.06504821777344], 오차 0.13mm
+[WARN] [1790144857.152458015] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.0mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144858.743655419] [robot_controller]: 피크 없음 — 거치대 재집기 2/2
+[INFO] [1790144858.748502384] [robot_controller]: 피크 반환 재집기 상단: 목표 [591.63, -143.75, 214.0], 실제 [591.7340698242188, -143.76748657226562, 214.0507049560547], 오차 0.12mm
+[WARN] [1790144862.751801407] [robot_controller]: 피크가 제대로 안 물렸다 — 폭 13.4mm (정상 13.5~16.0mm, 빈손 13.0mm)
+[WARN] [1790144864.343704257] [robot_controller]: 피크 재집기 2회 모두 빈손. 홈 복귀 후 작업을 종료한다
+[ERROR] [1790144868.543819338] [robot_controller]: play_string 실패 — PickMissingError: 피크 없음. 재집기 2회 실패. 홈 복귀 완료. 작업을 종료한다; 피크 재집기 2회 모두 빈손. 홈 복귀 후 작업을 종료한다
+[INFO] [1790144868.544520285] [robot_controller]: play_string 실패 — 25.1초

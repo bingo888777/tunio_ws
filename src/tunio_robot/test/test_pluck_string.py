@@ -840,12 +840,17 @@ def test_빈손_복구도_반환위치와_이동실패를_무시하지_않는다
     monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
     home = Mock()
     monkeypatch.setattr(MP, 'return_home', home)
+    # 최초 집기는 #110 의 높이 이동을 탄다. 그 기하는 test_height_transfer 가 본다 —
+    # 여기서 보려는 건 재집기 상단의 위치 확인·이동 거부가 삼켜지지 않는가다
+    monkeypatch.setattr(MP, '_transfer_above_floor',
+                        lambda target, motion, logger=None: fake_api.movel(target))
     if failure == 'return_position':
         monkeypatch.setattr(MP, '_current_xyz', lambda: None)
         expected = '현재 위치를 읽지 못해'
     else:
-        # via → above → contact → 빈손 수직후퇴. 실제 드라이버처럼 -1을 낸다.
-        fake_api.reject.add(3)
+        # 높이 이동 → contact → 빈손 수직후퇴. #110 으로 경유가 없어져 한 칸 앞이다.
+        # 실제 드라이버처럼 -1을 낸다.
+        fake_api.reject.add(2)
         expected = '거부'
     with pytest.raises(MP.MotionError, match=expected):
         RobotController._ensure_pick(node)

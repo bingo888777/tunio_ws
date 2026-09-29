@@ -1,0 +1,29 @@
+[
+  {
+    "stage": 1,
+    "threshold_mm": 13.2,
+    "observations": 4,
+    "present": 4,
+    "absent": 0,
+    "min_mm": 13.2,
+    "max_mm": 13.5
+  },
+  {
+    "stage": 2,
+    "threshold_mm": 13.5,
+    "observations": 9,
+    "present": 0,
+    "absent": 9,
+    "min_mm": 13.0,
+    "max_mm": 13.4
+  },
+  {
+    "stage": 3,
+    "threshold_mm": 13.3,
+    "observations": 26,
+    "present": 9,
+    "absent": 17,
+    "min_mm": 13.0,
+    "max_mm": 13.5
+  }
+]

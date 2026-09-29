@@ -1,0 +1,31 @@
+{
+  "tool": "robot_controller",
+  "dry_run": false,
+  "goals": [
+    {
+      "action": "play_string",
+      "at": "16:56:51",
+      "elapsed_sec": 29.7,
+      "success": false,
+      "message": "피크 없음. 재집기 2회 실패. 홈 복귀 완료. 피크를 재보충하고 재개 버튼을 누르세요.",
+      "request": {
+        "string_number": 1,
+        "resumed": false,
+        "preparation_id": ""
+      }
+    },
+    {
+      "action": "play_string",
+      "at": "16:58:07",
+      "elapsed_sec": 25.16,
+      "success": true,
+      "message": "",
+      "request": {
+        "string_number": 1,
+        "resumed": true,
+        "preparation_id": ""
+      }
+    }
+  ],
+  "saved_at": "2026-09-23 16:58:07"
+}

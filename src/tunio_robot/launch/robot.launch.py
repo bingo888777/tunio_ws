@@ -16,7 +16,7 @@ PC 2대 구성에서 이 파일이 로봇 PC 의 진입점이다 (2026-09-22).
 
 옵션
   dry_run:=false            실제로 로봇을 움직인다 (기본 true)
-  speed_scale:=1.0          이동 속도 배율. 0 이면 teach_points.yaml 값(2.0)
+  speed_scale:=1.0          이동 속도 배율. 0 이면 teach_points.yaml 값
   peg_register_force:=true  페그 진입을 힘 제어로 (기본 false, #51)
 
 ℹ 그리퍼 종류는 인자가 아니다. 한계값·프리셋은 teach_points.yaml 의 gripper 절에서
