@@ -88,7 +88,7 @@ def measure_once(rec, target_hz, duration):
     if not onsets:
         return None, "발현을 못 찾음"
     st = int(onsets[0] * sr)
-    seg = buf[st + int(0.5 * sr):st + int(duration * sr)]
+    seg = buf[st + int(0.3 * sr):st + int(duration * sr)]
     if len(seg) < int(0.5 * sr):
         return None, "발현 뒤 구간이 짧음"
     return pitch.analyze(seg, sr, target_hz, semitones=2.0), None
@@ -164,7 +164,7 @@ def report_string(no, rows):
         rms = [r["rms_db"] for r in sub]
         prom = [r["prominence_db"] for r in sub if not math.isnan(r["prominence_db"])]
         cs = [r["cents"] for r in sub if r["ok"]]
-        passed = sum(1 for r in sub if r["ok"])
+        passed = sum(1 for p in prom if p >= PROMINENCE_TARGET)
         line = (f"     {lv}  RMS {np.mean(rms):+6.1f}±{np.std(rms):4.1f}   ")
         line += (f"돌출 {np.mean(prom):5.1f}±{np.std(prom):4.1f}   "
                  if prom else "돌출   —        ")

@@ -184,11 +184,6 @@ class TeachPoints:
         # 페그 손잡이 실측. 없으면 Phase 0 를 못 돈다 (조회할 때 걸린다)
         self._handle = d.get("peg_handle")
 
-        # 피크 묶음 실측. **없어도 된다** — 없으면 집기 확인을 건너뛴다.
-        # 확인 기능은 이번 범위 밖이라(기획서 7절) 기본 동작이 "잡았다고 보고
-        # 진행" 이고, 이 절은 그보다 나은 길이 열렸을 때만 쓰는 추가분이다.
-        self._pick_stack = d.get("pick", {}).get("pick_stack")
-
         # 피크 거치대. 없는 YAML 도 로드는 되고, 조회할 때 걸린다
         holder = d.get("pick", {}).get("holder")
         if holder is not None:
@@ -299,39 +294,6 @@ class TeachPoints:
                      f"peg_handle.thresholds_mm.{key} 가 없다")
         _require(t["empty_below"] < t["dead_above"],
                  "peg_handle 문턱이 뒤집혀 있다 (empty_below 가 dead_above 보다 크다)")
-        return h
-
-    def pick_stack(self):
-        """
-        피크 묶음 실측값. 집은 뒤 폭으로 물림·빈손을 가를 때 쓴다 (#39).
-
-        **peg_handle 과 달리 없어도 된다.** 없으면 None 을 내고, 부르는 쪽이
-        확인을 건너뛴다. 집기 성공 확인은 이번 범위 밖이고(기획서 7절) 기본
-        동작은 "잡았다고 보고 진행" 이기 때문이다. 이 절이 있으면 그보다 나은
-        판정을 한다.
-
-        단 **적혀 있는데 값이 이상하면 거부한다.** 반쯤 채운 문턱으로 판정하면
-        빈손을 물림으로 읽어 조용히 틀린다. peg_handle 과 같은 이유다.
-
-        tools/grip_cycle.py 로 잰다.
-        """
-        h = self._pick_stack
-        if h is None:
-            return None
-        _require(h.get("measured"),
-                 "pick_stack.measured 가 false 다. 실측값이 아니다. "
-                 "tools/grip_cycle.py 로 재라")
-        t = h.get("thresholds_mm") or {}
-        for key in ("hold_above", "hold_below"):
-            _require(isinstance(t.get(key), (int, float)),
-                     f"pick_stack.thresholds_mm.{key} 가 없다")
-        _require(t["hold_above"] < t["hold_below"],
-                 "pick_stack 문턱이 뒤집혀 있다 "
-                 "(hold_above 가 hold_below 보다 크다)")
-        empty = h.get("empty_mm")
-        _require(not isinstance(empty, (int, float)) or empty < t["hold_above"],
-                 f"pick_stack.empty_mm({empty}) 이 hold_above({t['hold_above']}) "
-                 "보다 크다. 빈손이 물림으로 읽힌다")
         return h
 
     def pick_holder(self):

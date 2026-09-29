@@ -34,9 +34,9 @@ task_manager ─ measure_pitch Action ─ audio_analyzer
 
 ## 인터페이스 (tunio_interfaces)
 
-15개 (action 6 / msg 4 / srv 5). 세부 정의의 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`다.
+13개 (action 4 / msg 4 / srv 5). 세부 정의의 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`다.
 
-- **Action**: MeasurePitch, PlayString, AdjustPeg, StrumAll, RegisterPeg, ReturnHome
+- **Action**: MeasurePitch, PlayString, AdjustPeg, StrumAll
 - **Service**: CommandTuning(start/pause/resume/cancel 공유), GetSettings, SetSettings, GetHistory, SaveJob
 - **Topic/msg**: TuningState (`/tuning/state`), StringResult, TuningSettings, JobSummary
 
@@ -88,13 +88,12 @@ ros2 launch tunio_bringup all_in_one.launch.py
 ## 테스트
 
 ```bash
-# 로봇·마이크 없이 내부 로직과 대역 ROS 통신 검증
-source /opt/ros/jazzy/setup.bash
-source install/setup.bash
-ROS_DOMAIN_ID=117 colcon test --packages-select tunio_robot tunio_server tunio_audio
+# 로봇·마이크 없이 조율 판단 로직만 검증
+cd src/tunio_server && python3 -m pytest test/ -q
 ```
 
-피크 확인 정책과 검증 범위는 `docs/피크_확인_동작.md`를 참고하세요.
+`colcon test`는 이 저장소에서 테스트를 0개 실행한다(pytest 대신 unittest를 돌린다).
+"NO TESTS RAN"이 통과처럼 보이니 위 명령으로 직접 돌릴 것.
 
 ## 작업 순서 (권장)
 
@@ -107,16 +106,8 @@ ROS_DOMAIN_ID=117 colcon test --packages-select tunio_robot tunio_server tunio_a
 
 기획 기준본 v1.2 기반.
 
-*(2026-09-22 기준)*
-
-- **tunio_interfaces** — 15개 정의 완료 (빌드·검증 통과). 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`
+- **tunio_interfaces** — 13개 정의 완료 (빌드·검증 통과). 기준본은 `docs/TUNIO_INTERFACE_SPEC.md`
 - **tunio_audio** — measure_pitch 노드 구현 완료. onset 검출·안정화 판정·유효 측정 기준 확정
-- **tunio_server** — task_manager 상태기계·관제 웹·SQLite 저장 동작. 1차 통합 완료
-- **tunio_robot** — 발현·페그 등록·조절·복귀 Action 구현. 발현·페그 조절·피크 집기·반환이 실기에서 돈다.
-  Phase 0는 서버가 RegisterPeg를 요청하고 로봇 내부에서 수행하며, 페그·피크 파지는 Modbus 폭으로 판정한다.
-  남은 것은 `strum_all`(화음)과 실기 반복 검증 — `TODO.md` 4절
-
-**아직 임시값인 것이 많다.** 속도 배율·경유 문턱·재시도 한도·허용 센트·파지 문턱이
-전부 실측 전이거나 표본이 작다. 무엇이 임시값인지는 `CLAUDE.md` 13절에 모여 있다.
+- **tunio_server / tunio_robot** — 아직 뼈대. 담당별 할 일은 `TODO.md`와 각 파일 `TODO` 주석 참고
 
 기타 이송과 브릿지핀 안착 확인은 범위에서 제외했다.

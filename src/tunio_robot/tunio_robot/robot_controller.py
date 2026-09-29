@@ -18,9 +18,6 @@ TODO(정묵·성현):
 """
 import math
 import os
-import select
-import sys
-import termios
 import threading
 import time
 import uuid
@@ -41,22 +38,6 @@ from tunio_robot import peg_state as PS
 from tunio_robot import runlog as RL
 from tunio_robot import teach_points as TP
 from tunio_robot.motion_cancel import CancelSession, request_and_confirm_stop
-
-
-class PickMissingError(MP.MotionError):
-    """피크 복구 실패 또는 보충 대기로 일반 이동을 계속할 수 없다."""
-
-
-class PickRefillRequired(PickMissingError):
-    """빈손 재집기 소진 후 홈 복귀가 끝나 보충·재개를 기다린다."""
-
-
-class _PickReloadCancelled(MP.MotionError):
-    """홈에서 피크 보충을 기다리던 액션이 취소됐다."""
-
-
-class _PickAbsent(MP.MotionError):
-    """피크 없음 판정. 폭 읽기 실패도 포함하며 이동 실패와는 구분한다."""
 
 
 def _plain(msg):
@@ -131,18 +112,6 @@ class RobotController(Node):
         self.declare_parameter("gripper_port", GW.DEFAULT_PORT)
         self.declare_parameter("gripper_unit", GW.DEFAULT_UNIT)
         self.declare_parameter("gripper_width_reg", GW.WIDTH_REG)
-        # 집은 뒤 폭을 읽어 정말 물었는지 본다 (#39). 교시점에 pick_stack 이
-        # 있어야 돈다. false 면 예전처럼 잡았다고 보고 그냥 간다.
-        #
-        # 기본값은 **false** 다 (PR #88 리뷰, 2026-09-23 성현 확정). 실기 검증이
-        # 끝나지 않은 동작을 아무 옵션 없이 켜진 채로 배포하지 않으려는 것이다.
-        # 폭 읽기가 필요한 회차에서만 `verify_pick:=true` 로 켠다.
-        # 실기 검증이 끝나면 이 기본값을 다시 올린다.
-        self.declare_parameter("verify_pick", False)
-        # 관제는 홈 복귀 Result로 보충 대기를 알린다. 단독 시험은 Enter 입력을 쓴다.
-        self.declare_parameter("pick_reload_prompt", False)
-        self._pick_reload_prompt = bool(self.get_parameter("pick_reload_prompt").value)
-        self._pick_reload_goal = None
 
         path = self.get_parameter("teach_points").value
         self.dry_run = bool(self.get_parameter("dry_run").value)
@@ -235,8 +204,6 @@ class RobotController(Node):
         # (이슈 #34-1).
         self._holding_pick = False
         self._from_pick = False  # 반환 후에는 높이 검사 경로 필수. 실패 시에도 유지
-        self._pick_fault = None
-        self._pick_refill_pending = False
         self._prepared_pluck = None  # (줄 번호, 일회용 식별자). 다른 Action이면 무효
 
         cb = ReentrantCallbackGroup()
@@ -371,36 +338,17 @@ class RobotController(Node):
 
         session = self._cancel_sessions.setdefault(id(goal), CancelSession())
         res = result_type()
-        self._pick_reload_goal = goal
-        self._pick_warnings = []  # 이 Action의 폭 읽기 경고·재집기 소진 알람
-        feedback_type = {"play_string": PlayString, "prepare_pluck": PreparePluck}.get(name)
-        self._pick_warning_callback = (
-            lambda warning: goal.publish_feedback(feedback_type.Feedback(warning=warning))
-        ) if feedback_type else None
         t0 = time.time()
         failure = None
         if not self.dry_run:
             MP._cancel_check = session.check
         try:
             session.check()
-            # #88 피크 보충 대기 중에는 재개 표시가 붙은 준비/발현만 받는다
-            if getattr(self, "_pick_refill_pending", False):
-                can_resume = (name in ("prepare_pluck", "play_string")
-                              and goal.request.resumed
-                              and not getattr(goal.request, "preparation_id", ""))
-                if not can_resume or goal.is_cancel_requested:
-                    raise MP.MotionError("피크 보충 대기 중이다. 보충 후 재개를 요청하라")
-                self._pick_refill_pending = False
-                self._pick_fault = None
-            if self._pick_fault:
-                raise PickMissingError(self._pick_fault + ". 자동 동작을 중단했다. 직접 확인하라")
             work()
             session.check()
         except Exception as exc:                      # noqa: B902
             failure = exc
         finally:
-            self._pick_warning_callback = None
-            self._pick_reload_goal = None
             session.work_done.set()
         # 완료 판정과 취소 접수를 같은 락으로 직렬화한다.
         with self._lock:
@@ -408,22 +356,11 @@ class RobotController(Node):
             if not canceled:
                 if failure is None:
                     res.success = True
-                    res.message = "; ".join(self._pick_warnings)
+                    res.message = ''
                     goal.succeed()
-                elif isinstance(failure, PickRefillRequired):
-                    # #88 재집기 소진·홈 복귀 완료. 서버는 이 플래그로 보충 대기에 들어간다.
-                    # 취소가 걸려 있으면 여기 오지 않는다 — 사용자 취소가 우선이다
-                    res.success = False
-                    res.message = str(failure)
-                    if hasattr(res, "pick_refill_required"):
-                        res.pick_refill_required = True
-                    goal.abort()
                 else:
-                    # _PickReloadCancelled 도 여기로 온다. 취소 요청이 없으면 rclpy 가
-                    # CANCELING 이 아니라 canceled() 로 끝낼 수 없어 abort 로 보고한다
                     res.success = False
-                    res.message = "; ".join([f'{type(failure).__name__}: {failure}']
-                                            + self._pick_warnings)
+                    res.message = f'{type(failure).__name__}: {failure}'
                     self.get_logger().error(f'{name} 실패 — {res.message}')
                     goal.abort()
         start_recovery = False
@@ -616,223 +553,6 @@ class RobotController(Node):
                 int(self.get_parameter("gripper_width_reg").value))
         return self._read_width
 
-    def _verify_pick(self):
-        """있음/없음 판정. 통신 2회 실패도 없음으로 처리한다. skip은 검사 비활성화다."""
-        if not bool(self.get_parameter("verify_pick").value):
-            return "skip"
-        stack = self.points.pick_stack()
-        if stack is None:
-            return "skip"
-        for attempt in range(2):  # 성현 결정: 최초 읽기 + 재읽기 1회
-            try:
-                width = self._width_reader()()
-                break
-            except GW.WidthError as exc:
-                self.get_logger().warn(f"피크 폭 읽기 {attempt + 1}/2 실패: {exc}")
-        else:
-            self.get_logger().warn("피크 폭 2회 읽기 실패 — 피크 없음으로 처리한다")
-            return "empty"
-
-        t = stack["thresholds_mm"]
-        if t["hold_above"] <= width <= t["hold_below"]:
-            self.get_logger().info(f"피크 확인 — 폭 {width:.1f}mm")
-            return "hold"
-        self.get_logger().warn(
-            f"피크가 제대로 안 물렸다 — 폭 {width:.1f}mm "
-            f"(정상 {t['hold_above']}~{t['hold_below']}mm, "
-            f"빈손 {stack.get('empty_mm')}mm)")
-        return "empty"
-
-    def _notify_pick(self, message):
-        """로봇 내부 알람을 관제에 전달한다. 정상 피크 상태는 발행하지 않는다."""
-        self.get_logger().warn(message)
-        if not hasattr(self, "_pick_warnings"):
-            self._pick_warnings = []
-        if message in self._pick_warnings:
-            return
-        self._pick_warnings.append(message)
-        notify = getattr(self, "_pick_warning_callback", None)
-        if notify is not None:
-            try:
-                notify(message)
-            except Exception as exc:  # noqa: B902 — 최종 Result에도 남긴다
-                self.get_logger().warn(f"피크 알람 Feedback 전송 실패: {exc}")
-
-    def _require_pick(self):
-        """폭 판정만 한다. 빈손 신호는 호출자가 재집기 경로로 처리한다."""
-        state = self._verify_pick()
-        if state in ("hold", "skip"):
-            return
-        if state == "empty":
-            self._holding_pick = False
-            raise _PickAbsent("피크 빈손 확인")
-
-    def _try_pick(self, side=None, at_holder=False):
-        """거치대 집기 1회. 없음이면 수직 후퇴 후 False. 이동 예외는 재시도하지 않는다.
-
-        접근은 #110 의 높이 이동이다 — 고정 홈을 거치지 않는다. 재집기(at_holder)는
-        이미 거치대 상단에 서 있어 접근 자체가 없다. side 는 남겨 두지만 팔 모양을
-        고르는 데 쓰지 않는다 (sol_by_side 는 #110 에서 경로가 바뀌며 빠졌다).
-        """
-        holder = self.points.pick_holder()
-        self._holding_pick = None
-        try:
-            MP.pick_up(holder, self.points.motion, logger=self.get_logger(),
-                       verify_pick=self._require_pick, at_holder=at_holder,
-                       height_transfer=not at_holder)
-        except _PickAbsent:
-            # 콜백은 거치대 접촉점에서 실행된다. 그 상태로 관절 이동하지 않는다.
-            self._holding_pick = None  # 후퇴 실패 시 자동 재집기도 막는다
-            MP.retreat_pick(holder, self.points.motion)
-            self._holding_pick = False
-            return False
-        self._holding_pick = True
-        self._from_pick = False
-        return True
-
-    def _recover_pick(self, side=None, at_holder=False):
-        """세 검사 구간 공통: 빈손 감지 후 거치대에서 재집기 최대 2회."""
-        holder = self.points.pick_holder()
-        standby = self.points.frame("standby")    # 보충 대기 전 홈 복귀에 쓴다
-        if not at_holder:
-            # 기타 위에서 열지 않는다. 거치대 상단 확인 후 pick_up이 열고 내려간다.
-            # 접근은 #110 의 높이 이동이다 — 고정 홈·경유를 거치지 않는다.
-            self._holding_pick = None
-            MP.pick_return(holder, self.points.motion, logger=self.get_logger(),
-                           approach_only=True, height_transfer=True)
-            self._side = None
-            self._holding_pick = False
-        while True:
-            for attempt in range(1, 3):
-                self.get_logger().warn(f"피크 없음 — 거치대 재집기 {attempt}/2")
-                if self._try_pick(side, at_holder=True):
-                    return
-            self._pick_fault = "피크 재집기 2회 모두 빈손"
-            prompt = getattr(self, "_pick_reload_prompt", False)
-            ending = "홈 복귀 후 피크 보충을 기다린다" if prompt else "홈 복귀 후 관제에서 피크 보충·재개를 기다린다"
-            self._notify_pick(self._pick_fault + ". " + ending)
-            try:
-                self._holding_pick = None
-                MP.return_home(standby, self.points.motion)
-                self._side = None
-                self._holding_pick = False
-            except Exception as exc:
-                raise PickMissingError(f"피크 없음. 재집기 2회 실패. 홈 복귀 실패: {exc}") from exc
-            if not prompt:
-                self._prepared_pluck = None
-                self._pick_refill_pending = True
-                message = "피크 없음. 재집기 2회 실패. 홈 복귀 완료. 피크를 재보충하고 재개 버튼을 누르세요."
-                self._notify_pick(message)
-                raise PickRefillRequired(message)
-            self._wait_for_pick_reload()
-            # 홈 복귀와 새 Enter 입력이 모두 확인된 경우에만 빈손 오류를 해제한다.
-            self._pick_fault = None
-            if self._try_pick(side):
-                return
-            # 새 최초 집기도 빈손이면 상단에서 추가 2회. 재귀 없이 다음 회차로 간다.
-
-    def _wait_for_pick_reload(self):
-        """홈에서 터미널의 새 Enter 입력만 기다린다. 입력 오류·취소 시 재이동하지 않는다."""
-        if not sys.stdin.isatty():
-            raise PickMissingError("홈 복귀 완료. 피크 보충 입력용 터미널이 없어 재집기하지 않는다")
-        # 로봇 이동 중 미리 눌러 둔 Enter가 홈 도착 즉시 동작을 재개하지 않게 비운다.
-        termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
-        print("\n피크가 없습니다. 피크를 피크거치대에 올려두면 엔터를 누르세요.", flush=True)
-        while rclpy.ok(context=self.context):
-            goal = self._pick_reload_goal
-            if goal is not None and goal.is_cancel_requested:
-                raise _PickReloadCancelled("피크 보충 대기 취소. 홈에서 대기한다")
-            ready, _, _ = select.select([sys.stdin], [], [], 0.2)
-            if not ready:
-                continue
-            line = sys.stdin.readline()
-            if not line:
-                raise PickMissingError("피크 보충 입력이 종료됐다. 홈에서 대기한다")
-            if line.strip():
-                print("준비가 끝나면 엔터만 누르세요.", flush=True)
-                continue
-            if not rclpy.ok(context=self.context):
-                break
-            if goal is not None and goal.is_cancel_requested:
-                raise _PickReloadCancelled("피크 보충 대기 취소. 홈에서 대기한다")
-            self.get_logger().info("피크 보충 확인 — 거치대에서 다시 집는다")
-            return
-        raise PickMissingError("노드 종료로 피크 보충 대기를 끝낸다. 재집기하지 않는다")
-
-    def _diagnose_pick_width(self):
-        """
-        로봇을 **전혀 움직이지 않고** 폭만 읽어 사람에게 줄 진단 문구를 만든다 (#39).
-
-        `_holding_pick is None`(모름) 에는 두 가지가 섞여 있다 —
-          ① 피크를 쥐고 있는지 모른다
-          ② 팔이 안전하게 반환할 수 있는 자리에 있는지 모른다
-        ①은 정지 상태에서 폭만 읽으면 갈리고, 그건 ②와 무관하게 안전하다.
-        ②가 남아 있으니 **자동 복구는 하지 않는다** — 판단 재료만 만들어
-        메시지·로그에 싣고 사람이 정하게 한다 (PR #88 리뷰 제안, 2026-09-23).
-
-        읽기가 안 되면 예외를 올리지 않고 "못 가렸다"는 문구를 돌려준다.
-        이 함수는 이미 실패한 경로에서 불리므로, 여기서 또 터지면 원래 사유가
-        덮인다 (이슈 #52 와 같은 함정).
-        """
-        if self.dry_run:
-            return "dry_run 이라 폭을 읽지 않는다. 그리퍼를 직접 확인하라"
-        if not bool(self.get_parameter("verify_pick").value):
-            return ("폭 검사가 꺼져 있다(verify_pick=false). "
-                    "그리퍼를 직접 확인하라")
-        stack = self.points.pick_stack()
-        if stack is None:
-            return "pick_stack 미교시라 폭으로 못 가린다. 그리퍼를 직접 확인하라"
-        for attempt in range(2):                     # _verify_pick 과 같은 2회 규칙
-            try:
-                width = self._width_reader()()
-                break
-            except GW.WidthError as exc:
-                self.get_logger().warn(f"피크 폭 진단 읽기 {attempt + 1}/2 실패: {exc}")
-        else:
-            return "폭 2회 읽기 실패로 손 상태도 못 가렸다. 그리퍼를 직접 확인하라"
-
-        t = stack["thresholds_mm"]
-        if t["hold_above"] <= width <= t["hold_below"]:
-            return (f"폭 {width:.1f}mm — 피크는 물려 있다. "
-                    "팔 위치만 확인하고 재시작하라")
-        return (f"폭 {width:.1f}mm — 손은 비어 있다. "
-                "떨어진 피크를 찾아 거치대에 올린 뒤 재시작하라")
-
-    def _unknown_pick_error(self, lead):
-        """'모름' 예외를 만든다. 던지지 않고 **돌려준다** — 호출자가 raise 한다.
-
-        진단은 예외 메시지에 실어 보낸다. `_notify_pick` 을 쓰지 않는 이유는
-        `_run` 이 실패 Result 에 `_pick_warnings` 를 한 번 더 이어 붙여서
-        같은 문장이 두 번 나오기 때문이다. 메시지는 Result -> 서버 ->
-        robot_notice 로 그대로 올라간다.
-        """
-        detail = "폭 진단을 못 했다. 그리퍼를 직접 확인하라"
-        try:
-            detail = self._diagnose_pick_width()
-        except Exception as exc:                     # noqa: B902 — 원래 사유를 덮지 않는다
-            detail = (f"폭 진단 중 예외({type(exc).__name__}: {exc}). "
-                      "그리퍼를 직접 확인하라")
-        message = f"{lead} {detail}"
-        self.get_logger().error(message)
-        return MP.MotionError(message)
-
-    def _check_pick_or_recover(self, side=None):
-        try:
-            self._require_pick()
-        except _PickAbsent:
-            self._recover_pick(side)
-
-    def _verify_pick_on_resume(self, pick_required=True, side=None):
-        """동작 사이 일시정지에서 재개할 때 호출한다. 페그에는 피크 문턱을 적용하지 않는다."""
-        if self._pick_fault:
-            raise PickMissingError(self._pick_fault + ". 재개할 수 없다")
-        if not pick_required:
-            return
-        if self._holding_pick is None:
-            raise self._unknown_pick_error("중단된 동작의 피크 상태·위치를 모른다.")
-        if self._holding_pick and not self.dry_run:
-            self._check_pick_or_recover(side)
-
     def _ensure_pick(self, side=None):
         """
         피크가 필요한 동작(발현·화음) 전에 부른다. 이미 쥐고 있으면 아무 일도 안 한다.
@@ -847,24 +567,23 @@ class RobotController(Node):
         _holding_pick 이 None(모름)이면 거부한다 — 이전 집기가 중간에 실패해
         실제로는 쥐고 있을 수 있다. 그 상태로 또 pick_up() 을 부르면 첫 동작인
         _release() 가 지금 팔 위치에서 피크를 놓아버린다 (이슈 #34-1).
-        거부하기 전에 _diagnose_pick_width() 로 폭을 한 번 읽어 "물려 있다/
-        비어 있다"를 메시지에 싣는다. 움직이지 않으니 안전하고, 사람이 무엇을
-        해야 하는지가 달라진다 (PR #88 리뷰 제안).
         """
-        if getattr(self, "_pick_fault", None):
-            raise PickMissingError(self._pick_fault + ". 작업을 재시작하기 전에 확인하라")
         if self._holding_pick is None:
-            raise self._unknown_pick_error("피크를 쥐고 있는지 모른다 (이전 집기 중 예외).")
+            raise MP.MotionError(
+                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
+                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
         if self._holding_pick:
             return
         holder = self.points.pick_holder()           # 미교시면 여기서 걸린다
         if self.dry_run:
             self.get_logger().info(f"[dry_run] 피크 집기 {holder.task} (고정 홈 없이 높이 이동)")
             self._holding_pick = True
-            self._from_pick = False
             return
-        if not self._try_pick(side):
-            self._recover_pick(side, at_holder=True)
+        self._holding_pick = None                     # 시도 중 — 끝나기 전엔 모른다
+        MP.pick_up(holder, self.points.motion, height_transfer=True,
+                   logger=self.get_logger())
+        self._holding_pick = True
+        self._from_pick = False
 
     def _release_pick(self, side=None):
         """
@@ -873,7 +592,9 @@ class RobotController(Node):
         반환 뒤 페그 접근 경유 여부는 _cross_to가 실제 J1으로 다시 판단한다.
         """
         if self._holding_pick is None:
-            raise self._unknown_pick_error("피크를 쥐고 있는지 모른다 (이전 집기 중 예외).")
+            raise MP.MotionError(
+                "피크를 쥐고 있는지 모른다 (이전 집기 중 예외). "
+                "그리퍼를 직접 확인한 뒤 노드를 재시작하라")
         if not self._holding_pick:
             return
         holder = self.points.pick_holder()
@@ -932,8 +653,6 @@ class RobotController(Node):
             pose = self.points.pluck(no)
             if not self.dry_run and self.pegs.roll_of(no) is None:
                 raise MP.MotionError(f"{no}번 페그 등록값 없음 — 페그 재등록을 먼저 실행하세요")
-            if goal.request.resumed:
-                self._verify_pick_on_resume(side=TP.side_of(no))
             self._ensure_pick(TP.side_of(no))
             if not self.dry_run:
                 MP.pluck_string(pose, self.points.motion, height_transfer=True, prepare_only=True)
@@ -958,21 +677,16 @@ class RobotController(Node):
                 if goal.is_cancel_requested:
                     raise MP.MotionError("발현 전 취소 — 발현하지 않는다")
             pose = self.points.pluck(no)
-            if goal.request.resumed:
-                self._verify_pick_on_resume(side=TP.side_of(no))
             if not token:
                 # 기존 단독 도구 호환. 서버는 반드시 준비 식별자를 전달한다.
                 self._ensure_pick(TP.side_of(no))
             if self.dry_run:
                 self.get_logger().info(f"[dry_run] {no}번 줄 발현 {pose.task}")
                 return
-            try:
-                MP.pluck_string(pose, self.points.motion, height_transfer=True,
-                                verify_pick=self._require_pick,
-                                prepared=bool(token) and not goal.request.resumed)
-            except _PickAbsent:
-                # MP는 줄에서 후퇴한 뒤 검사한다. 재집기는 원래 타현을 반복하지 않는다.
-                self._recover_pick(TP.side_of(no))
+            if token:
+                MP.pluck_string(pose, self.points.motion, height_transfer=True, prepared=True)
+            else:
+                MP.pluck_string(pose, self.points.motion, height_transfer=True)
 
         return self._run("play_string", goal, PlayString.Result, work)
 
@@ -1069,7 +783,7 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.try_shutdown()
+        rclpy.shutdown()
 
 
 if __name__ == "__main__":
