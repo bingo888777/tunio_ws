@@ -397,7 +397,8 @@ class TaskManager(Node):
                           ('robot/prepare_pluck', self.cli_prepare),
                           ('audio/measure_pitch', self.cli_measure),
                           ('robot/play_string', self.cli_play),
-                          ('robot/adjust_peg', self.cli_adjust)):
+                          ('robot/adjust_peg', self.cli_adjust),
+                          ('robot/wipe_strings', self.cli_wipe)):
             if not registration_only and cli is self.cli_register:
                 continue
             if registration_only and cli not in (self.cli_home, self.cli_register):

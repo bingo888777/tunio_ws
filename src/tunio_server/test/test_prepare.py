@@ -302,7 +302,7 @@ def test_reregister_uses_start_exclusion(busy, starting):
 
 def test_reregister_readiness_does_not_require_audio_or_pluck():
     n = SimpleNamespace(_p=lambda key: 0)
-    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust'):
+    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust', 'wipe'):
         setattr(n, 'cli_' + name, Mock())
     n.cli_home.wait_for_server.return_value = True
     n.cli_register.wait_for_server.return_value = False
@@ -313,7 +313,7 @@ def test_reregister_readiness_does_not_require_audio_or_pluck():
 
 def test_start_does_not_require_registration_server():
     n = SimpleNamespace(_p=lambda key: 0)
-    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust'):
+    for name in ('home', 'register', 'prepare', 'measure', 'play', 'adjust', 'wipe'):
         setattr(n, 'cli_' + name, Mock())
     n.cli_register.wait_for_server.return_value = False
     assert TM.TaskManager._servers_not_ready(n) == []
