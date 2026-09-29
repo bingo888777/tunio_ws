@@ -383,15 +383,24 @@ class RobotController(Node):
             MP._cancel_check = session.check
         try:
             session.check()
-            # #88 피크 보충 대기 중에는 재개 표시가 붙은 준비/발현만 받는다
+            # #88 피크 보충 대기 중에는 재개 표시가 붙은 준비/발현만 받는다.
+            # 예외는 ReturnHome — 서버가 작업을 끝낼 때(취소, #111 _home_after_stop) 보내는
+            # 것이라 그 작업의 보충 대기도 끝이다. 로봇은 이미 홈·빈손이라 그대로 받고
+            # 대기를 푼다. 안 풀면 취소 뒤 재등록까지 영영 거부된다 (2026-09-29 실기).
             if getattr(self, "_pick_refill_pending", False):
-                can_resume = (name in ("prepare_pluck", "play_string")
-                              and goal.request.resumed
-                              and not getattr(goal.request, "preparation_id", ""))
-                if not can_resume or goal.is_cancel_requested:
-                    raise MP.MotionError("피크 보충 대기 중이다. 보충 후 재개를 요청하라")
-                self._pick_refill_pending = False
-                self._pick_fault = None
+                if name == "return_home":
+                    self.get_logger().info("피크 보충 대기 중 ReturnHome — 작업이 끝났다. "
+                                           "보충 대기를 해제한다")
+                    self._pick_refill_pending = False
+                    self._pick_fault = None
+                else:
+                    can_resume = (name in ("prepare_pluck", "play_string")
+                                  and goal.request.resumed
+                                  and not getattr(goal.request, "preparation_id", ""))
+                    if not can_resume or goal.is_cancel_requested:
+                        raise MP.MotionError("피크 보충 대기 중이다. 보충 후 재개를 요청하라")
+                    self._pick_refill_pending = False
+                    self._pick_fault = None
             if self._pick_fault:
                 raise PickMissingError(self._pick_fault + ". 자동 동작을 중단했다. 직접 확인하라")
             work()

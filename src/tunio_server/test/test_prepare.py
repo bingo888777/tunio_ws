@@ -262,10 +262,12 @@ def test_reregister_forces_each_peg_and_never_tunes_or_saves(failure):
     n._register_pegs = lambda **kw: TM.TaskManager._register_pegs(n, **kw)
     n._home_after_stop = TM.TaskManager._home_after_stop.__get__(n)
     TM.TaskManager._run_reregister(n)
+    # 재등록은 먼저 홈으로 간다 (2026-09-29 — 홈이 아닌 자리에서 첫 페그로 가다 박았다).
     # 취소면 로봇은 그 자리에서 서 있으니 서버가 홈으로 보낸다 (2026-09-29)
-    assert calls == ([(6, True), 'home'] if failure == 'cancel' else
-                     [(6, True)] if failure == 'register' else
-                     [(no, True) for no in (6, 5, 2, 1)] + ['home'])
+    assert calls == (['home', (6, True), 'home'] if failure == 'cancel' else
+                     ['home', (6, True)] if failure == 'register' else
+                     ['home'] if failure == 'home' else
+                     ['home'] + [(no, True) for no in (6, 5, 2, 1)] + ['home'])
     expected = (TM.TuningState.PHASE_CANCELED if failure == 'cancel' else
                 TM.TuningState.PHASE_ERROR if failure else TM.TuningState.PHASE_IDLE)
     assert phases[-1] == expected

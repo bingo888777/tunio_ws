@@ -1430,6 +1430,25 @@ def test_피크보충대기는_페그_Action으로_해제할_수_없다(ros, tau
         h.shutdown()
 
 
+def test_피크보충대기는_취소의_ReturnHome으로_풀리고_재등록이_된다(ros, taught):
+    """대기 중 취소 → 서버 ReturnHome → 대기 해제 → 재등록 가능 (2026-09-29 실기 요청)."""
+    from tunio_interfaces.action import RegisterPeg, ReturnHome
+
+    h = Harness(taught)
+    try:
+        h.node._pick_refill_pending = True
+        h.node._pick_fault = '피크 재집기 2회 모두 빈손'
+        h.node._holding_pick = False
+        result = h.send(ReturnHome, '/robot/return_home', ReturnHome.Goal()).result
+        assert result.success, result.message
+        assert not h.node._pick_refill_pending and h.node._pick_fault is None
+        again = h.send(RegisterPeg, '/robot/register_peg',
+                       RegisterPeg.Goal(string_number=6, force=True)).result
+        assert again.success, again.message
+    finally:
+        h.shutdown()
+
+
 @pytest.mark.parametrize("holding", [False, True])
 def test_집기와_반환은_고정홈과_다음페그_sol을_강제하지_않는다(monkeypatch, holding):
     node = _fake_node(holding=holding)

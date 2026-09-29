@@ -117,6 +117,30 @@ def test_거치대_재집기는_관절경유없이_하강하고_검사한다(fak
     assert fake_api.current == above
 
 
+def test_발현뒤_빈손복구는_높이이동_224에서_재집기_상단으로_내려온다(
+        fake_api, fake_gripper, monkeypatch):
+    """pick_return(height_transfer) 는 214+10 에 세운다. 10mm 위는 막지 말고 수직 하강."""
+    above = list(HOLDER)
+    above[2] += 50
+    higher = list(above)
+    higher[2] += 10
+    fake_api.current = higher
+    monkeypatch.setattr(MP.time, 'sleep', lambda seconds: None)
+    MP.pick_up(Pose('pick.holder', True, task=HOLDER), {'pick_up_mm': 50}, at_holder=True)
+    kinds = [(c[0], c[1][2]) for c in fake_api.calls]
+    assert kinds == [('movel', above[2]), ('movel', HOLDER[2]), ('movel', above[2])]
+    assert fake_gripper.calls == ['open', 'close']
+
+
+@pytest.mark.parametrize('offset', [[10, 0, 0], [0, 10, 0], [0, 0, -10]])
+def test_재집기_상단은_XY_어긋남과_낮은_Z를_여전히_막는다(fake_api, fake_gripper, offset):
+    above = HOLDER[:2] + [HOLDER[2] + 50] + HOLDER[3:]
+    fake_api.current = [a + b for a, b in zip(above[:3], offset)] + above[3:]
+    with pytest.raises(MP.MotionError, match='재집기 상단'):
+        MP.pick_up(Pose('pick.holder', True, task=HOLDER), {'pick_up_mm': 50}, at_holder=True)
+    assert fake_api.calls == [] and fake_gripper.calls == []
+
+
 @pytest.mark.parametrize('actual', [None, [0] * 6])
 def test_재집기_상단을_확인못하면_열거나_이동하지_않는다(fake_api, fake_gripper, actual):
     fake_api.current = actual

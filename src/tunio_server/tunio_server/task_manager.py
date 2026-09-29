@@ -986,8 +986,14 @@ class TaskManager(Node):
         self._registered_pegs.update(numbers)  # 전부 성공한 뒤에만 후속 명령을 허용한다
 
     def _run_reregister(self):
-        """재등록만 실행한다. 성공·실패 모두 조율 결과로 저장하지 않는다."""
+        """재등록만 실행한다. 성공·실패 모두 조율 결과로 저장하지 않는다.
+
+        먼저 ReturnHome 으로 대기 자세에 세운다 (2026-09-29 사용자 요청). 홈이 아닌 자리
+        (취소·일시정지 뒤 멈춘 곳, 페그 앞, 거치대 위)에서 바로 첫 페그로 가면 검증되지
+        않은 경로로 기타를 박았다. 피크를 쥐고 있으면 ReturnHome 이 반환까지 한다.
+        """
         try:
+            self._return_home()
             self._register_pegs(force=True)
             self._return_home()
             self._gate()  # 복귀 중 취소 요청까지 확인한 뒤에만 다음 조율을 허용한다
