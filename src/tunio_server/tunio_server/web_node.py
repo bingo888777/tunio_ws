@@ -37,6 +37,7 @@ from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from ament_index_python.packages import get_package_share_directory
+from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -44,7 +45,6 @@ from rclpy.node import Node
 from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
                        QoSProfile, QoSReliabilityPolicy)
 
-from rcl_interfaces.srv import GetParameters
 from tunio_interfaces.msg import TuningSettings, TuningState
 from tunio_interfaces.srv import CommandTuning, GetHistory, GetSettings, SetSettings
 
