@@ -222,12 +222,14 @@ def main():
             confirm(f"\n3) 순응제어를 켜고, {press_n:.1f}N(Base -Z)으로 "
                     f"{settle_sec:.0f}초 접촉 정착 대기 후 종료점까지 훑는다.\n"
                     "    ⚠️ 힘 제어 첫 실행이면 기타에서 떨어진 자리에서 한 번 보라.")
-            MP.compliance(motion, on=True)
+            ret_on = MP.compliance(motion, on=True)
+            print(f"    · 순응제어 켜기: task_compliance_ctrl 반환={ret_on!r} (0 정상 / -1 거부)")
             try:
                 MP._wipe_stroke(wipe.end.task, motion, logger=_Say())
                 log["steps"].append("wipe_stroke")
             finally:
-                MP.compliance(motion, on=False)
+                ret_off = MP.compliance(motion, on=False)
+                print(f"    · 순응제어 끄기: release_compliance_ctrl 반환={ret_off!r}")
 
             confirm(f"\n4) 종료점 명목 높이로 복귀한다(접촉 해제) — {fmt(wipe.end.task)}")
             MP._movel_base(wipe.end.task, v_app, a_app)

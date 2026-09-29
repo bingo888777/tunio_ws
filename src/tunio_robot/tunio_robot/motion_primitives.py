@@ -2576,12 +2576,24 @@ def _wipe_stroke(end_task, motion, logger=None):
     press_target = list(cur)
     press_target[2] -= press_depth_mm             # 실제 표면보다 깊은 목표 — 힘이 먼저 멈춰 세운다(가설)
 
-    api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
+    # 진단 로그(2026-09-30, 동작 변경 없음): 힘 제어 명령의 반환값과 걸기 직전 정지 힘.
+    # 같은 코드·같은 로봇인데 PC 마다 정착 힘이 다르다(7N vs 20N). 컨트롤러가 명령을
+    # 거부(-1)해도 지금까지는 아무도 몰랐다 — 그걸 보려는 것이다.
+    try:
+        rest = read_force(api.DR_BASE)[:3]
+    except Exception as exc:                          # noqa: BLE001
+        rest = f"읽기 실패: {exc}"
+    ret_force = api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
+    if logger:
+        logger.info(f"힘 제어 걸기: set_desired_force 반환={ret_force!r} (0 이 정상, -1 은 거부). "
+                    f"걸기 직전 정지 Base 힘 [Fx,Fy,Fz]={rest}")
     try:
         if logger:
             logger.info(f"넥 접촉 대기(최대 {settle_sec:.0f}초) — Base -Z {press_n:.1f}N 목표, "
                         f"{press_depth_mm:.0f}mm 더 깊이 비동기 이동. 안전 상한 {max_force_n:.1f}N")
-        _amovel_base(press_target, v_wipe, a_wipe)
+        ret_move = _amovel_base(press_target, v_wipe, a_wipe)
+        if logger:
+            logger.info(f"amovel 반환={ret_move!r}, 목표 Z={press_target[2]:.1f}mm")
         # 0.2초마다 힘을 읽는다 — 판정 셋.
         #   1) 로그로 찍는다(확인용)
         #   2) 안전 상한을 넘으면 MoveStop 으로 즉시 멈추고 실패로 던진다
@@ -2618,7 +2630,9 @@ def _wipe_stroke(end_task, motion, logger=None):
                         f"{'예' if arrive_streak >= arrive_confirm_polls else '아니오(최대 대기 시간 소진)'})")
         _movel_base(end_task, v_wipe, a_wipe)      # 힘 유지한 채 종료점까지
     finally:
-        api.release_force()                       # 힘 제어는 반드시 푼다
+        ret_release = api.release_force()         # 힘 제어는 반드시 푼다
+        if logger:
+            logger.info(f"힘 제어 해제: release_force 반환={ret_release!r}")
 
 
 def wipe_strings(points, motion, logger=None):
@@ -2685,11 +2699,15 @@ def wipe_strings(points, motion, logger=None):
         _movel_base(mid, v_app, a_app)                   # 픽업 자리에서 Z 만 먼저
         _movel_base(wipe.start.task, v_app, a_app)        # 그다음 수평으로 시작점
 
-        compliance(motion, on=True)                      # 넥이 안 수평이어도 뻣뻣하게 안 민다
+        ret_on = compliance(motion, on=True)             # 넥이 안 수평이어도 뻣뻣하게 안 민다
+        if logger:
+            logger.info(f"순응제어 켜기: task_compliance_ctrl 반환={ret_on!r} (0 정상 / -1 거부 / None 은 stx 미설정)")
         try:
             _wipe_stroke(wipe.end.task, motion, logger=logger)
         finally:
-            compliance(motion, on=False)
+            ret_off = compliance(motion, on=False)
+            if logger:
+                logger.info(f"순응제어 끄기: release_compliance_ctrl 반환={ret_off!r}")
 
         _movel_base(wipe.end.task, v_app, a_app)          # 명목 높이로 복귀 = 접촉 해제
     finally:
