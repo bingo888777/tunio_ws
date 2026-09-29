@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>TUNIO 관제</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%8E%B8%3C/text%3E%3C/svg%3E">
+<!-- 탭 아이콘 — 기타 헤드와 페그 6개 (이모지 🎸 는 기기마다 일렉기타로 보여 바꿨다) -->
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath d='M10 4h12l-1.5 21a4.5 4.5 0 0 1-9 0z' fill='%237a4e2c' stroke='%235b3a22' stroke-width='1.2'/%3E%3Cg fill='%23d9a15f'%3E%3Ccircle cx='8' cy='9' r='2.6'/%3E%3Ccircle cx='8' cy='15' r='2.6'/%3E%3Ccircle cx='8' cy='21' r='2.6'/%3E%3Ccircle cx='24' cy='9' r='2.6'/%3E%3Ccircle cx='24' cy='15' r='2.6'/%3E%3Ccircle cx='24' cy='21' r='2.6'/%3E%3C/g%3E%3Cpath d='M14 4v26M16 4v26M18 4v26' stroke='%23f3ead9' stroke-width='.7'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -12,8 +13,13 @@
 <header class="topbar">
   <div class="brand">
     <span class="logo">TUNIO</span>
-    <span class="sub">협동로봇 기타 자동 조율 관제</span>
+    <span class="sub">로봇 기타 자동 조율 시스템</span>
   </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="live" role="tab">실시간 작업</button>
+    <button class="tab" data-tab="history" role="tab">작업 이력</button>
+    <button class="tab" data-tab="settings" role="tab">설정</button>
+  </nav>
   <div class="topmeta">
     <span id="job-id" class="jobid">작업 없음</span>
     <span id="link" class="badge badge-wait">연결 중</span>
@@ -21,96 +27,99 @@
   </div>
 </header>
 
-<nav class="tabs" role="tablist">
-  <button class="tab active" data-tab="live" role="tab">실시간 작업</button>
-  <button class="tab" data-tab="history" role="tab">작업 이력</button>
-  <button class="tab" data-tab="settings" role="tab">설정</button>
-</nav>
-
 <main>
 
 <!-- ─────────────────────────── 실시간 작업 ─────────────────────────── -->
 <section id="tab-live" class="panel active">
   <div id="robot-notice" class="robot-notice" role="alert" hidden></div>
 
-  <div class="controls">
-    <button id="btn-start"  class="btn btn-primary">시작</button>
-    <button id="btn-pause"  class="btn">일시정지</button>
-    <button id="btn-resume" class="btn">재개</button>
-    <button id="btn-cancel" class="btn btn-danger">취소</button>
+  <!-- 조작과 상태. 누를 수 있는 버튼만 또렷하게, 상태는 오른쪽에 크게 -->
+  <div class="commandbar">
+    <div class="cmd-group">
+      <button id="btn-reregister" class="btn btn-gold">페그 재등록</button>
+      <button id="btn-start"  class="btn btn-primary">▶ 시작</button>
+    </div>
+    <div class="cmd-group">
+      <button id="btn-pause"  class="btn">❚❚ 일시정지</button>
+      <button id="btn-resume" class="btn">▶ 재개</button>
+      <button id="btn-cancel" class="btn btn-danger">■ 취소</button>
+    </div>
     <div class="spacer"></div>
     <div class="statusline">
-      <span class="label">진행 단계</span>
-      <span id="phase" class="badge badge-idle">대기</span>
-      <span class="label">전체 판정</span>
-      <span id="overall" class="badge badge-idle">판정 전</span>
+      <div class="stat">
+        <span class="label">진행 단계</span>
+        <span id="phase" class="badge badge-idle">대기</span>
+      </div>
+      <div class="stat">
+        <span class="label">전체 판정</span>
+        <span id="overall" class="badge badge-idle">판정 전</span>
+      </div>
     </div>
   </div>
 
+  <p id="registration-status" class="hint reg-hint" role="status" aria-live="polite">페그 재등록 후 시작하세요.</p>
   <div id="toast" class="toast"></div>
 
   <div class="stage">
 
-    <!-- 헤드스톡. 조율에서 실제로 보는 곳은 페그와 줄이라 바디는 쓰지 않는다. -->
-    <div class="guitar-wrap">
-      <div class="progress">
-        <span class="progress-label">조율 진행</span>
-        <div id="progress-dots" class="progress-dots"></div>
-        <span id="progress-count" class="progress-count">— / 4</span>
+    <!-- 기타 전체. 헤드 근처에 커서를 두면 헤드로 확대된다 (터치는 탭, 🔍 로 고정) -->
+    <div class="guitar-card">
+      <div class="card-head">
+        <span class="card-title">기타</span>
+        <button id="btn-zoom" class="btn btn-icon btn-zoom" aria-pressed="false"
+                title="헤드 확대 고정">🔍</button>
       </div>
-      <div id="guitar" class="guitar"></div>
-      <p class="guitar-cap">대상 줄 6 · 5 · 2 · 1 (4 · 3번은 조율하지 않는다)</p>
+      <div id="guitar" class="guitar" tabindex="0"
+           aria-label="기타 그림. 헤드에 커서를 올리면 확대된다"></div>
+      <p id="guitar-cap" class="guitar-cap">헤드에 커서를 올리면 확대 · 4·3번 줄은 조율하지 않음</p>
     </div>
 
-    <!-- 튜너 + 줄별 결과. 한 화면에 같이 두려고 오른쪽 칸에 세로로 쌓는다. -->
     <div class="stage-right">
 
+      <!-- 튜너. 지금 줄의 음과 오차를 제일 크게 -->
       <div class="tuner">
-        <div class="tuner-top">
+        <div class="tuner-head">
           <span id="now-stringno" class="tuner-stringno">—</span>
-          <div class="tuner-note">
-            <strong id="now-note" class="note">—</strong>
-            <span id="now-octave" class="octave"></span>
-          </div>
           <span id="now-adjust" class="tuner-adjust">—</span>
         </div>
 
-        <div class="meter">
-          <div class="meter-scale">
-            <span class="flat">♭</span>
-            <div class="meter-track">
-              <div class="meter-zone"></div>
-              <div class="meter-ticks">
-                <i style="left:0%"></i><i style="left:25%"></i>
-                <i class="mid" style="left:50%"></i>
-                <i style="left:75%"></i><i style="left:100%"></i>
-              </div>
-              <div id="needle" class="needle"></div>
+        <div class="gauge-wrap">
+          <svg id="gauge" class="gauge" viewBox="0 0 320 180" aria-hidden="true"></svg>
+          <div class="gauge-readout">
+            <div class="tuner-note">
+              <strong id="now-note" class="note">—</strong><span id="now-octave" class="octave"></span>
             </div>
-            <span class="sharp">♯</span>
-          </div>
-          <div class="meter-labels">
-            <span>-50</span><span>-25</span><span>0</span><span>+25</span><span>+50</span>
+            <div class="cents-wrap">
+              <strong id="now-cents" class="cents-big">—</strong>
+              <span class="cents-unit">센트</span>
+            </div>
           </div>
         </div>
 
-        <div class="tuner-bottom">
-          <div class="cents-wrap">
-            <strong id="now-cents" class="cents-big">—</strong>
-            <span class="cents-unit">센트</span>
-          </div>
-          <div class="hzline">
-            <span class="hz-item"><span class="k">측정</span>
-              <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
-            <span class="hz-sep">/</span>
-            <span class="hz-item"><span class="k">목표</span>
-              <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
-          </div>
+        <div class="hzline">
+          <span class="hz-item"><span class="k">측정</span>
+            <strong id="now-measured" class="v">—</strong><span class="u">Hz</span></span>
+          <span class="hz-arrow">→</span>
+          <span class="hz-item"><span class="k">목표</span>
+            <strong id="now-target" class="v">—</strong><span class="u">Hz</span></span>
         </div>
+        <!-- 지금 오차로 task_manager 가 돌릴 페그 각도·바퀴 (web_node 가 같은 함수로 계산) -->
+        <div id="now-hint" class="adj-hint" hidden></div>
       </div>
 
+      <!-- 줄별 진행. 줄마다 세로 블록, 색은 상태. 지금 줄은 단계까지 펼친다 -->
       <div class="results">
-        <h2 class="section-title">줄별 결과</h2>
+        <div class="card-head">
+          <span class="card-title">줄별 진행</span>
+          <div class="legend" aria-hidden="true">
+            <span><i class="lg-wait"></i>대기</span>
+            <span><i class="lg-run"></i>진행 중</span>
+            <span><i class="lg-warn"></i>일시정지</span>
+            <span><i class="lg-ok"></i>성공</span>
+            <span><i class="lg-bad"></i>실패</span>
+          </div>
+          <span id="progress-count" class="progress-count">— / 4</span>
+        </div>
         <div id="strings" class="strings"></div>
       </div>
 
@@ -123,7 +132,7 @@
 <!-- ─────────────────────────── 작업 이력 ─────────────────────────── -->
 <section id="tab-history" class="panel">
   <div class="controls">
-    <button id="btn-history-reload" class="btn">새로 읽기</button>
+    <button id="btn-history-reload" class="btn">새로고침</button>
     <div class="search">
       <input id="history-q" type="search" placeholder="시작 시각으로 검색 (예: 2026-09-19, 12:56, 20260919)"
              autocomplete="off">
@@ -183,14 +192,11 @@
     </div>
   </div>
 
-  <p class="hint">
-    목표 주파수는 화면에서 바꾸지 않는다(A4=440Hz, 12평균율 고정).
-    작업이 진행 중이면 설정은 잠긴다. 저장은 task_manager 가 받아들여야 반영된다.
-  </p>
 </section>
 
 </main>
 
+<script src="registration.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

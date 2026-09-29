@@ -42,6 +42,9 @@ const SETTING_FIELDS = [
 const $ = (id) => document.getElementById(id);
 
 let lastState = null;
+let streamReady = false;
+let commandPending = false;
+const registration = new RegistrationTracker();
 let defaults = null;
 let selectedJob = null;
 let historyJobs = [];        // 서버에서 받은 이력 원본. 검색은 이 위에서 한다
@@ -99,6 +102,7 @@ function cents(v) {
 }
 
 function phaseClass(phase) {
+  if (phase === PHASE.REGISTER_PEG) return 'badge badge-gold';
   if (phase === PHASE.DONE) return 'badge badge-ok';
   if (phase === PHASE.ERROR) return 'badge badge-bad';
   if (phase === PHASE.PAUSED || phase === PHASE.CANCELED) return 'badge badge-warn';
@@ -180,92 +184,170 @@ function centsText(v) {
   return (r > 0 ? '+' : '') + r.toFixed(1);
 }
 
-// 기타 헤드스톡을 그린다. 줄 하나가 <g class="gstring">, 상태는 class 로만 바꾼다.
+// ─────────────────────────────── 기타 (전체 + 헤드 확대)
+
+// guitar.png 의 좌표계(611×1506, 원본에서 투명 여백을 잘라낸 크기). 그림을 SVG 안의
+// <image> 로 넣고 줄을 같은 좌표로 얹어서, viewBox 하나만 바꾸면 그림과 줄이 함께 확대된다.
+const GUITAR_VB = [0, 0, 611, 1506];
+// 헤드 확대 구간. 튜닝 손잡이 6개와 너트, 지판 윗부분까지 들어온다
+const HEAD_VB = [165, 0, 280, 440];
+// 전체 보기에서 커서가 이 안에 들어오면 헤드로 확대한다 (헤드 근처 여유 포함)
+const HEAD_HOVER = { x0: 150, x1: 460, y1: 300 };
+const ZOOM_MS = 380;
+
+// 기타 위 줄을 그린다. 줄 하나가 <g class="gstring">, 상태는 class 로만 바꾼다.
 function buildGuitar() {
-  // 기타 그림은 CSS 배경(guitar2.svg)으로 깔고, 줄 6개만 SVG 로 얹는다.
+  // 줄 하나는 꺾인 선이다 — 페그 기둥에서 너트로 비스듬히 들어와, 너트부터 새들까지
+  // 지판을 따라 내려간다(새들 쪽 간격이 조금 넓다). 그림에 그려진 줄 위에 정확히 겹친다.
   //
-  // 줄 하나는 꺾인 선이다 — 페그에서 너트로 비스듬히 들어와, 너트부터
-  // 브릿지까지 일자로 내려간다. 실제 기타가 그렇게 감긴다.
-  //
-  //   페그(x, y)
+  //   페그 기둥(x, y)
   //      \
   //       \  헤드 구간 (비스듬히)
   //        \
-  //   너트 ●────────  여기서부터 수직
+  //   너트 ●────────  여기서부터 지판
   //        │
-  //        │  지판 구간
-  //        │
-  //  브릿지 ●
+  //  새들 ●
   //
-  // 좌표는 2026-09-20 화면에서 직접 찍어 맞춘 값이다 (?coord=1 모드).
-  // 페그는 헤드 좌우로 갈려 균등 간격이 아니라 6개를 따로 둔다.
-  const VB_W = 584.35, VB_H = 1513.5;
-  const X0 = 259.35, X_STEP = 13.13;     // 너트~브릿지 구간의 x
-  const NUT_Y = 259.9;
-  const BRIDGE_Y = 320;      // 헤드 화면 아래 끝. 지판으로 이어지는 느낌만 준다
-
-  // 줄 순서(6→1)대로. 6·5·4 는 헤드 왼쪽, 3·2·1 은 오른쪽에 감긴다.
-  const PEGS = {
-    6: [260.4, 186.7], 5: [259.4, 141.5], 4: [256.1, 93.1],
-    3: [325.0, 93.1], 2: [322.8, 140.4], 1: [320.7, 186.7],
+  // 좌표는 guitar.png 의 픽셀에서 잡았다 (2026-09-27). 그림에 그려진 줄의 밝은 픽셀을
+  // 구간마다(기둥→너트, 너트→새들) 따라가 직선을 맞췄다 — 잔차 0.5px 이내.
+  // 처음엔 기둥 중심에서 7px 안쪽으로 어림잡았는데, 확대하면 2·1번이 3px 어긋나 보였다.
+  // 3+3 헤드라 바깥 줄(6·1)이 너트에 가까운 아래 기둥, 안쪽 줄(4·3)이 위 기둥에 감긴다.
+  const NUT_Y = 253;
+  const NUT_X = { 6: 273.3, 5: 285.1, 4: 297.4, 3: 309.8, 2: 321.8, 1: 333.4 };
+  const SADDLE_Y = 1224;
+  const SADDLE_X = { 6: 259.0, 5: 278.1, 4: 296.9, 3: 316.6, 2: 333.9, 1: 352.6 };
+  // 줄이 기둥을 떠나는 자리 (맞춘 직선이 기둥 중심 높이를 지나는 x)
+  const POSTS = {
+    4: [266.3, 86.6], 5: [266.6, 145.1], 6: [268.1, 201.3],
+    3: [339.3, 86.5], 2: [340.0, 145.5], 1: [338.0, 201.1],
+  };
+  // 번호 원은 사람이 실제로 돌리는 바깥 튜닝 손잡이 위에 둔다. 손잡이는 지름 44 원이고
+  // 헤드가 아래로 좁아지는 만큼 아래 손잡이일수록 안쪽으로 들어와 있다 — 바깥 가장자리에서
+  // 반지름만큼 들어온 자리가 중심이다 (그림 위에 원을 겹쳐 그려 확인했다)
+  const KNOBS = {
+    4: [210, 92], 5: [213, 149], 6: [215.5, 206.5],
+    3: [397, 92], 2: [394, 149], 1: [390.5, 206.5],
   };
 
-  // 줄 번호는 줄이 감기는 축 위가 아니라 그 바깥에 놓는다. 축 위에 두면
-  // 줄·원·숫자가 한 자리에 겹쳐 읽기 어렵다. 헤드 중심에서 멀어지는 쪽으로 민다.
-  const HEAD_CX = (PEGS[6][0] + PEGS[1][0]) / 2;   // 헤드 좌우 중심
-  const LABEL_OUT = 26;                             // 바깥으로 미는 거리
-
-  const parts = FRETBOARD.map((st, i) => {
-    const x = X0 + X_STEP * i;           // 지판 위 x
-    const [px, py] = PEGS[st.n];         // 줄이 감기는 축
-    const lx = px + (px < HEAD_CX ? -LABEL_OUT : LABEL_OUT);   // 번호는 바깥으로
+  const parts = FRETBOARD.map((st) => {
+    const [px, py] = POSTS[st.n];
+    const [kx, ky] = KNOBS[st.n];
     const w = st.thick * 1.1;
-
+    const pts = `${px},${py} ${NUT_X[st.n]},${NUT_Y} ${SADDLE_X[st.n]},${SADDLE_Y}`;
+    // 음이름은 그림에 싣지 않는다. 새들 쪽 줄 간격이 19 라 어떻게 놓아도 겹친다.
+    // 이름은 오른쪽 줄별 진행에 있고, 그림은 번호 원과 줄 색으로 읽는다.
     return `<g class="gstring" data-n="${st.n}">
-      <polyline class="gs-hit" points="${px},${py} ${x},${NUT_Y} ${x},${BRIDGE_Y}"></polyline>
-      <polyline class="gs-line" points="${px},${py} ${x},${NUT_Y} ${x},${BRIDGE_Y}"
-                stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"></polyline>
-      <circle class="gs-peg" cx="${lx}" cy="${py}" r="11" stroke-width="2"></circle>
-      <text class="gs-label" x="${lx}" y="${py + 4.5}" text-anchor="middle">${st.n}</text>
-      <text class="gs-note" x="${x}" y="${BRIDGE_Y + (i % 2 ? 48 : 26)}"
-            text-anchor="middle">${st.name}</text>
-      <line class="gs-tick" x1="${x}" y1="${BRIDGE_Y + 4}" x2="${x}"
-            y2="${BRIDGE_Y + (i % 2 ? 36 : 14)}"></line>
+      <polyline class="gs-hit" points="${pts}"></polyline>
+      <polyline class="gs-line" points="${pts}" stroke-width="${w}"
+                stroke-linecap="round" stroke-linejoin="round"></polyline>
+      <circle class="gs-peg" cx="${kx}" cy="${ky}"></circle>
+      <text class="gs-label" x="${kx}" y="${ky}" text-anchor="middle"
+            dominant-baseline="central">${st.n}</text>
+      <title>${st.n}번 ${st.name}</title>
     </g>`;
   }).join('');
 
-  // 헤드 구간만 보여 준다. 바디까지 넣으면 세로로 너무 길어져 화면이 빈다.
-  // guitar_head.svg 의 viewBox 와 같은 값이라 그림과 줄이 정확히 겹친다.
-  return `<svg class="guitar-overlay" viewBox="200 0 185 320"
-         role="img" aria-label="기타 헤드와 줄 상태">${parts}</svg>`;
+  return `<svg class="guitar-overlay" viewBox="${GUITAR_VB.join(' ')}"
+       preserveAspectRatio="xMidYMid meet" role="img" aria-label="기타와 줄 상태">
+    <image href="guitar.png" x="0" y="0" width="${GUITAR_VB[2]}" height="${GUITAR_VB[3]}"></image>
+    ${parts}
+  </svg>`;
 }
 
-// 대상 4줄(6·5·2·1)의 진행을 점으로 보여 준다. 기타 그림만으로는
-// '몇 번째를 하고 있나' 가 안 읽힌다.
-function renderProgress(state) {
-  const wrap = $('progress-dots');
-  const byNumber = new Map();
-  if (state) state.results.forEach((r) => byNumber.set(r.string_number, r));
-  const running = isRunning(state);
+// 확대 상태. hover 는 커서로 잠깐, pinned 는 🔍·클릭·탭으로 고정
+const zoom = { hover: false, pinned: false, anim: null, vb: GUITAR_VB.slice() };
 
-  if (wrap.children.length !== STRINGS.length) {
-    wrap.innerHTML = STRINGS.map(() => '<i class="pdot"></i>').join('');
+function setViewBox(svg, vb) {
+  zoom.vb = vb;
+  svg.setAttribute('viewBox', vb.map((v) => v.toFixed(2)).join(' '));
+}
+
+function applyZoom() {
+  const wrap = $('guitar');
+  const svg = wrap.querySelector('.guitar-overlay');
+  if (!svg) return;
+  const on = zoom.hover || zoom.pinned;
+  const to = on ? HEAD_VB : GUITAR_VB;
+  wrap.classList.toggle('zoomed', on);
+  const btn = $('btn-zoom');
+  btn.setAttribute('aria-pressed', String(zoom.pinned));
+  btn.title = zoom.pinned ? '확대 고정 풀기' : '헤드 확대 고정';
+  $('guitar-cap').textContent = zoom.pinned
+    ? '헤드 확대 고정됨 · 🔍 로 풀기'
+    : on ? '헤드 확대 중 · 벗어나면 전체로'
+      : '헤드에 커서를 올리면 확대 · 4·3번 줄은 조율하지 않음';
+
+  if (zoom.anim) cancelAnimationFrame(zoom.anim);
+  const from = zoom.vb.slice();
+  if (from.every((v, i) => Math.abs(v - to[i]) < 0.01)) return;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    setViewBox(svg, to.slice());
+    return;
   }
+  const t0 = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const step = (now) => {
+    const t = Math.min(1, (now - t0) / ZOOM_MS);
+    const k = ease(t);
+    setViewBox(svg, from.map((v, i) => v + (to[i] - v) * k));
+    zoom.anim = t < 1 ? requestAnimationFrame(step) : null;
+  };
+  zoom.anim = requestAnimationFrame(step);
+}
 
-  let done = 0;
-  STRINGS.forEach(({ n, name }, i) => {
-    const dot = wrap.children[i];
-    const r = byNumber.get(n);
-    let cls = 'pdot';
-    if (state && state.current_string === n && running) cls += ' current';
-    else if (r && r.result === 1) cls += ' ok';
-    else if (r && r.result === 2) cls += ' bad';
-    dot.className = cls;
-    dot.title = `${n}번 ${name}`;
-    if (r && r.result !== 0) done += 1;
+function initGuitarZoom() {
+  const wrap = $('guitar');
+  if (!wrap.firstChild) wrap.innerHTML = buildGuitar();
+  const svg = wrap.querySelector('.guitar-overlay');
+  const canHover = window.matchMedia('(hover: hover)').matches;
+
+  // 커서 위치를 '전체 기타' 좌표로 바꿔 헤드 근처인지 본다. 확대 중에는 좌표계가
+  // 바뀌므로 판정하지 않고, 무대 밖으로 나가야 풀린다.
+  const nearHead = (ev) => {
+    const r = svg.getBoundingClientRect();
+    const scale = Math.min(r.width / GUITAR_VB[2], r.height / GUITAR_VB[3]);
+    const ox = r.left + (r.width - GUITAR_VB[2] * scale) / 2;
+    const oy = r.top + (r.height - GUITAR_VB[3] * scale) / 2;
+    const x = (ev.clientX - ox) / scale, y = (ev.clientY - oy) / scale;
+    return x >= HEAD_HOVER.x0 && x <= HEAD_HOVER.x1 && y <= HEAD_HOVER.y1;
+  };
+
+  if (canHover) {
+    wrap.addEventListener('mousemove', (ev) => {
+      if (wrap.classList.contains('coord-on') || zoom.hover || zoom.pinned) return;
+      if (nearHead(ev)) { zoom.hover = true; applyZoom(); }
+    });
+    wrap.addEventListener('mouseleave', () => {
+      if (!zoom.hover) return;
+      zoom.hover = false;
+      applyZoom();
+    });
+  }
+  const toggle = () => {
+    if (wrap.classList.contains('coord-on')) return;
+    zoom.pinned = !zoom.pinned;
+    if (!zoom.pinned && canHover) zoom.hover = false;
+    applyZoom();
+  };
+  wrap.addEventListener('click', toggle);
+  wrap.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); toggle(); }
   });
+  $('btn-zoom').addEventListener('click', toggle);
+  applyZoom();
+}
 
+// 끝난 줄 수. 색의 뜻은 카드 머리의 범례가 보여 준다.
+function renderProgress(state) {
+  const done = state ? state.results.filter((r) => r.result !== 0).length : 0;
   $('progress-count').textContent = `${done} / ${STRINGS.length}`;
+}
+
+// 지금 줄의 색. 조율 중 파랑 · 등록 금색 · 일시정지 호박색
+function currentClass(state) {
+  if (state.phase === PHASE.REGISTER_PEG) return ' current registering';
+  if (state.phase === PHASE.PAUSED) return ' current paused';
+  return ' current';
 }
 
 function renderGuitar(state) {
@@ -282,7 +364,7 @@ function renderGuitar(state) {
     if (!TARGET_STRINGS.has(n)) {
       cls += ' off';                       // 4·3번 — 조율하지 않는다
     } else if (state && state.current_string === n && running) {
-      cls += ' current';
+      cls += currentClass(state);
     } else {
       const r = byNumber.get(n);
       if (r && r.result === 1) cls += ' ok';
@@ -294,37 +376,122 @@ function renderGuitar(state) {
   });
 }
 
+// ─────────────────────────────── 튜너 게이지
+
+// 부채꼴 게이지. 중심 (160,160), ±50센트가 ±75도다. 반원(±90도)으로 두면 양끝 눈금이
+// 바닥선에 붙어 숫자가 묻힌다. 바늘은 테두리 쪽 짧은 막대만 그린다 —
+// 가운데를 비워 둬야 큰 음이름이 가려지지 않는다.
+const G_CX = 160, G_CY = 160, G_SPAN = 75;
+
+function polar(r, c) {
+  const th = (c / METER_RANGE) * (G_SPAN * Math.PI / 180);
+  return [G_CX + r * Math.sin(th), G_CY - r * Math.cos(th)];
+}
+
+function arcPath(r, c0, c1) {
+  const [x0, y0] = polar(r, c0);
+  const [x1, y1] = polar(r, c1);
+  return `M ${x0.toFixed(2)} ${y0.toFixed(2)} A ${r} ${r} 0 0 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+function buildGauge() {
+  const parts = [];
+  for (let c = -METER_RANGE; c <= METER_RANGE; c += 5) {
+    const major = c % 25 === 0;
+    const [x0, y0] = polar(major ? 110 : 118, c);
+    const [x1, y1] = polar(132, c);
+    const cls = c === 0 ? 'g-tick zero' : major ? 'g-tick major' : 'g-tick';
+    parts.push(`<line class="${cls}" x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}"
+                 x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}"></line>`);
+    if (major && c !== 0) {          // 0 은 굵은 눈금으로 충분하다. 숫자는 음이름과 겹친다
+      const [tx, ty] = polar(97, c);
+      parts.push(`<text class="g-num" x="${tx.toFixed(1)}" y="${(ty + 4).toFixed(1)}">${
+        c > 0 ? '+' + c : c}</text>`);
+    }
+  }
+  $('gauge').innerHTML = `
+    <path class="g-face" d="M 8 ${G_CY} A 152 152 0 0 1 312 ${G_CY} Z"></path>
+    <path id="g-zone" class="g-zone" d=""></path>
+    ${parts.join('')}
+    <g class="g-sign flat">
+      <circle cx="31" cy="147" r="12.5"></circle>
+      <text x="31" y="147" dominant-baseline="central">♭</text>
+      <text class="g-sign-cap" x="31" y="173">낮음</text>
+    </g>
+    <g class="g-sign sharp">
+      <circle cx="289" cy="147" r="12.5"></circle>
+      <text x="289" y="147" dominant-baseline="central">♯</text>
+      <text class="g-sign-cap" x="289" y="173">높음</text>
+    </g>
+    <g id="g-needle" class="g-needle idle">
+      <line x1="${G_CX}" y1="${G_CY - 100}" x2="${G_CX}" y2="${G_CY - 140}"></line>
+      <circle class="g-hub" cx="${G_CX}" cy="${G_CY - 140}" r="6"></circle>
+    </g>`;
+}
+
+function setNeedle(cls, c) {
+  const needle = $('g-needle');
+  needle.setAttribute('class', 'g-needle ' + cls);
+  const v = c === null ? 0 : Math.max(-METER_RANGE, Math.min(METER_RANGE, c));
+  needle.style.transform = `rotate(${(v / METER_RANGE) * G_SPAN}deg)`;
+}
+
+// 예상 페그 회전. 계산은 web_node 가 task_manager 와 같은 adjust_plan 으로 한다.
+// 음이 높으면 백래시 때문에 '풀기 → 조임' 두 단계다 (CLAUDE.md 3.2).
+function renderHint(state) {
+  const el = $('now-hint');
+  const hint = state && state.adjust_hint;
+  if (!hint) { el.hidden = true; el.innerHTML = ''; return; }
+  el.hidden = false;
+  if (!hint.steps.length) {
+    el.innerHTML = `<span class="k">예상 페그 회전</span><span class="dim">${hint.note || '계산 불가'}</span>`;
+    return;
+  }
+  // 각도만 보여 준다. 회전 방향 기호(↻↺)는 쓰지 않는다 — 3+3 헤드는 왼쪽(6·5·4)과
+  // 오른쪽(3·2·1) 페그의 조이는 방향이 반대라 화살표 하나로는 맞게 그릴 수 없다.
+  const parts = hint.steps.map((st) => `
+    <span class="step ${st.direction > 0 ? 'tight' : 'loose'}">${st.label}
+      <b>${st.deg.toFixed(1)}°</b></span>`);
+  el.innerHTML = `<span class="k">예상 페그 회전</span>${parts.join('<span class="arrow">→</span>')}`;
+}
+
 // 튜너 바늘과 큰 음이름.
 function renderTuner(state) {
+  renderHint(state);
+  if (!$('g-needle')) buildGauge();
   const noteEl = $('now-note');
   const octEl = $('now-octave');
-  const needle = $('needle');
   const centsEl = $('now-cents');
-  const zone = document.querySelector('.meter-zone');
 
   const tol = state && state.active_settings
     ? Number(state.active_settings.tolerance_cents) : null;
 
-  // 허용 구간을 미터 위에 녹색 띠로 그린다
-  if (tol && tol > 0) {
-    zone.style.width = Math.min(100, (tol / METER_RANGE) * 100) + '%';
-  } else {
-    zone.style.width = '0';
-  }
+  // 허용 구간을 게이지 테두리에 초록 띠로 그린다
+  const zc = tol && tol > 0 ? Math.min(tol, METER_RANGE) : 0;
+  $('g-zone').setAttribute('d', zc ? arcPath(125, -zc, zc) : '');
 
   const no = state ? state.current_string : 0;
-  $('now-stringno').textContent = no ? `${no}번 줄` : '—';
-  $('now-adjust').textContent = no ? `조절 ${state.adjust_count}회` : '—';
+  $('now-stringno').textContent = no ? `${no}번 줄` : '대기 중';
+  const maxAdj = state && state.active_settings ? state.active_settings.max_adjust_count : null;
+  $('now-adjust').textContent = no
+    ? `페그 조절 ${state.adjust_count}${maxAdj !== null ? ' / ' + maxAdj : ''}회` : '';
+
+  // 값이 없을 때는 센트 줄을 통째로 숨긴다. '—' 를 굵은 고정폭으로 찍으면 막대처럼 보인다
+  const centsWrap = centsEl.parentElement;
+  const blank = (label) => {
+    noteEl.textContent = label;
+    noteEl.className = 'note invalid';
+    octEl.textContent = '';
+    setNeedle('idle', null);
+    centsEl.textContent = '';
+    centsEl.className = 'cents-big';
+    centsWrap.hidden = true;
+    $('now-measured').textContent = '—';
+  };
+  centsWrap.hidden = false;
 
   if (!no) {
-    noteEl.textContent = '—';
-    noteEl.className = 'note';
-    octEl.textContent = '';
-    needle.className = 'needle';
-    needle.style.transform = 'translateX(0)';
-    centsEl.textContent = '—';
-    centsEl.className = 'cents-big';
-    $('now-measured').textContent = '—';
+    blank(state && state.phase === PHASE.DONE ? '조율 완료' : '대기');
     $('now-target').textContent = '—';
     return;
   }
@@ -332,22 +499,22 @@ function renderTuner(state) {
   // 음이름은 표에서 직접 꺼낸다. "E2" -> 음 'E' + 옥타브 '2'
   const info = FRETBOARD.find((x) => x.n === no);
   const note = info ? info.name.slice(0, -1) : '—';
-  octEl.textContent = info ? info.name.slice(-1) : '';
   $('now-target').textContent = hz(state.target_hz);
 
   if (!state.measurement_valid) {
-    noteEl.textContent = '측정 불가';
-    noteEl.className = 'note invalid';
-    octEl.textContent = '';
-    needle.className = 'needle';
-    needle.style.transform = 'translateX(0)';
-    centsEl.textContent = '—';
-    centsEl.className = 'cents-big';
-    $('now-measured').textContent = '—';
+    // 측정값이 없을 때 — 진행 중이면 목표 음이름을 흐리게 둔다. 단계명은 아래 줄 카드가
+    // 이미 보여 주므로 여기 겹쳐 쓰지 않는다 (2026-09-29). 진행 중이 아닌데 값이 없으면
+    // 그 줄의 측정이 실패한 것이라 '측정 불가'
+    const busy = [PHASE.REGISTER_PEG, PHASE.PREPARE_PLUCK, PHASE.MEASURE_READY, PHASE.PLUCK,
+      PHASE.ANALYZE, PHASE.ADJUST_PEG, PHASE.VERIFY, PHASE.RETURN, PHASE.PAUSED]
+      .includes(state.phase);
+    blank(busy ? note : '측정 불가');
+    if (busy) octEl.textContent = info ? info.name.slice(-1) : '';
     return;
   }
 
   noteEl.textContent = note;
+  octEl.textContent = info ? info.name.slice(-1) : '';
   $('now-measured').textContent = hz(state.measured_hz);
 
   const c = centsOf(state.measured_hz, state.target_hz);
@@ -355,24 +522,36 @@ function renderTuner(state) {
 
   if (c === null) {
     noteEl.className = 'note';
-    needle.className = 'needle';
-    needle.style.transform = 'translateX(0)';
+    setNeedle('idle', null);
     centsEl.className = 'cents-big';
     return;
   }
 
   const inTune = tol ? Math.abs(c) <= tol : false;
-  // 트랙 절반 폭만큼 좌우로 민다. ±50센트를 넘으면 끝에 붙는다.
-  const clamped = Math.max(-METER_RANGE, Math.min(METER_RANGE, c));
-  const half = needle.parentElement.clientWidth / 2;
-  needle.style.transform = `translateX(${(clamped / METER_RANGE) * half}px)`;
-
   noteEl.className = 'note' + (inTune ? ' ok' : '');
-  needle.className = 'needle ' + (inTune ? 'ok' : (Math.abs(c) > METER_RANGE ? 'off' : 'live'));
+  setNeedle(inTune ? 'ok' : (Math.abs(c) > METER_RANGE ? 'off' : ''), c);
   centsEl.className = 'cents-big ' + (inTune ? 'ok' : (c > 0 ? 'high' : 'low'));
 }
 
+let lastJobErrorKey = null;
+
+function renderJobError(state) {
+  const message = state && state.phase === PHASE.ERROR ? state.error_message : '';
+  if (!state) return; // 연결 대기만으로 같은 오류의 팝업을 반복하지 않는다.
+  if (state.phase !== PHASE.ERROR) {
+    lastJobErrorKey = null;
+    return;
+  }
+  if (!message) return;
+  const key = JSON.stringify([state.job_id, message]);
+  if (key === lastJobErrorKey) return;
+  lastJobErrorKey = key;
+  window.alert(`작업을 진행할 수 없습니다.\n\n${message}`);
+}
+
 function renderLive(state) {
+  renderJobError(state);
+  // 로봇이 보낸 알림(피크 없음·재집기·보충 대기). 팝업이 아니라 띠로 계속 보인다 (#88)
   const notice = $('robot-notice');
   notice.textContent = state?.robot_notice || '';
   notice.hidden = !notice.textContent;
@@ -395,82 +574,148 @@ function renderLive(state) {
   renderSettingsLock(state);
 }
 
+// 지금 줄에서 보여 줄 단계. task_manager._measure_once 와 _adjust_peg 의 순서다
+const STEPS = [
+  [PHASE.PREPARE_PLUCK, '발현 준비'],
+  [PHASE.MEASURE_READY, '측정 준비'],
+  [PHASE.PLUCK, '발현'],
+  [PHASE.ANALYZE, '분석'],
+  [PHASE.ADJUST_PEG, '페그 조절'],
+];
+
+// 오차 미니 막대. 가운데가 0, 초록 띠가 허용 구간이다.
+function centsBar(c, tol) {
+  const has = c !== null && c !== undefined && isFinite(c);
+  const clamped = has ? Math.max(-METER_RANGE, Math.min(METER_RANGE, c)) : 0;
+  const zone = tol ? Math.min(100, (tol / METER_RANGE) * 100) : 0;
+  const inTune = has && tol ? Math.abs(c) <= tol : false;
+  return `<div class="cbar">
+    <div class="cbar-track">
+      <div class="cbar-zone" style="width:${zone}%"></div>
+      <div class="cbar-mid"></div>
+      ${has ? `<div class="cbar-dot ${inTune ? 'ok' : 'off'}"
+               style="left:${50 + (clamped / METER_RANGE) * 50}%"></div>` : ''}
+    </div>
+    <span class="cbar-val${has ? '' : ' dim'}">${has ? centsText(c) + ' 센트' : '오차 —'}</span>
+  </div>`;
+}
+
+// 줄별 진행. 줄마다 세로 블록 하나. 색은 줄이 아니라 상태를 뜻한다 (대기·진행·성공·실패).
+// 지금 줄은 단계를 세로로 펼친다.
 function renderStringCards(state) {
   const wrap = $('strings');
   const byNumber = new Map();
   if (state) state.results.forEach((r) => byNumber.set(r.string_number, r));
+  const running = isRunning(state);
+  const tol = state && state.active_settings ? Number(state.active_settings.tolerance_cents) : null;
+  const maxAdj = state && state.active_settings ? state.active_settings.max_adjust_count : null;
 
-  wrap.innerHTML = '';
-  STRINGS.forEach(({ n, name }) => {
+  wrap.innerHTML = STRINGS.map(({ n, name }) => {
     const r = byNumber.get(n);
-    const card = document.createElement('div');
+    // 지금 이 줄을 조율 중이면 확정값 대신 흘러드는 측정값을 보여 준다.
+    // tuned_hz 는 줄이 끝나야 채워져서, 그것만 쓰면 진행 중엔 '측정 불가'로 굳어 보인다.
+    const live = state && state.current_string === n && running;
+    const registering = live && state.phase === PHASE.REGISTER_PEG;
 
-    let cls = 'scard';
-    if (state && state.current_string === n && isRunning(state)) cls += ' current';
-    if (r && r.result === 1) cls += ' ok';
-    if (r && r.result === 2) cls += ' bad';
+    let cls = 'sblock';
+    if (live) cls += currentClass(state);
+    else if (r && r.result === 1) cls += ' ok';
+    else if (r && r.result === 2) cls += ' bad';
+    else cls += ' wait';
     if (isJustDone(n)) cls += ' just-done';
-    card.className = cls;
 
-    // 지금 이 줄을 조율 중인가. 그렇다면 아직 확정되지 않은 값 대신
-    // 흘러들어오는 측정값을 보여준다. tuned_hz 는 줄이 끝나야 채워지므로,
-    // 그것만 쓰면 진행 중에는 카드가 '측정 불가'로 굳어 보인다.
-    const live = state && state.current_string === n && isRunning(state);
-    const note = live ? '진행 중' : (r ? r.result_label : '대기');
+    let badge = ['badge-idle', '대기'];
+    if (registering) badge = ['badge-gold', '등록 중'];
+    else if (live && state.phase === PHASE.PAUSED) badge = ['badge-warn', '일시정지'];
+    else if (live && state.phase === PHASE.VERIFY) badge = ['badge-run', '최종 검증'];
+    else if (live) badge = ['badge-run', '진행 중'];
+    else if (r && r.result === 1) badge = ['badge-ok', r.result_label];
+    else if (r && r.result === 2) badge = ['badge-bad', r.result_label];
 
-    const rows = [];
-    rows.push(['목표', `${hz(r ? r.target_hz : null)} Hz`, false]);
-    if (live) {
-      rows.push(['측정', state.measurement_valid ? `${hz(state.measured_hz)} Hz` : '측정 불가',
-                 !state.measurement_valid]);
-      const c = state.measurement_valid
-        ? centsOf(state.measured_hz, state.target_hz) : null;
-      rows.push(['오차', c === null ? '—' : `${centsText(c)} 센트`, c === null]);
-      rows.push(['조절 횟수', String(state.adjust_count), false]);
-    } else if (r) {
-      rows.push(['조율 측정', r.tuned_hz === null ? '측정 불가' : `${hz(r.tuned_hz)} Hz`,
-                 r.tuned_hz === null]);
-      rows.push(['검증 측정', r.verified_hz === null ? '—' : `${hz(r.verified_hz)} Hz`,
-                 r.verified_hz === null]);
-      rows.push(['최종 오차', `${cents(r.final_error_cents)} 센트`, false]);
-      rows.push(['조절 횟수', String(r.adjust_count), false]);
-      if (r.result === 2 && r.failure_label) rows.push(['실패 사유', r.failure_label, true]);
+    // 부제 — 진행 전엔 목표, 진행 중엔 측정, 끝났으면 마지막 측정(검증이 있으면 검증)
+    let sub = `목표 ${hz(r ? r.target_hz : null)} Hz`;
+    if (live && state.measurement_valid) sub = `측정 ${hz(state.measured_hz)} Hz`;
+    else if (!live && r && r.result !== 0) {
+      const v = r.verified_hz !== null ? r.verified_hz : r.tuned_hz;
+      sub = v === null ? '측정 불가' : `${r.verified_hz !== null ? '검증' : '측정'} ${hz(v)} Hz`;
     }
 
-    card.innerHTML = `
-      <div class="scard-head">
-        <span class="scard-name">${n}번 <span class="scard-note">${name}</span></span>
-        <span class="${r && r.result === 1 ? 'badge badge-ok'
-                       : r && r.result === 2 ? 'badge badge-bad' : 'badge badge-idle'}">${note}</span>
+    let c = null;
+    if (live && state.measurement_valid) c = centsOf(state.measured_hz, state.target_hz);
+    else if (!live && r && r.result !== 0 && (r.tuned_hz !== null || r.verified_hz !== null)) {
+      c = r.final_error_cents;
+    }
+
+    const adj = live ? state.adjust_count : (r ? r.adjust_count : 0);
+
+    let steps = '';
+    if (registering) {
+      steps = '<div class="ssteps"><div class="sstep active"><i></i><span>페그 자세 등록</span></div></div>';
+    } else if (live) {
+      const at = STEPS.findIndex(([p]) => p === state.phase);
+      steps = `<div class="ssteps">${STEPS.map(([, label], i) => {
+        const k = at < 0 ? '' : i < at ? ' done' : i === at ? ' active' : '';
+        return `<div class="sstep${k}"><i></i><span>${label}</span></div>`;
+      }).join('')}</div>`;
+    }
+    const fail = !live && r && r.result === 2 && r.failure_label
+      ? `<div class="sfail">사유 · ${r.failure_label}</div>` : '';
+
+    return `<div class="${cls}">
+      <div class="sb-top">
+        <span class="sno">${n}</span>
+        <span class="badge sbadge ${badge[0]}">${badge[1]}</span>
       </div>
-      <div class="rows">
-        ${rows.map(([k, v, dim]) =>
-          `<div class="row"><span class="k">${k}</span><span class="v${dim ? ' dim' : ''}">${v}</span></div>`
-        ).join('')}
-      </div>`;
-    wrap.appendChild(card);
-  });
+      <div class="sname"><b>${name}</b><span>${sub}</span></div>
+      ${centsBar(c, tol)}
+      <div class="sadj"><span>페그 조절</span><b>${adj}${live && maxAdj !== null ? ' / ' + maxAdj : ''}회</b></div>
+      ${steps}${fail}
+    </div>`;
+  }).join('');
 }
 
 function renderButtons(state) {
   const running = isRunning(state);
   const paused = state && state.phase === PHASE.PAUSED;
-  $('btn-start').disabled = running;
-  $('btn-pause').disabled = !running || paused;
-  $('btn-resume').disabled = !paused;
-  $('btn-cancel').disabled = !running;
+  const blocked = !streamReady || !state || commandPending;
+  $('btn-start').disabled = blocked || running || registration.busy;
+  $('btn-reregister').disabled = blocked || running || registration.busy;
+  $('registration-status').textContent = registration.message;
+  $('btn-pause').disabled = blocked || !running || paused;
+  $('btn-resume').disabled = blocked || !paused;
+  $('btn-cancel').disabled = blocked || !running;
 }
 
 // ─────────────────────────────── 명령
 
 async function sendCommand(name) {
+  if (commandPending || !streamReady || !lastState) return;
+  const registering = name === 'reregister_pegs';
+  if ((registering || name === 'start') && (isRunning(lastState) || registration.busy)) return;
+  commandPending = true;
+  if (registering) registration.begin(lastState);
+  renderButtons(lastState);
   try {
     const res = await fetch(`/api/command/${name}`, { method: 'POST' });
     const data = await res.json();
-    if (!res.ok) { toast(data.error || '명령 실패', false); return; }
-    toast(data.message || (data.accepted ? '접수' : '거부'), data.accepted);
+    if (registering) {
+      if (res.ok) registration.reply(data.accepted, data.message);
+      else registration.unknown(data.error || '접수 여부 확인 불가');
+    }
+    if (name === 'start' && (!res.ok || !data.accepted)) {
+      window.alert(data.error || data.message || '시작 요청이 거부되었습니다.');
+    } else {
+      if (name === 'start' && data.accepted) {
+        registration.message = '이번 조율에 등록값을 사용합니다. 다음 조율 전에는 다시 등록하세요.';
+      }
+      toast(data.error || data.message || (data.accepted ? '접수' : '거부'), res.ok && data.accepted);
+    }
   } catch (e) {
+    if (registering) registration.unknown('응답 유실 — 접수 여부를 확인할 수 없습니다. 상태와 로그를 확인하세요.');
     toast(`명령을 보내지 못했다: ${e}`, false);
+  } finally {
+    commandPending = false;
+    renderButtons(lastState);
   }
 }
 
@@ -672,10 +917,15 @@ function connect() {
 
   es.onmessage = (ev) => {
     lastState = JSON.parse(ev.data);
+    streamReady = true;
+    registration.observe(lastState);
     renderLive(lastState);
   };
 
   es.onerror = () => {
+    streamReady = false;
+    registration.disconnect();
+    renderButtons(lastState);
     // EventSource 는 스스로 재접속한다. 그 사이 상태 표시만 바꾼다.
     link.textContent = '연결 끊김 — 재접속 중';
     link.className = 'badge badge-bad';
@@ -805,9 +1055,12 @@ function initCoordMode() {
 }
 
 function init() {
+  initGuitarZoom();
+  buildGauge();
   initCoordMode();
   initTheme();
   initTabs();
+  $('btn-reregister').addEventListener('click', () => sendCommand('reregister_pegs'));
   $('btn-start').addEventListener('click', () => sendCommand('start'));
   $('btn-pause').addEventListener('click', () => sendCommand('pause'));
   $('btn-resume').addEventListener('click', () => sendCommand('resume'));

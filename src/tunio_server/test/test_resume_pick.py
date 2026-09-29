@@ -17,7 +17,8 @@ def measurement_node(resumed=False, play_success=True):
     node = SimpleNamespace(
         job_id='test', measurement_id=0, _registered_pegs={6, 5, 2, 1},
         active_settings=SimpleNamespace(measure_timeout_sec=1.0, onset_timeout_sec=1.0),
-        _resumed_since_play=threading.Event(), _cancel=threading.Event(), _p=lambda name: 1.0,
+        _resumed_since_play=threading.Event(), _cancel=threading.Event(),
+        _pause=threading.Event(), _p=lambda name: 1.0,
         _set_phase=MagicMock(), _track=MagicMock(), _untrack=MagicMock(),
         _set_robot_notice=MagicMock(), _gate=MagicMock(),
         get_logger=lambda: MagicMock(),
@@ -72,6 +73,7 @@ def test_재개_버튼은_로봇확인서비스를_호출하지_않는다():
 
 def test_동작중_재개는_거부한다():
     node = SimpleNamespace(_running=lambda: True, _pause=threading.Event(),
+                           _resumed_since_play=threading.Event(),
                            phase=TuningState.PHASE_PLUCK)
     node._pause.set()
     response = TaskManager.on_resume(node, CommandTuning.Request(), CommandTuning.Response())
@@ -127,6 +129,8 @@ def test_재집기가_길어져도_같은_Action결과를_기다린다():
     node = SimpleNamespace(
         _wait=MagicMock(side_effect=[handle, None, SimpleNamespace(result=result, status=4)]),
         _p=lambda name: 120.0, _track=MagicMock(), _untrack=MagicMock(),
+        # _run_action 이 취소·일시정지도 함께 본다 (2026-09-29 main 병합)
+        _cancel=threading.Event(), _pause=threading.Event(),
         get_logger=lambda: MagicMock(),
     )
     client = MagicMock()

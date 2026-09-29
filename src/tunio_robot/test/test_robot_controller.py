@@ -41,6 +41,9 @@ class Harness:
 
     def __init__(self, yaml_path):
         self.node = RobotController()
+        # 일부 테스트는 dry_run 생성 뒤 실기 분기만 대역으로 검사한다.
+        self.node._stop_client = mock.Mock(service_is_ready=lambda: True)
+        self.node._motion_client = mock.Mock(service_is_ready=lambda: True)
         self.node.set_parameters([
             rclpy.parameter.Parameter("teach_points", value=yaml_path),
             # verify_pick 기본값은 false 다 (#88 리뷰). 이 파일의 통합 테스트는

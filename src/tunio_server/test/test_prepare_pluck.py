@@ -14,8 +14,9 @@ def scenario(ready=True, outcomes=(True,)):
     node = SimpleNamespace(
         job_id='prepare-test', measurement_id=0, _registered_pegs={6},
         active_settings=SimpleNamespace(measure_timeout_sec=10., onset_timeout_sec=10.),
-        _cancel=threading.Event(), _resumed_since_play=threading.Event(),
-        _set_robot_notice=Mock(), cli_prepare=object(), cli_play=object(),
+        _cancel=threading.Event(), _pause=threading.Event(),
+        _resumed_since_play=threading.Event(), _set_robot_notice=Mock(),
+        cli_prepare=object(), cli_play=object(),
         _gate=Mock(), _set_phase=Mock(), _track=Mock(), _untrack=Mock(),
         _publish_state=Mock(), get_logger=lambda: Mock(),
         _p=lambda key: .01 if key == 'ready_wait_sec' else 30.,

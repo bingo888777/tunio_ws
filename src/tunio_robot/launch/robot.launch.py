@@ -46,6 +46,11 @@ def generate_launch_description():
                               description='집은 뒤 Modbus 폭으로 피크를 확인할지. '
                                           '실기 검증 전이라 기본 false (#88 리뷰)'),
 
+        DeclareLaunchArgument('cancel_stop_timeout_sec', default_value='5.0',
+                              description='정지 완료 확인 제한 시간, 실측 전 임시값'),
+        DeclareLaunchArgument('cancel_stop_interval_sec', default_value='0.1',
+                              description='정지 재요청/상태 확인 주기, 실측 전 임시값'),
+
         LogInfo(msg=['[robot] dry_run=', dry_run,
                      ' (true 면 로봇은 움직이지 않는다)']),
 
@@ -54,5 +59,9 @@ def generate_launch_description():
              parameters=[{'dry_run': dry_run,
                           'speed_scale': speed_scale,
                           'peg_register_force': peg_register_force,
-                          'verify_pick': verify_pick}]),
+                          'verify_pick': verify_pick,
+                          'cancel_stop_timeout_sec':
+                              LaunchConfiguration('cancel_stop_timeout_sec'),
+                          'cancel_stop_interval_sec':
+                              LaunchConfiguration('cancel_stop_interval_sec')}]),
     ])

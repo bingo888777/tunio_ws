@@ -57,6 +57,13 @@ def test_pick_refill_through_resume_service(stage, outcome, cancel, monkeypatch)
                           cancel_callback=lambda goal: CancelResponse.ACCEPT,
                           callback_group=ReentrantCallbackGroup())
     robot.dry_run = False
+    # dry_run 을 끄면 on_goal 이 두산 정지/상태 서비스 연결을 본다 (2026-09-29 main).
+    # 실물이 없으니 준비된 것으로 대신한다 — tunio_robot 의 Harness 와 같은 처리다.
+    robot._stop_client = Mock(service_is_ready=lambda: True)
+    robot._motion_client = Mock(service_is_ready=lambda: True)
+    # verify_pick 기본값은 false 다 (#88 리뷰). 이 파일은 확인 기능 자체를 보는
+    # 자리라 명시적으로 켠다 — 안 켜면 _verify_pick 이 skip 을 내서 전부 통과한다
+    robot.set_parameters([rclpy.parameter.Parameter('verify_pick', value=True)])
     monkeypatch.setattr(robot.pegs, 'roll_of', lambda no: 0.0)
     robot._holding_pick = stage != 'pickup'
     failed_round = [GW.WidthError('통신 실패')] * 6 if outcome == 'unreadable' else [13.0] * 3
