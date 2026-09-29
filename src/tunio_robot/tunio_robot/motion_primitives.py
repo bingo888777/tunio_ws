@@ -766,6 +766,11 @@ def _orientation_lift(current, target, motion):
     return extra
 
 
+def _nearest_turn(angle, reference):
+    """J6 표현을 실제 손목에 맞춘다 — angle 의 360도 동등각 중 reference 에 가장 가까운 것."""
+    return min((angle + 360.0 * k for k in (0, 1, -1)), key=lambda v: abs(v - reference))
+
+
 def _check_transfer_joints(start, goal):
     """높이와 별개로 실제 관절각/J1의 허용 이동 방향을 확인한다."""
     if any(len(j) != 6 or not all(math.isfinite(v) for v in j) for j in (start, goal)):
@@ -872,6 +877,12 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
             if not -60 <= q[0] <= 240 or j1_flip(previous[0], q[0], motion)[0]:
                 raise ValueError("현재 쪽에서 이어갈 수 없는 J1 전환")
             _check_transfer_j5(q, motion)
+            # J6 도 동등각 중 **직전 관절에서 가장 가까운 것**으로 표현한다. 팔은 직선
+            # 이동에서 J6 를 이어가므로 IK 가 +160 으로 준 목표에 팔은 -200 으로 도달한다
+            # (9/29 실기, 정확히 360도 차이). 그대로 두면 도착 검사가 "미도달" 로 막고,
+            # 뒤의 movej 는 손목을 한 바퀴 돌린다. 한계 검사도 이 표현으로 한다 —
+            # 그게 팔이 실제로 갈 각이다. 실제 출발각(start)은 환산하지 않는다
+            q[5] = _nearest_turn(q[5], previous[5])
             if abs(q[5]) > limit:
                 raise ValueError("J6 관절 제한 초과")
             if motion.get("j6_recovery_enabled", False):
@@ -896,9 +907,11 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
     def arrived(task, expected):
         actual, _ = read_posx()
         actual_joints = _read_peg_joints(motion)
+        # J6 는 360도 동등각이 같은 자세다 — 접어서 비교한다. 나머지는 그대로
         if (len(actual) != 6 or not all(math.isfinite(v) for v in actual)
                 or math.dist(actual[:3], task[:3]) > 2.0
-                or max(abs(a - b) for a, b in zip(actual_joints, expected)) > 1.0):
+                or max(abs(a - b) for a, b in zip(actual_joints[:5], expected[:5])) > 1.0
+                or abs(_nearest_turn(expected[5], actual_joints[5]) - actual_joints[5]) > 1.0):
             raise MotionError(
                 f"높이 이동: 목표 미도달 — 후속 이동 차단. 목표 TCP={task}, 실제 TCP={actual}, "
                 f"목표 관절={expected}, 실제 관절={actual_joints}")
@@ -911,6 +924,12 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
         _movel_base(raised, v, a)
     actual = arrived(raised, joints[0])
     for task, q in zip(poses[1:-1], joints[1:-1]):
+        # 직선 이동이 남긴 실제 J6 에 맞춰 다시 표현한다. 계획과 한 바퀴 어긋났으면
+        # 여기서 잡는다 — 안 잡으면 movej 가 손목을 360도 돌린다
+        q = list(q)
+        q[5] = _nearest_turn(q[5], actual[5])
+        if abs(q[5]) > limit:
+            raise MotionError(f"높이 이동: 실제 손목 기준 J6 {q[5]:+.1f}도가 한계 ±{limit:g}도 밖이다")
         _check_transfer_joints(actual, q)
         if max(abs(x - y) for x, y in zip(actual, q)) > .01:
             if confirm:

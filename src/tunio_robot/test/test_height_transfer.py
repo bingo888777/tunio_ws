@@ -143,6 +143,65 @@ def test_IK목표의_동등각은_허용구간에서_고르되_실제출발각�
     assert scene.calls == []
 
 
+def _keep_j6_on_movel(scene, monkeypatch, shift=0.0):
+    # 가짜 movel 은 관절을 IK 표로 되돌려 J6 가 0 이 된다. 실제 팔은 직선 이동에서 J6 를
+    # 이어가므로 그 연속성을 흉내 낸다 (shift 로 한 바퀴 어긋난 경우도 만든다)
+    orig = MP._movel_base
+    pending = [shift]
+
+    def movel(task, v, a):
+        j6 = scene.joints[5]
+        orig(task, v, a)
+        scene.joints[5] = j6 + pending.pop() if pending else j6   # 어긋남은 첫 직선 이동 한 번만
+    monkeypatch.setattr(MP, '_movel_base', movel)
+
+
+def test_IK의_J6동등각은_실제손목에_가까운쪽으로_명령한다(scene, monkeypatch):
+    # 9/29 실기: 팔 J6 -199.8 에 IK 가 +160.2 를 주자 도착 검사가 "미도달"(정확히 360도 차)
+    scene.joints[5] = -199.8
+    ik = scene.make_joints
+
+    def ikin(task, sol):
+        q = ik(task)
+        q[5] = 160.2
+        return q
+    monkeypatch.setattr(MP._api, 'ikin', ikin)
+    _keep_j6_on_movel(scene, monkeypatch)
+    MP._transfer_above_floor([600, 0, 207, 0, 180, 0], {})
+    assert [kind for kind, _ in scene.calls] == ['movel', 'movej', 'movel']
+    movej = [q for kind, q in scene.calls if kind == 'movej']
+    assert all(q[5] == pytest.approx(-199.8) for q in movej)   # 한 바퀴 안 돌린다
+
+
+def test_직선이동이_J6를_한바퀴_다르게_남겨도_실제기준으로_이어간다(scene, monkeypatch):
+    scene.joints[5] = -199.8
+    ik = scene.make_joints
+
+    def ikin(task, sol):
+        q = ik(task)
+        q[5] = 160.2
+        return q
+    monkeypatch.setattr(MP._api, 'ikin', ikin)
+    _keep_j6_on_movel(scene, monkeypatch, shift=360.0)     # 첫 상승 뒤 J6 가 +160.2 로 읽힘
+    MP._transfer_above_floor([600, 0, 207, 0, 180, 0], {})
+    movej = [q for kind, q in scene.calls if kind == 'movej']
+    assert movej and all(q[5] == pytest.approx(160.2) for q in movej)
+
+
+def test_J6동등각이_한계를_넘으면_첫명령전_차단한다(scene, monkeypatch):
+    scene.joints[5] = -190.0
+    ik = scene.make_joints
+
+    def ikin(task, sol):
+        q = ik(task)
+        q[5] = 100.0                                          # -190 에 가까운 표현은 -260
+        return q
+    monkeypatch.setattr(MP._api, 'ikin', ikin)
+    with pytest.raises(MP.MotionError, match='J6'):
+        MP._transfer_above_floor([600, 0, 207, 0, 180, 0], {'peg_j6_limit_deg': 200})
+    assert scene.calls == []
+
+
 def test_임의높이_기준을_밑돈다고_새_금지선처럼_차단하지_않는다(scene):
     scene.reject = 'midpoint'
     # 진단으로는 기준 미달이지만 실제 금지구역 판정과 혼동하지 않는다.
