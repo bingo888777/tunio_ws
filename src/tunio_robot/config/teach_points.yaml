@@ -70,19 +70,22 @@ motion:
   # turn_vel=2일 때 되감기만 약 180초: 서버 adjust_timeout_sec도 실측에 맞춰야 한다.
   peg_unwind_enabled: false
 
-  # 안경닦이로 넥 닦기 (2026-09-23, wipe 절 참조). 좌표는 실측이지만 아래
-  # 값들은 전부 실기 미검증 1차값이다.
-  wipe_press_force_n: 2.0    # 넥을 누르는 목표힘(Base -Z). 핸드폰 무게(187g) 근사치
+  # 안경닦이로 넥 닦기 (2026-09-23, wipe 절 참조). 좌표는 실측. 목표힘·안전
+  # 상한·누르는 깊이(wipe_press_force_n·wipe_max_force_n·wipe_press_depth_mm)는
+  # wipe_check.py로 반복 확인한 값이고, 나머지(속도·정착시간 등)는 아직
+  # 실기 미검증 1차값이다.
+  wipe_press_force_n: 20.0   # 넥을 누르는 목표힘(Base -Z). wipe_check.py 실기 반복 후 확정값(2026-09-23)
   # set_desired_force 만 걸고 가만히 있으면 아무 일도 안 한다(2026-09-23 실기로 확인
   # — 20초 기다려도 미동 없음). 두산 공식 예제(dsr_example2 simple/test.py, "amovel +
   # task_compliance_ctrl")를 따라, 시작점보다 이만큼 더 깊은 목표로 **비동기** 이동을
   # 걸어 두고 힘/순응이 먼저 멈춰 세우는 걸 기대한다. 힘 제어가 안 먹으면 이 깊이만큼
   # 실제로 밀고 들어가므로 작게 잡았다.
-  wipe_press_depth_mm: 10.0
+  wipe_press_depth_mm: 30.0  # wipe_check.py 실기 반복 후 확정값(2026-09-23)
   # 위 가정이 틀렸을 때의 안전판(2026-09-23 사용자 지적) — 이 힘(N)을 넘으면 폴링이
   # MoveStop 서비스콜로 즉시 멈추고 실패로 던진다("컨트롤러가 알아서 멈출 것"이라는
-  # 가정에만 기대지 않는다). 기본은 목표힘 + 10
-  wipe_max_force_n: 12.0
+  # 가정에만 기대지 않는다). wipe_check.py 실기 반복 후 확정값(2026-09-23) — 이제
+  # 목표힘(20N)과 떨어져 있어 "기본은 목표힘 + 10"이라는 옛 계산과는 안 맞는다.
+  wipe_max_force_n: 100.0
   wipe_poll_sec: 0.2         # 안전 상한·도달 감시 폴링 주기(초)
   # 목표힘에 도달하면 그 즉시 훑기로 넘어간다(2026-09-23, 사용자 지시로 변경 —
   # 원래는 wipe_settle_sec 을 그냥 다 기다렸다). 단발 샘플 잡음에 안 속게
@@ -521,7 +524,7 @@ wipe:
     # WebLogic 에 추가하고 이 자리에 grip_preset 키를 붙일 것.
     taught: true
   start:
-    x: [415.0, -6.0, 184.0, 0.0, -180.0, -180.0]   # 너트, 3·4번 줄 사이
+    x: [415.0, -6.0, 194.0, 0.0, -180.0, -180.0]   # 너트, 3·4번 줄 사이 (Z +10, 2026-09-29)
     tcp: "GripperDA_v1"
     taught: true
   end:

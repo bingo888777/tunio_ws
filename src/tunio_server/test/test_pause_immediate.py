@@ -80,6 +80,7 @@ def test_job_redoes_the_string_after_pause(what, expect_reregister):
         if first.pop(no, False):
             raise TM.Paused(what)
     n = _node(_tune_string=tune, _verify_pass=lambda: calls.append(('verify',)),
+              _wipe=lambda: calls.append(('wipe',)),
               _return_home=lambda: calls.append(('home',)), _save=lambda: calls.append(('save',)),
               _register_pegs=lambda numbers, force=False: calls.append(
                   ('register', tuple(numbers), force)),
@@ -91,7 +92,7 @@ def test_job_redoes_the_string_after_pause(what, expect_reregister):
     if expect_reregister:
         expected.append(('register', (6,), True))
     expected += [('tune', 6), ('tune', 5), ('tune', 2), ('tune', 1),
-                 ('verify',), ('home',), ('save',)]
+                 ('verify',), ('wipe',), ('home',), ('save',)]
     assert calls == expected
     assert gates                                       # PAUSED 대기(_gate)를 거쳤다
 

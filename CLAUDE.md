@@ -406,15 +406,27 @@
 **화음(#84로 미구현인 채 폐기)은 안경닦이로 넥을 닦는 마무리 동작이 대체한다**
 (2026-09-23 사용자 결정). Action 이름도 `StrumAll` → `WipeStrings`로 바꿨다 —
 인터페이스는 새로 안 늘리고 같은 자리를 재활용했다(Goal 필드 없음, Result만).
-`_run_job()`의 `_wipe()` 호출은 **아직 주석 처리된 채로 있다** — 넥 닦기
-교시점(`teach_points.yaml`의 `wipe.holder`/`start`/`end`)이 전부 미교시라,
-지금 켜면 `_wipe()`가 매 작업마다 실패를 반환하고, #83의 `_run_action`이 그걸
-`Aborted`로 올려 **4줄을 완주한 작업조차 "중간에 끊긴 작업"으로 잘못 분류된다**
-— #84가 막으려던 것과 같은 종류의 회귀다. `wipe`를 실측해 `taught: true`로
-올린 뒤에 `task_manager.py`의 주석 처리된 `self._wipe()`를 풀 것.
+**`_run_job()`의 `_wipe()` 호출이 메인 시나리오에 들어갔다** (2026-09-29,
+힘 제어값 실기 확인 후). 검증(Phase 2) 뒤 · ReturnHome 앞, `verify_pass`·
+`return_home`과 같은 자리를 쓴다.
 
-**복귀 성공을 확인한 뒤 완료·저장한다.** 지금은 마무리 동작 호출 자체를 안 보내므로
-그 실패 때문에 복귀와 저장이 막히지 않는다. ReturnHome이 실패하거나 결과가
+- **실패 취급은 다른 로봇 Action과 같은 선례를 그대로 따른다.** `_wipe()`도
+  `_run_action`을 거치므로 실패·거부·응답 불명은 전부 `Aborted`이고, 4줄을
+  완주한 작업이라도 그 순간 작업 전체가 ERROR로 끝난다. "닦기만 따로 분리해
+  기록"하는 예외는 만들지 않았다 — 로봇 Action 실패군에 이미 있던 규칙(예:
+  `register_peg`·`play_string`·`adjust_peg`·`ReturnHome`)을 그대로 물려받은
+  것뿐이다.
+- **일시정지만 별도로 받는다.** `verify_pass`·`return_home`과 똑같이
+  `while True: try: self._wipe(); break; except Paused: self._hold_after_pause(0, ...)`
+  로 감쌌다 — 안 그러면 `Paused`(평범한 `Exception`)가 바깥 `except Exception`으로
+  떨어져 일시정지 요청이 오류로 잘못 보고된다. `what='wipe_strings'`는
+  `_hold_after_pause`의 강제 재등록 조건(`adjust_peg`/`register_peg`)에
+  안 걸려 페그는 건드리지 않는다 — 재개하면 닦기만 처음부터(피크 재집기 →
+  시작점 → 훑기) 다시 한다.
+- **실기 검증은 아직 남아 있다.** `wipe_settle_sec`(정착 대기)·전체 사이클
+  안에서의 시간 여유는 통합 회차에서 다시 봐야 한다.
+
+**복귀 성공을 확인한 뒤 완료·저장한다.** ReturnHome이 실패하거나 결과가
 확인되지 않으면 PHASE_ERROR로 중단한다. 중단 시 기록은 save_on_error_exit 설정을 따른다.
 `WipeStrings`(옛 StrumAll) 내부 복귀 동작은 켜진 뒤에도 그대로 쓰인다 — 복귀를
 전담하는 별도 Action이 없어서다(아래 인터페이스 절 참조).

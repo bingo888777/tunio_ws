@@ -1027,16 +1027,19 @@ class TaskManager(Node):
                     break
                 except Paused as p:
                     self._hold_after_pause(0, p.what)     # 검증은 측정만이라 통째로 다시
-            # 2026-09-23: 화음(#84로 미구현인 채 폐기)을 안경닦이로 넥 닦기가
-            # 대체하기로 했다. **아직 실행은 그대로 뺀다.** teach_points.yaml의
-            # wipe 절(pickup·start·end·return_box)은 2026-09-23에 좌표가
-            # 채워졌지만(taught: true) 힘 제어·정착 시간(wipe_settle_sec)이
-            # 실기 미검증 1차값이다 — 지금 켜면 실패 시 _wipe() -> _run_action()
-            # 이 Aborted 를 던지고(#83), 4줄을 완주한 작업조차 "중간에 끊긴
-            # 작업"으로 잘못 분류돼 PHASE_DONE·_save() 를 못 탄다 — #84 가
-            # 막으려던 것과 같은 종류의 회귀다. tools/wipe_check.py 로 실기
-            # 검증을 마친 뒤에 아래 주석을 풀 것.
-            # self._wipe()
+            # 화음(#84로 미구현인 채 폐기) 자리를 안경닦이로 넥 닦기가 대체한다
+            # (2026-09-23). 힘 제어값은 실기로 확인됐다. 실패 시 선례(register_peg·
+            # prepare_pluck·play_string·adjust_peg·return_home)와 같게 Aborted로
+            # 작업 전체를 ERROR 처리한다 — 예외 취급하지 않는다. 일시정지만 아래
+            # 루프로 따로 받는다(안 그러면 Paused가 바깥 except Exception으로 떨어져
+            # 일시정지가 오류로 잘못 보고된다). what='wipe_strings'는 _hold_after_pause의
+            # 강제 재등록 조건(adjust_peg/register_peg)에 안 걸려 페그는 안 건드린다.
+            while True:
+                try:
+                    self._wipe()
+                    break
+                except Paused as p:
+                    self._hold_after_pause(0, p.what)
             while True:
                 try:
                     self._return_home()

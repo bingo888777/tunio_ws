@@ -280,11 +280,12 @@ string message
 # 사용하지 않음
 ```
 
-⚠️ **아직 교시점이 없어 정상 통합에서 호출하지 않는다.** `task_manager._run_job()`의
-`self._wipe()`가 주석 처리된 채로 있다 — `teach_points.yaml`의 `wipe.holder`/
-`start`/`end`를 실측해 `taught: true`로 올려야 켤 수 있다. 안 켠 채로 실행하면
-매 작업마다 `Aborted`가 나서 4줄을 완주한 작업도 "중간에 끊긴 작업"으로
-잘못 분류된다(#84와 같은 종류의 회귀).
+**메인 시나리오에 들어가 있다** (2026-09-29, 힘 제어값 실기 확인 후). 교시점
+(`teach_points.yaml`의 `wipe.pickup`/`start`/`end`/`return_box`)은 실측이 끝났다.
+실패 취급은 다른 로봇 Action과 같다 — `Aborted`가 나면 4줄을 완주한 작업이라도
+그 순간 작업 전체가 ERROR로 끝난다(선례를 그대로 따름, 별도 예외 없음). 일시정지는
+`verify_pass`·`return_home`과 같은 재시도 루프로 따로 받는다. 정착 대기 등
+사이클 타임 안에서의 실기 검증은 남아 있다.
 
 ---
 
@@ -648,13 +649,17 @@ ros2 service call /tuning/reregister_pegs tunio_interfaces/srv/CommandTuning '{}
 한 줄 시험 절차는 `docs/1번줄_ROS_통합시험.md`를 따른다.
 
 
-## 넥 닦기(WipeStrings) 실행 보류 (2026-09-23, 화음 자리를 물려받음)
+## 넥 닦기(WipeStrings) — 메인 시나리오 편입 (2026-09-29, 화음 자리를 물려받음)
 
-정상 조율에서는 최종 검증 → ReturnHome 성공 확인 → PHASE_DONE → 저장 순서로 진행한다.
-`wipe.holder`/`start`/`end`가 아직 미교시라 `_run_job()`의 `self._wipe()` 호출만
-주석 처리해 제외한다. 켜면 매 작업마다 `Aborted`가 나서 4줄을 완주한 작업도
-"중간에 끊긴 작업"으로 잘못 분류된다 — #84가 막으려던 것과 같은 회귀다.
-WipeStrings Action 정의와 서버·로봇 함수는 삭제하지 않으며, 실측·실기 검증 후 호출을 복구한다.
+정상 조율에서는 최종 검증 → 넥 닦기(WipeStrings) → ReturnHome 성공 확인 → PHASE_DONE
+→ 저장 순서로 진행한다. `wipe.pickup`/`start`/`end`/`return_box` 교시와 힘 제어값이
+실기로 확인돼 `_run_job()`의 `self._wipe()` 호출을 켰다. 실패 취급은 다른 로봇
+Action과 같은 선례를 따른다 — `Aborted`가 나면 4줄을 완주한 작업이라도 그 순간
+작업 전체가 ERROR로 끝나며, 별도로 분리해 기록하는 예외는 두지 않았다. 일시정지만
+`verify_pass`·`return_home`과 같은 재시도 루프(`while/try/except Paused`)로 따로
+받는다 — 아니면 `Paused`가 바깥 일반 예외 처리로 떨어져 일시정지가 오류로 잘못
+보고된다. 재개하면 닦기만 처음부터(피크 재집기 → 시작점 → 훑기) 다시 하며, 페그는
+건드리지 않는다.
 ReturnHome 실패/거부/종료 불명은 기존 성공 Result 정책에 따라 작업을 중단한다.
 
 ### 2026-09-23 웹 재등록·오류 안내 연결

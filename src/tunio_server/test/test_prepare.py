@@ -203,7 +203,13 @@ def test_adjust_success_remeasures_same_string():
 
 
 @pytest.mark.parametrize('home_ok', [True, False])
-def test_job_skips_unenabled_wipe_and_requires_home_success_before_save(home_ok):
+def test_job_runs_wipe_before_home_and_requires_home_success_before_save(home_ok):
+    """넥 닦기는 검증 뒤·복귀 앞에서 돈다 (2026-09-29, 메인 시나리오 편입).
+
+    닦기 실패는 다른 로봇 Action과 같은 선례를 따른다 — 별도로 분리해 기록하지
+    않는다. 이 테스트는 닦기가 성공하는 경우만 다룬다. ReturnHome 성공 확인
+    후에만 저장한다는 기존 계약은 그대로 유지된다.
+    """
     from tunio_interfaces.msg import TuningState
 
     calls = []
@@ -217,7 +223,7 @@ def test_job_skips_unenabled_wipe_and_requires_home_success_before_save(home_ok)
         _register_pegs=lambda: calls.append('register'),
         _tune_string=lambda no: calls.append(('tune', no)),
         _verify_pass=lambda: calls.append('verify'),
-        _wipe=Mock(side_effect=NotImplementedError('화음 미구현')),
+        _wipe=Mock(side_effect=lambda: calls.append('wipe')),
         _set_phase=lambda phase, no: phases.append(phase),
         cli_home=Mock(), _wait=Mock(side_effect=[handle, wrapped]),
         _cancel=threading.Event(), _pause=threading.Event(),
@@ -230,10 +236,10 @@ def test_job_skips_unenabled_wipe_and_requires_home_success_before_save(home_ok)
         TM.TaskManager._return_home(n)
     n._return_home = home
     TM.TaskManager._run_job(n)
-    n._wipe.assert_not_called()
+    n._wipe.assert_called_once()
     n.cli_home.send_goal_async.assert_called_once()
     assert calls == [*[('tune', no) for no in (6, 5, 2, 1)],
-                     'verify', 'home', 'save' if home_ok else 'error']
+                     'verify', 'wipe', 'home', 'save' if home_ok else 'error']
     assert (TuningState.PHASE_DONE in phases) is home_ok
 
 
