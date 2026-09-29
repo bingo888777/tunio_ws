@@ -766,6 +766,11 @@ def _orientation_lift(current, target, motion):
     return extra
 
 
+def _nearest_turn(angle, reference):
+    """J6 표현을 실제 손목에 맞춘다 — angle 의 360도 동등각 중 reference 에 가장 가까운 것."""
+    return min((angle + 360.0 * k for k in (0, 1, -1)), key=lambda v: abs(v - reference))
+
+
 def _check_transfer_joints(start, goal):
     """높이와 별개로 실제 관절각/J1의 허용 이동 방향을 확인한다."""
     if any(len(j) != 6 or not all(math.isfinite(v) for v in j) for j in (start, goal)):
@@ -872,6 +877,12 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
             if not -60 <= q[0] <= 240 or j1_flip(previous[0], q[0], motion)[0]:
                 raise ValueError("현재 쪽에서 이어갈 수 없는 J1 전환")
             _check_transfer_j5(q, motion)
+            # J6 도 동등각 중 **직전 관절에서 가장 가까운 것**으로 표현한다. 팔은 직선
+            # 이동에서 J6 를 이어가므로 IK 가 +160 으로 준 목표에 팔은 -200 으로 도달한다
+            # (9/29 실기, 정확히 360도 차이). 그대로 두면 도착 검사가 "미도달" 로 막고,
+            # 뒤의 movej 는 손목을 한 바퀴 돌린다. 한계 검사도 이 표현으로 한다 —
+            # 그게 팔이 실제로 갈 각이다. 실제 출발각(start)은 환산하지 않는다
+            q[5] = _nearest_turn(q[5], previous[5])
             if abs(q[5]) > limit:
                 raise ValueError("J6 관절 제한 초과")
             if motion.get("j6_recovery_enabled", False):
@@ -896,9 +907,11 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
     def arrived(task, expected):
         actual, _ = read_posx()
         actual_joints = _read_peg_joints(motion)
+        # J6 는 360도 동등각이 같은 자세다 — 접어서 비교한다. 나머지는 그대로
         if (len(actual) != 6 or not all(math.isfinite(v) for v in actual)
                 or math.dist(actual[:3], task[:3]) > 2.0
-                or max(abs(a - b) for a, b in zip(actual_joints, expected)) > 1.0):
+                or max(abs(a - b) for a, b in zip(actual_joints[:5], expected[:5])) > 1.0
+                or abs(_nearest_turn(expected[5], actual_joints[5]) - actual_joints[5]) > 1.0):
             raise MotionError(
                 f"높이 이동: 목표 미도달 — 후속 이동 차단. 목표 TCP={task}, 실제 TCP={actual}, "
                 f"목표 관절={expected}, 실제 관절={actual_joints}")
@@ -911,6 +924,12 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
         _movel_base(raised, v, a)
     actual = arrived(raised, joints[0])
     for task, q in zip(poses[1:-1], joints[1:-1]):
+        # 직선 이동이 남긴 실제 J6 에 맞춰 다시 표현한다. 계획과 한 바퀴 어긋났으면
+        # 여기서 잡는다 — 안 잡으면 movej 가 손목을 360도 돌린다
+        q = list(q)
+        q[5] = _nearest_turn(q[5], actual[5])
+        if abs(q[5]) > limit:
+            raise MotionError(f"높이 이동: 실제 손목 기준 J6 {q[5]:+.1f}도가 한계 ±{limit:g}도 밖이다")
         _check_transfer_joints(actual, q)
         if max(abs(x - y) for x, y in zip(actual, q)) > .01:
             if confirm:
@@ -924,9 +943,50 @@ def _transfer_above_floor(target, motion, logger=None, confirm=None, execute=Tru
         arrived(target, joints[-1])
 
 
+_TURN_SEARCH_STEP_MM = 5.0   # 회전 높이 탐색 간격. 물리값이 아니라 탐색 해상도다
+
+
+def _turn_height(high, approach, sol, motion):
+    """오른쪽 페그의 파지 방향(손목 수평)으로 돌릴 높이 — 값이 아니라 IK 로 찾는다.
+
+    그 자세는 높이 올릴수록 J5 가 커진다 — 2번은 Z 108 에서 124도, 224 에서 133도,
+    299 에서 138.9도라 컨트롤러 한계 ±135 를 넘는다(9/29 실기, 알람 1207 과 같은 한계).
+    상단에서 5mm 씩 내려오며 실제 IK 의 J5 가 한계에서 `j5_turn_margin_deg` 만큼
+    안쪽인 첫 높이를 고른다. 접근점 높이까지 없으면 이동하지 않는다.
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    limit = float(motion.get("controller_j5_limit_deg", 135.0))
+    margin = float(motion.get("j5_turn_margin_deg", 5.0))
+    if not math.isfinite(margin) or not 0 <= margin < limit:
+        raise MotionError("피크→페그: J5 회전 여유는 0 이상 한계 미만이어야 한다")
+    z = float(high[2])
+    while True:
+        task = high[:2] + [z] + high[3:]
+        try:
+            q = [float(v) for v in api.ikin(posx(task), sol)]
+            if len(q) != 6 or not all(math.isfinite(v) for v in q):
+                raise ValueError("유한한 관절각 6개가 아니다")
+        except Exception as exc:
+            raise MotionError(f"피크→페그 회전 높이 IK 실패 (Z={z:.1f}mm): {exc}") from exc
+        if abs(q[4]) <= limit - margin:
+            return z
+        if z <= approach[2]:
+            raise MotionError(
+                f"피크→페그: 파지 방향으로 돌릴 높이가 없다 — 접근점 Z={approach[2]:.1f}mm "
+                f"까지 내려와도 J5={q[4]:+.1f}도, 허용 ±{limit - margin:g}도. 이동하지 않는다")
+        z = max(float(approach[2]), z - _TURN_SEARCH_STEP_MM)
+
+
 def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, execute=True,
                           high_only=False):
-    """상승 완료 후 높은 접근점까지 이동하고, 그 자리에서만 수직 하강한다."""
+    """상승 완료 후 높은 접근점까지 이동하고, 그 자리에서만 수직 하강한다.
+
+    오른쪽(2·1번)은 파지 방향을 상단에서 만들지 않는다 — 그 자세는 높을수록 J5 가
+    커져 상단(현재 Z+75)에서 ±135 를 넘는다. 손목을 아래로 향한 채 페그 위 상단까지
+    가고, 수직으로 내려와 `_turn_height` 가 찾은 높이에서 돌린 뒤 접근점까지 내려간다
+    (2026-09-29 사용자 결정). 왼쪽은 접힌 전환 프로파일의 검증된 높이 그대로다.
+    """
     api = _require_api()
     from DR_common2 import posx
     from . import kinematics as K
@@ -942,7 +1002,7 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     if not math.isfinite(back) or back <= 0:
         raise MotionError("피크→페그: 접근 거리는 유한한 양수여야 한다")
     approach = TP.backed_off(pose.task, back)
-    high = list(approach)  # 높은 이동 중 파지 방향을 만든다. 검사 실패 시 직행하지 않는다
+    high = list(approach)  # 파지 방향으로 서는 첫 지점. 검사 실패 시 직행하지 않는다
     extra = _orientation_lift(current, approach, motion)
     high[2] = max(current[2], floor + 2 * margin, approach[2]) + extra
     left_profile = motion.get("peg_transition_left") if side == "left" else None
@@ -952,6 +1012,13 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         high[2] = float(left_profile["high_tcp_z_mm"])
         if not math.isfinite(high[2]) or high[2] < max(floor + 2 * margin, approach[2]):
             raise MotionError("왼쪽 전환: 높은 접근점 Z 설정이 유효하지 않다")
+    # 오른쪽: 상단은 현재(손목 아래) 방향으로 가고, 회전은 J5 가 허용하는 높이에서 한다.
+    pivot = high[:3] + current[3:]
+    turn_low = None
+    if extra and left_profile is None:
+        high[2] = _turn_height(high, approach, pose.sol, motion)
+        if high[2] < pivot[2]:
+            turn_low = high[:3] + current[3:]
     try:
         goal = [float(v) for v in api.ikin(posx(high), pose.sol)]
         if len(goal) != 6 or not all(math.isfinite(v) for v in goal):
@@ -987,25 +1054,40 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         if route is None or route.joints[0] != 90.0:
             raise MotionError("피크→페그: J1=+90도 경유지가 필요하다")
         plan.append(route.resolve(start))
-    if extra and not compact:
-        # 거치대→페그도 역순으로 잇는다. 높은 페그 XY에 도착한 뒤 파지 방향을 만든다.
-        pivot = high[:3] + current[3:]
+    # 실행 단계: ("j", 관절각) 은 movej, ("l", TCP) 는 수직 직선 하강.
+    steps = [("j", q) for q in plan]
+
+    def _ik_checked(task, what):
         try:
-            pivot_joints = list(map(float, api.ikin(posx(pivot), pose.sol)))
-            _check_transfer_joints(start, pivot_joints)
-            error = math.dist(K.fk(pivot_joints)["tcp"], pivot[:3])
+            joints = list(map(float, api.ikin(posx(task), pose.sol)))
+            _check_transfer_joints(start, joints)
+            error = math.dist(K.fk(joints)["tcp"], task[:3])
             if not math.isfinite(error) or error > margin:
                 raise ValueError("IK/FK 위치 불일치")
         except Exception as exc:
-            raise MotionError(f"피크→페그 자세 변경 전 목표 검사 실패: {exc}") from exc
+            raise MotionError(f"피크→페그 {what} 목표 검사 실패: {exc}") from exc
+        return joints
+    if extra and not compact:
+        # 거치대→페그도 역순으로 잇는다. 높은 페그 XY에 도착한 뒤 파지 방향을 만든다.
+        pivot_joints = _ik_checked(pivot, "자세 변경 전")
         plan.append(pivot_joints)
+        steps.append(("j", pivot_joints))
+        if turn_low is not None:
+            # 손목은 그대로 두고 회전 높이까지 수직 하강. 관절 검사는 하고 실행은 직선이다.
+            turn_joints = _ik_checked(turn_low, "회전 높이 하강")
+            plan.append(turn_joints)
+            steps.append(("l", turn_low))
     plan.append(goal)
+    steps.append(("j", goal))
     # 높이는 경유점 생성 기준이다. 실제 관절각/J1 제한은 전 구간 검사한다.
     previous = start
     j6, _ = _peg_joint_limits(motion)
     if logger:
         logger.info(f"경로 진단: 현재 TCP={current}, 현재 관절={start}")
         logger.info(f"경로 진단: 높은 목표 TCP={high}, sol={pose.sol}, IK 관절={goal}")
+        if turn_low is not None:
+            logger.info(f"경로 진단: 상단 Z={pivot[2]:.1f}mm 는 손목 아래 방향, "
+                        f"Z={high[2]:.1f}mm 로 내려와 파지 방향으로 회전")
         logger.info(f"경로 진단: J6 허용 ±{j6:g}도")
     for target in plan:
         _check_transfer_j5(target, motion)
@@ -1019,11 +1101,22 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
         previous = target
     if logger:
         logger.info(f"피크→페그: J1/목표 관절 검사 통과, "
-                    f"상단 Z={high[2]:.1f}mm → 접근점에서만 Z={approach[2]:.1f}mm로 하강")
+                    f"상단 Z={pivot[2]:.1f}mm → 접근점에서만 Z={approach[2]:.1f}mm로 하강")
     if not execute:
         return {"current_tcp": current, "current_joints": start, "high_tcp": high,
+                "pivot_tcp": pivot, "turn_low_tcp": turn_low,
                 "approach_tcp": approach, "lower_tcp": lower, "joint_plan": plan}
-    for target in plan:
+    vel, acc = _transit_speed(motion)
+    for kind, target in steps:
+        if kind == "l":
+            if confirm:
+                confirm(f"손목 방향 유지, 회전 높이 Z={target[2]:.1f}mm로 수직 하강")
+            _movel_base(target, vel, acc)
+            actual, _ = read_posx()
+            if (len(actual) != 6 or not all(math.isfinite(x) for x in actual)
+                    or math.dist(actual[:3], target[:3]) > 2.0):
+                raise MotionError("피크→페그: 회전 높이 미도달, 자세 변경 금지")
+            continue
         if confirm:
             confirm(f"높은 경로 관절 이동: {[round(v, 2) for v in target]}")
         # 직전 실행의 실제 관절각으로 재검사. 실패해도 직행으로 폴백하지 않는다.
@@ -1039,15 +1132,14 @@ def _pick_to_peg_approach(pose, side, route, motion, logger=None, confirm=None, 
     actual, _ = read_posx()
     if len(actual) != 6 or not all(math.isfinite(v) for v in actual):
         raise MotionError("피크→페그: 하강 전 TCP 읽기 실패")
-    if actual[2] < floor or math.dist(actual[:3], high[:3]) > 2.0:
+    if math.dist(actual[:3], high[:3]) > 2.0:
         raise MotionError("피크→페그: 높은 접근점 미도달, 하강 금지")
     if high_only:
         return
     if confirm:
         confirm(f"페그 앞 XY={approach[:2]}에서 Z={approach[2]:.1f}mm로 수직 하강")
-    # 이미 높은 이동에서 파지 방향을 맞췄으므로 그 자세로 수직 하강한다.
-    v, a = _transit_speed(motion)
-    _movel_base(lower, v, a)
+    # 이미 파지 방향을 맞췄으므로 그 자세로 수직 하강한다.
+    _movel_base(lower, vel, acc)
     actual, _ = read_posx()
     if (len(actual) != 6 or not all(math.isfinite(x) for x in actual)
             or math.dist(actual[:3], lower[:3]) > 2.0):
