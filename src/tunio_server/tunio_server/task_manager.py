@@ -87,6 +87,22 @@ class Cancelled(Exception):
     """작업 취소. 단계 경계에서 던져 상태기계를 빠져나온다."""
 
 
+class Paused(Exception):
+    """
+    일시정지로 진행 중인 로봇 동작을 세웠다 (2026-09-29 사용자 결정).
+
+    로봇 쪽은 취소와 같은 경로다 — Soft Stop 후 스스로 복구해 홈으로 간다.
+    서버는 PAUSED 로 기다렸다가 재개되면 **그 줄을 처음부터** 다시 한다. 멈춘 자리에서
+    이어 가는 방식(#106 비동기 이동)은 9/29 실기에서 "목표 미도달" 로 막혀 쓰지 않는다.
+    what — 세운 Action 이름. adjust_peg/register_peg 였으면 재개 전에 그 줄을 강제
+    재등록한다 (손잡이가 반쯤 돌아간 채라 등록각이 틀렸을 수 있다 — CLAUDE.md 5절).
+    """
+
+    def __init__(self, what=''):
+        super().__init__(what)
+        self.what = what
+
+
 class Aborted(Exception):
     """더 진행할 수 없는 오류. PHASE_ERROR 로 끝낸다."""
 
@@ -388,8 +404,10 @@ class TaskManager(Node):
             res.message = '진행 중인 작업이 없다'
             return res
         self._pause.set()
+        # 취소와 같은 경로로 로봇을 즉시 세운다. 로봇은 스스로 복구해 홈으로 간다
+        self._request_goal_cancel()
         res.accepted = True
-        res.message = '일시정지 요청. 현재 단계를 마치고 멈춘다'
+        res.message = '일시정지 — 로봇을 그 자리에서 세운다(접촉이면 살짝 든다). 재개하면 이 줄을 처음부터'
         return res
 
     def on_resume(self, req, res):
@@ -501,8 +519,8 @@ class TaskManager(Node):
             raise Aborted('%s goal 거부 — 후속 동작 중단' % what)
         self._track(handle)
         try:
-            # 수락 응답을 기다리는 사이 취소가 들어온 경우도 전달한다.
-            if self._cancel.is_set():
+            # 수락 응답을 기다리는 사이 취소·일시정지가 들어온 경우도 전달한다.
+            if self._cancel.is_set() or self._pause.is_set():
                 handle.cancel_goal_async()
             future = handle.get_result_async()
             wrapped = self._wait(future, timeout, '%s 결과' % what)
@@ -516,8 +534,11 @@ class TaskManager(Node):
                     raise Aborted('%s 동작 종료 불명 — 후속 동작 중단' % what)
         finally:
             self._untrack(handle)
-        if self._cancel.is_set() and wrapped.status == GoalStatus.STATUS_CANCELED:
-            raise Cancelled()
+        if wrapped.status == GoalStatus.STATUS_CANCELED:
+            if self._cancel.is_set():
+                raise Cancelled()
+            if self._pause.is_set():
+                raise Paused(what)
         if wrapped.status != GoalStatus.STATUS_SUCCEEDED or not wrapped.result.success:
             raise Aborted('%s 실패(status=%s): %s — 후속 동작 중단'
                           % (what, wrapped.status, wrapped.result.message))
@@ -533,9 +554,9 @@ class TaskManager(Node):
         """
         일시정지·취소를 확인한다. 단계 경계에서만 부른다.
 
-        브리핑 B4-1: 진행 중인 Action 을 중간에 끊지 않고, 끝난 뒤 다음 단계로
-        넘어가기 전에 멈춘다. 로봇에 '정지·파지 유지'를 지시할 인터페이스가 없고
-        robot_controller 가 취소를 받지 않아서, 중간에 끊으면 로봇만 계속 움직인다.
+        브리핑 B4-1 의 '단계 경계 일시정지' 다. 2026-09-29 부터 on_pause 가 진행 중인
+        로봇 goal 에 취소도 걸어서, 동작 중이면 로봇이 즉시 서고(복구·홈) _run_action 이
+        Paused 를 던진다. 여기는 그 뒤(또는 동작이 없을 때) 실제로 멈춰 기다리는 자리다.
         """
         if self._cancel.is_set():
             raise Cancelled()
@@ -615,12 +636,19 @@ class TaskManager(Node):
             if self._cancel.is_set():
                 handle.cancel_goal_async()
                 raise Cancelled()
+            if self._pause.is_set():
+                handle.cancel_goal_async()
+                raise Paused('measure_pitch')
 
             # 발현. 마이크가 준비된 뒤에만 튕긴다 (명세 5.2)
             self._set_phase(TuningState.PHASE_PLUCK, string_number)
-            play = self._run_action(self.cli_play, PlayString.Goal(
-                string_number=string_number, preparation_id=prepared.preparation_id),
-                                    float(self._p('play_timeout_sec')), 'play_string')
+            try:
+                play = self._run_action(self.cli_play, PlayString.Goal(
+                    string_number=string_number, preparation_id=prepared.preparation_id),
+                                        float(self._p('play_timeout_sec')), 'play_string')
+            except Paused:
+                handle.cancel_goal_async()   # 발현이 섰으면 그 소리를 재면 안 된다
+                raise
             play_ok = play is not None and play.success
             if not play_ok:
                 why = play.message if play is not None else '응답 없음'
@@ -862,14 +890,25 @@ class TaskManager(Node):
 
     def _register_pegs(self, numbers=None, force=False):
         numbers = tuple(L.STRING_ORDER if numbers is None else numbers)
-        self._registered_pegs = set()
+        if len(numbers) == len(L.STRING_ORDER):
+            self._registered_pegs = set()
         for no in numbers:
-            self._gate()
-            self._set_phase(TuningState.PHASE_REGISTER_PEG, no)
-            self.get_logger().info('%d번 페그 각 등록 요청 — 완료 전 발현하지 않는다' % no)
-            result = self._run_action(
-                self.cli_register, RegisterPeg.Goal(string_number=no, force=force),
-                float(self._p('register_timeout_sec')), 'register_peg')
+            f = force
+            while True:
+                self._gate()
+                self._set_phase(TuningState.PHASE_REGISTER_PEG, no)
+                self.get_logger().info('%d번 페그 각 등록 요청 — 완료 전 발현하지 않는다' % no)
+                try:
+                    result = self._run_action(
+                        self.cli_register, RegisterPeg.Goal(string_number=no, force=f),
+                        float(self._p('register_timeout_sec')), 'register_peg')
+                    break
+                except Paused:
+                    # 잡다 말았으니 그 줄은 처음부터, 그리고 이전 각도를 믿지 않고 강제로
+                    self.get_logger().warning(
+                        '%d번 페그 등록 중 일시정지 — 로봇이 그 자리에서 선다. 재개하면 이 줄부터 다시' % no)
+                    self._gate()
+                    f = True
             if result is None or not result.success:
                 why = result.message if result is not None else '응답 없음'
                 raise Aborted(f'{no}번 페그 초기 등록 실패: {why}')
@@ -888,6 +927,7 @@ class TaskManager(Node):
             self._set_phase(TuningState.PHASE_IDLE, 0)
             self.get_logger().info('페그 재등록·복귀 완료')
         except Cancelled:
+            self._home_after_stop()
             self._set_phase(TuningState.PHASE_CANCELED, 0)
         except Exception as exc:                          # noqa: BLE001
             self.error_message = str(exc)
@@ -900,16 +940,31 @@ class TaskManager(Node):
             self.get_logger().info('기존 페그 등록값으로 조율 시작 — 자동 등록 없음')
             hold = float(self._p('string_done_hold_sec'))
             for s in L.STRING_ORDER:                      # Phase 1
-                self._gate()
-                self._tune_string(s)
+                while True:
+                    self._gate()
+                    try:
+                        self._tune_string(s)
+                        break
+                    except Paused as p:
+                        self._hold_after_pause(s, p.what)
                 # 판정 결과를 화면이 보여 줄 여유. 기본 0 이라 실제 동작에는 영향이 없다.
                 if hold > 0:
                     self._sleep_gated(hold)
 
-            self._verify_pass()                           # Phase 2
+            while True:                                   # Phase 2
+                try:
+                    self._verify_pass()
+                    break
+                except Paused as p:
+                    self._hold_after_pause(0, p.what)     # 검증은 측정만이라 통째로 다시
             # #84: 화음은 미구현이라 실행 제외. 구현·실기 검증 후 아래 호출 복구.
             # self._strum()
-            self._return_home()
+            while True:
+                try:
+                    self._return_home()
+                    break
+                except Paused as p:
+                    self._hold_after_pause(0, p.what)
 
             self._set_phase(TuningState.PHASE_DONE, 0)
             self._save()
@@ -924,6 +979,24 @@ class TaskManager(Node):
             self.error_message = str(exc) or type(exc).__name__
             self.get_logger().error('예상치 못한 오류로 중단: %r' % exc)
             self._finish_error()
+
+    def _hold_after_pause(self, string_number, what):
+        """
+        일시정지로 로봇을 세운 뒤 PAUSED 로 기다린다.
+
+        재개되면 호출자가 그 단계를 처음부터 다시 돈다. 취소면 _gate 가 Cancelled 를
+        던진다. adjust_peg / register_peg 를 세웠으면 그 줄을 강제 재등록한다 — 손잡이를 물고
+        돌리다 멈춰서 등록각이 실제와 어긋났을 수 있고, 그대로 물면 물리면서 페그를
+        교시 각으로 되돌려 버린다(조용히 틀린다, CLAUDE.md 5절). 발현 쪽(prepare_pluck ·
+        play_string · measure_pitch)은 페그를 안 건드려 재등록이 필요 없다.
+        """
+        where = ('%d번 줄 ' % string_number) if string_number else ''
+        self.get_logger().warning(
+            '%s%s 중 일시정지 — 로봇이 그 자리에서 선다. 재개하면 처음부터 다시' % (where, what))
+        self._gate()
+        if what in ('adjust_peg', 'register_peg') and string_number:
+            self.get_logger().info('%d번 페그를 물고 있다 멈췄다 — 강제 재등록 후 재개' % string_number)
+            self._register_pegs([string_number], force=True)
 
     def _finish_cancelled(self):
         """취소 종료. DB 에 저장하지 않고 자동 복귀도 하지 않는다 (기획 2.7)."""
@@ -950,8 +1023,32 @@ class TaskManager(Node):
             if rec.result == StringResult.RESULT_PENDING:
                 rec.result = StringResult.RESULT_FAILED
                 rec.failure_reason = StringResult.FAIL_CANCELED
+        self._home_after_stop()
         self._set_phase(TuningState.PHASE_CANCELED, 0)
         self.get_logger().info('작업 취소. 저장하지 않는다')
+
+    def _home_after_stop(self):
+        """
+        취소로 로봇을 세운 뒤 홈으로 보낸다 (2026-09-29 사용자 결정).
+
+        로봇은 정지·접촉 풀기·상승까지만 하고 그 자리에서 기다린다 — 일시정지는 거기서
+        재개하므로 로봇이 홈에 가면 안 되고, 취소만 서버가 ReturnHome 으로 보낸다.
+        ReturnHome 은 피크를 쥐고 있으면 거치대에 반환하고 대기 자세로 간다.
+
+        _cancel 을 여기서 내린다. 작업은 이미 끝났고 이 goal 만은 취소 대상이 아니다.
+        보내는 중에 또 취소를 누르면 그 goal 이 세워지고(로봇은 다시 그 자리 대기)
+        여기서 사유만 남기고 CANCELED 로 끝낸다 — 다시 홈을 시도하지 않는다.
+        """
+        self._cancel.clear()
+        self._pause.clear()
+        try:
+            self._return_home()
+        except (Cancelled, Aborted) as exc:
+            self.error_message = '취소 후 복귀 실패: %s' % (exc or '사용자가 복귀도 취소')
+            self.get_logger().error(self.error_message)
+        except Exception as exc:                          # noqa: BLE001
+            self.error_message = '취소 후 복귀 실패: %r' % exc
+            self.get_logger().error(self.error_message)
 
     def _finish_error(self):
         self._set_phase(TuningState.PHASE_ERROR, 0)

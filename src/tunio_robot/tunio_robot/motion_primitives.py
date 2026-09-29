@@ -47,6 +47,10 @@ _gripper = None
 _j6_motion = None       # 실제 노드가 감시 설정을 연결한다. 단독 도구는 기존 경로 유지
 _j6_sample = None       # (수신 monotonic 시각, J6). joint_states 콜백만 갱신
 _cancel_check = None  # robot_controller의 현재 Action 취소 검사
+# pick_up 이 실제로 집은 뒤 True, _release() 로 연 뒤 False. 노드의 _holding_pick 이
+# 집기·반환 '도중' 엔 None(모름)인데, 그 사이 취소가 오면 복구가 이걸로 판단한다
+# (2026-09-29). 폭 읽기(#88)가 붙으면 그쪽이 더 확실하고 이건 그때까지의 기록이다.
+_pick_gripped = False
 _robot_cfg = None       # connect() 가 받은 robot 절. ensure_tcp 가 기본값으로 쓴다
 
 
@@ -900,8 +904,10 @@ def _grip(preset_name):
 
 
 def _release():
-    """그리퍼를 연다."""
-    return _grip("open")
+    """그리퍼를 연다. 열었으니 쥔 것은 없다 — 취소 복구가 보는 플래그도 내린다."""
+    ret = _grip("open")
+    globals()['_pick_gripped'] = False
+    return ret
 
 
 def pluck_string(pose, motion, standby=None, *, prepare_only=False, prepared=False):
@@ -1212,6 +1218,7 @@ def pick_up(holder, motion, standby=None, via=None, sol=None, route=None,
         _movejx(above, motion, sol=sol)                 # 거치대 위 (팔 모양을 정해서)
     _movel_base(contact, v_fine, a_fine)                # 내려가서
     _grip(preset)                                       # 집는다
+    globals()['_pick_gripped'] = True                   # 이 순간부터 쥐고 있다 (취소 복구가 본다)
     time.sleep(settle_sec)                              # 그리퍼가 물리적으로 다 닫히기를 기다린다
     _movel_base(above, v_app, a_app)                    # 들어 올린다
     _recover_j6(motion)
@@ -1936,3 +1943,50 @@ def return_home(pose, motion):
     """
     _require_api()
     _movej(pose.joints, motion)
+
+
+def cancel_recover_lift(motion, lift_mm, logger=None, max_z_mm=600.0):
+    """
+    취소·일시정지 뒤 복구의 첫 동작 — 지금 자리에서 Base +Z 로 lift_mm 만큼 곧게 올라간다.
+
+    페그도 줄도 **위에서 내려가** 접근한다(2026-09-23 페그 높은 접근점·발현 접촉점 위
+    2cm). 그 역방향인 수직 상승이 접촉을 푸는 가장 짧은 길이고, 옆으로 빠지는 것보다
+    이웃 페그·줄을 칠 여지가 적다. 어디서 멈췄는지 모르는 상태라 교시점으로 바로
+    movej 하지 않는다 — 기타를 가로지를 수 있다.
+
+    **상대 이동(mod=REL, ref=BASE)으로 보낸다.** 절대 목표로 주면 _movel_base 의 J6
+    보호 검사가 목표 자세의 IK 를 풀어 다른 가지(예: 371도)를 골라 거부한다 —
+    2026-09-29 실기에서 경유 자세(Z 1153) 도중 일시정지가 그렇게 잠겼다. 30mm 수직
+    이동은 지금 관절에서 이어지는 것이라 J6 를 더 감지 않는다.
+
+    **이미 높이 있으면 생략한다** (Z >= max_z_mm). 접촉은 페그·줄·거치대 높이(Z 100~400)
+    에서만 생기고, 경유 자세(Z 1000 이상)는 아무것도 안 닿은 채 팔이 거의 다 펴진 곳이라
+    더 올릴 수도 없고 올릴 이유도 없다.
+
+    속도는 비접촉 이동 값(_transit_speed). 반환은 _moved 로 본다 (#50).
+    lift_mm · max_z_mm 는 robot_controller 의 cancel_lift_mm · cancel_lift_max_z_mm
+    (실측 전 임시값).
+    """
+    api = _require_api()
+    from DR_common2 import posx
+    now = api.get_current_posx()
+    if isinstance(now, (list, tuple)) and now and isinstance(now[0], (list, tuple)):
+        now = now[0]                       # (posx, sol) 로 주는 판이 있다
+    if not isinstance(now, (list, tuple)) or len(now) < 3:
+        raise MotionError("현재 TCP 자세를 못 읽어 정지 복구 상승을 할 수 없다")
+    z = float(now[2])
+    if float(lift_mm) <= 0:
+        if logger is not None:
+            logger.info("정지 복구 — cancel_lift_mm 이 0 이라 상승 생략")
+        return 0
+    if z >= float(max_z_mm):
+        if logger is not None:
+            logger.info(f"정지 복구 — 이미 높다 (Z {z:.1f} >= {float(max_z_mm):.0f}), 상승 생략")
+        return 0
+    vel, acc = _transit_speed(motion)
+    if logger is not None:
+        logger.info(f"정지 복구 — Base +Z {float(lift_mm):.0f}mm 상승 "
+                    f"(Z {z:.1f} → {z + float(lift_mm):.1f}, 상대 이동)")
+    return _moved(api.movel(posx([0.0, 0.0, float(lift_mm), 0.0, 0.0, 0.0]),
+                            vel=vel, acc=acc, ref=api.DR_BASE, mod=api.DR_MV_MOD_REL),
+                  "cancel_recover_lift")

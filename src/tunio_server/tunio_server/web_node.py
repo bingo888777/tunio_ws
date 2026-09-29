@@ -32,10 +32,12 @@ from pathlib import Path
 import queue
 import re
 import threading
+import time
 from urllib.parse import parse_qs, urlparse
 import webbrowser
 
 from ament_index_python.packages import get_package_share_directory
+from rcl_interfaces.srv import GetParameters
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -45,6 +47,9 @@ from rclpy.qos import (QoSDurabilityPolicy, QoSHistoryPolicy,
 
 from tunio_interfaces.msg import TuningSettings, TuningState
 from tunio_interfaces.srv import CommandTuning, GetHistory, GetSettings, SetSettings
+
+from tunio_server import peg_calibration as PC
+from tunio_server import tuning_logic as L
 
 # 명세 5절: task_manager 쪽 발행 QoS 와 값이 같아야 매칭된다.
 STATE_QOS = QoSProfile(
@@ -102,7 +107,8 @@ DEFAULT_SETTINGS = {
 SETTING_FIELDS = tuple(DEFAULT_SETTINGS)
 
 # 내보낼 정적 파일. 하위 디렉터리와 '..' 를 허용하지 않는다.
-STATIC_RE = re.compile(r'^/[\w.-]+\.(?:css|js|svg|png|webp)$')
+# woff 는 관제 화면 글꼴(Jua·고운돋움, OFL). 시연장에 인터넷이 없어 CDN 대신 파일로 둔다
+STATIC_RE = re.compile(r'^/[\w.-]+\.(?:css|js|svg|png|webp|woff)$')
 
 
 def _stamp_to_float(stamp):
@@ -186,10 +192,70 @@ class WebNode(Node):
         self._latest_state = None    # 브라우저 최초 접속 시 내려줄 최신 상태
         self._sse_queues = []        # SSE 연결마다 큐 하나
 
+        # 화면의 '예상 페그 회전' 을 계산할 캘리브레이션. task_manager 가 실제로 읽은 파일을
+        # 그대로 쓰려고 경로를 task_manager 의 파라미터에서 받아 온다 — 런치마다 경로를
+        # 따로 넘기면 sim(지어낸 값)과 실측 파일이 어긋나 화면과 로봇이 다른 각도를 말한다.
+        # 못 받으면 표시만 빠진다. 조율 동작에는 영향이 없다.
+        self._cal = None
+        self._cal_note = '캘리브레이션을 아직 읽지 못했다'
+        self._cal_asked = 0.0
+        self.cli_tm_params = self.create_client(
+            GetParameters, '/task_manager/get_parameters', callback_group=cb)
+
     # ------------------------------------------------------------------ ROS 쪽
+
+    # ------------------------------------------------------------------ 예상 페그 회전
+
+    def _request_calibration(self):
+        """task_manager 의 peg_calibration_file 을 물어 같은 파일을 읽는다. 10초에 한 번만 시도."""
+        now = time.monotonic()
+        if self._cal is not None or now - self._cal_asked < 10.0:
+            return
+        self._cal_asked = now
+        if not self.cli_tm_params.service_is_ready():
+            self._cal_note = 'task_manager 파라미터 서비스 미연결'
+            return
+        req = GetParameters.Request(names=['peg_calibration_file'])
+        self.cli_tm_params.call_async(req).add_done_callback(self._on_calibration_path)
+
+    def _on_calibration_path(self, future):
+        try:
+            path = future.result().values[0].string_value
+            self._cal = PC.load(path)
+            self._cal_note = self._cal.missing_reason()
+            self.get_logger().info('예상 페그 회전 표시용 캘리브레이션: %s' % path)
+        except Exception as exc:                          # noqa: BLE001
+            self._cal = None
+            self._cal_note = '캘리브레이션을 읽지 못했다: %s' % exc
+
+    def adjust_hint(self, msg):
+        """지금 측정값으로 task_manager 가 돌릴 페그 각도를 미리 계산한다.
+
+        계산은 task_manager 와 같은 tuning_logic.adjust_plan 이다. 여기서 따로 공식을
+        두지 않는다 — 화면 숫자와 로봇이 실제로 돌리는 각도가 어긋나지 않게.
+        허용 범위 안이거나 측정값이 없으면 None.
+        """
+        n = msg.current_string
+        if not n or not msg.measurement_valid or msg.target_hz <= 0 or msg.measured_hz <= 0:
+            return None
+        err = L.error_cents(msg.measured_hz, msg.target_hz)
+        tol = msg.active_settings.tolerance_cents
+        if tol > 0 and abs(err) <= tol:
+            return None
+        if self._cal is None:
+            return {'error_cents': err, 'steps': [], 'note': self._cal_note}
+        try:
+            plan = L.adjust_plan(err, self._cal.get(n))
+        except PC.CalibrationMissing as exc:
+            return {'error_cents': err, 'steps': [], 'note': str(exc)}
+        steps = [{'direction': int(d), 'label': '조임' if d > 0 else '풀기',
+                  'deg': float(a), 'turns': float(a) / 360.0} for d, a in plan]
+        return {'error_cents': err, 'steps': steps, 'note': ''}
 
     def _on_state(self, msg):
         data = _state_to_dict(msg)
+        self._request_calibration()
+        data['adjust_hint'] = self.adjust_hint(msg)
         with self._state_lock:
             self._latest_state = data
             targets = list(self._sse_queues)
@@ -315,7 +381,8 @@ class Handler(BaseHTTPRequestHandler):
                  '.js': 'application/javascript; charset=utf-8',
                  '.svg': 'image/svg+xml; charset=utf-8',
                  '.png': 'image/png',
-                 '.webp': 'image/webp'}
+                 '.webp': 'image/webp',
+                 '.woff': 'font/woff'}
         path = (self.web_dir / name).resolve()
         if self.web_dir not in path.parents or not path.is_file():
             self._error(404, '%s 없음' % name)
