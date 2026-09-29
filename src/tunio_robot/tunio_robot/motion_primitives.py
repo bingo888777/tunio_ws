@@ -2583,11 +2583,16 @@ def _wipe_stroke(end_task, motion, logger=None):
     press_target = list(cur)
     press_target[2] -= press_depth_mm             # 실제 표면보다 깊은 목표 — 힘이 먼저 멈춰 세운다(가설)
 
+    # 동기 이동은 힘 제어를 걸기 **전에** 순수 위치 제어로 끝낸다. 힘 제어가
+    # 켜진 채로 블로킹 이동을 걸면, 그 구간 안에서 먼저 접촉해 순응이 막을 때
+    # 목표 도달 신호가 안 와서 movel 이 영영 안 끝날 수 있다(2026-09-29 실기 —
+    # wipe_check 가 여기서 멈췄다). 접촉은 애초에 비동기 구간에서만 기대한다.
+    if logger:
+        logger.info(f"넥 접근 — 먼저 위치 제어로만 {sync_depth_mm:.0f}mm 내려간다(힘 제어 걸기 전)")
+    _movel_base(sync_target, v_wipe, a_wipe)
+
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     try:
-        if logger:
-            logger.info(f"넥 접근 — 먼저 동기로 {sync_depth_mm:.0f}mm 내려간다")
-        _movel_base(sync_target, v_wipe, a_wipe)
         if logger:
             logger.info(f"넥 접촉 대기(최대 {settle_sec:.0f}초) — Base -Z {press_n:.1f}N 목표, "
                         f"나머지 {press_depth_mm - sync_depth_mm:.0f}mm 비동기 이동. "
