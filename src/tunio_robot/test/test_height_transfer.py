@@ -238,4 +238,6 @@ def test_실기도구가_실제_집기발현함수로_홈없이_한번_발현한
     assert all((v, a) == (motion['pluck_vel_stroke'], motion['pluck_acc_stroke'])
                for _, v, a in strokes)
     assert scene.tcp[:3] == points.pluck(6).task[:2] + [224]
+    # 높이 경유로 하강 거리가 늘어도 최종 접촉 좌표는 교시점 그대로다.
+    assert ('movel', points.pluck(6).task) in scene.calls
     assert result['pick_state'] == 'held_assumed'
