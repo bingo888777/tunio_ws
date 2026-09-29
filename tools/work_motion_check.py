@@ -14,8 +14,23 @@ from pick_to_peg_check import confirm  # noqa: E402
 
 
 def run(points, scene, peg, motion, *, execute=False, high_only=False, ask=confirm):
-    """실제 현재값·공식 IK를 사용하는 공통 경로. 그리퍼/파지/회전 명령은 보내지 않는다."""
+    """공통 실기 경로. pick-pluck만 실제 집기와 1회 발현을 수행한다."""
     MP.ensure_tcp()
+    if scene == 'pick-pluck':
+        holder, pluck = points.pick_holder(), points.pluck(peg)
+        if not execute:
+            return {'scene': scene, 'holder_approach': run(
+                points, 'holder', peg, motion, execute=False),
+                'sequence': ['피크 집기', '홈 없이 발현 상단으로 이동', '1회 발현 후 상승'],
+                'note': '조회는 거치대 상단 경로까지. 집기 후 실제 자세로 발현 경로를 계획합니다.'}
+        ask('피크 집기: 거치대 상단 이동 → 그리퍼 열기 → 하강 → 닫기 → 상승')
+        MP.pick_up(holder, motion, height_transfer=True)
+        ask('피크가 들린 상태를 확인. 고정 홈 없이 발현 상단으로 이동')
+        MP.pluck_string(pluck, motion, height_transfer=True, prepare_only=True)
+        ask(f'{peg}번 줄 1회 발현: 하강 → 스트로크·즉시 후퇴 → 발현 상단으로 상승')
+        MP.pluck_string(pluck, motion, height_transfer=True, prepared=True)
+        return {'pick_state': 'held_assumed', 'plucks_commanded': 1,
+                'home_commanded': False, 'pick_returned': False}
     if scene == 'transition':
         if MP._peg_route_required(MP._current_j1(), 'right', motion):
             raise MP.MotionError('전환 시험은 오른쪽 작업 자세(J1 -60~80도)에서 시작하세요. '
@@ -35,7 +50,7 @@ def run(points, scene, peg, motion, *, execute=False, high_only=False, ask=confi
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument('--scene', choices=['transition', 'holder', 'pluck'], default='transition')
+    ap.add_argument('--scene', choices=['transition', 'holder', 'pluck', 'pick-pluck'], default='transition')
     ap.add_argument('--peg', type=int, choices=[6, 5, 2, 1], default=6)
     ap.add_argument('--high-only', action='store_true', help='전환을 높은 접근점까지만 실행')
     ap.add_argument('--yaml', default=str(ROOT/'src/tunio_robot/config/teach_points.yaml'))
@@ -54,8 +69,13 @@ def main(argv=None):
     points = TP.load(args.yaml)
     motion = dict(points.motion, speed_scale=args.speed_scale)
     print(f'실기 도구: {args.scene}, {args.peg}번, speed_scale={args.speed_scale:g}')
-    print('현재 자세에서 시작. 그리퍼 열기/집기/발현/페그 회전/자동 복귀 없음.')
-    print('6·5번 마지막 하강은 RG2/TCP가 설정 박스와 겹칩니다. 사용자 확인에 따라 유지합니다.')
+    if args.scene == 'pick-pluck':
+        print('실제 피크 집기 → 홈 없이 발현 준비 → 1회 발현. 피크를 든 채 상단에서 종료합니다.')
+        print('집기 성공 자동 판정 없음. 놓치면 되찾을 수 없으므로 단계 확인에서 중단하세요.')
+        print('시작은 빈손, 피크는 거치대에 있어야 합니다. 자동 반환·홈 복귀·음정 측정 없음.')
+    else:
+        print('현재 자세에서 시작. 그리퍼 열기/집기/발현/페그 회전/자동 복귀 없음.')
+    print('기존 낮은 접근·이탈 구간은 RG2/TCP가 설정 박스와 겹칩니다. 실시간 충돌 검사는 없습니다.')
     print('Ctrl+C는 후속 명령 차단 및 Soft Stop 요청입니다. 즉시 정지는 펜던트 비상정지를 사용하세요.')
     if not (args.execute or args.check_only):
         print('로봇에 연결하지 않았습니다. 조회는 --check-only, 이동은 --execute.')
@@ -109,12 +129,17 @@ def main(argv=None):
                 RL.write(path, log)
                 print(f'현재 관절: {q}\n현재 TCP: {list(tcp)}')
                 confirm(message)
-            run(points, args.scene, args.peg, motion, execute=True,
-                high_only=args.high_only, ask=step)
+            result = run(points, args.scene, args.peg, motion, execute=True,
+                         high_only=args.high_only, ask=step)
+            if result is not None:
+                log['result'] = result
             log['final_joints'] = MP._read_peg_joints(motion)
             log['final_tcp'] = list(MP.read_posx()[0])
         log['success'] = True
-        print('완료. 현재 위치에서 종료합니다.' if args.execute else '조회 완료. 이동 명령 없음.')
+        if args.execute and args.scene == 'pick-pluck':
+            print('1회 발현 명령 완료. 피크를 든 것으로 가정하고 발현 상단에서 종료합니다. 자동 반환 없음.')
+        else:
+            print('완료. 현재 위치에서 종료합니다.' if args.execute else '조회 완료. 이동 명령 없음.')
         return 0
     except (Exception, KeyboardInterrupt) as exc:
         log['error'] = str(exc) or 'KeyboardInterrupt'

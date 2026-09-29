@@ -47,6 +47,7 @@ def scene(monkeypatch):
     monkeypatch.setitem(sys.modules, 'DR_common2', SimpleNamespace(posx=list))
     monkeypatch.setattr(MP, '_api', SimpleNamespace(
         DR_BASE=0, ikin=ikin, get_current_posj=lambda: list(sim.joints),
+        get_current_solution_space=lambda: sim.sol,
         get_current_posx=lambda *a: (list(sim.tcp), sim.sol)))
     monkeypatch.setattr(MP, '_cancel_check', None)
     monkeypatch.setattr(MP, '_j6_motion', None)
@@ -211,3 +212,30 @@ def test_자세변경_높이_NaN은_이동전에_거부한다(scene, key):
     with pytest.raises(MP.MotionError, match='유한한 양수'):
         MP._transfer_above_floor([600, 0, 224, 0, 180, 0], {key: float('nan')})
     assert not scene.calls
+
+
+def test_실기도구가_실제_집기발현함수로_홈없이_한번_발현한다(scene, monkeypatch):
+    from pathlib import Path
+    from tunio_robot import teach_points as TP
+    root = Path(__file__).resolve().parents[3]
+    monkeypatch.syspath_prepend(str(root/'tools'))
+    import work_motion_check as tool
+    points = TP.load(root/'src/tunio_robot/config/teach_points.yaml')
+    motion = dict(points.motion, pick_settle_sec=0, speed_scale=1.0)
+    grips, strokes, questions = [], [], []
+    monkeypatch.setattr(MP._gripper, 'select', grips.append)
+    monkeypatch.setattr(MP, '_movel_tool_rel',
+                        lambda task, v, a, **k: strokes.append((task, v, a)))
+
+    def no_home(*args, **kwargs):
+        raise AssertionError('집기·발현 중 홈을 호출하면 안 된다')
+    monkeypatch.setattr(MP, '_goto_standby', no_home)
+    monkeypatch.setattr(MP, 'return_home', no_home)
+    result = tool.run(points, 'pick-pluck', 6, motion, execute=True, ask=questions.append)
+    assert grips == ['open', 'close']
+    assert len(questions) == 3
+    assert len(strokes) == 2  # 스트로크 한 번 + 즉시 후퇴 한 번
+    assert all((v, a) == (motion['pluck_vel_stroke'], motion['pluck_acc_stroke'])
+               for _, v, a in strokes)
+    assert scene.tcp[:3] == points.pluck(6).task[:2] + [224]
+    assert result['pick_state'] == 'held_assumed'

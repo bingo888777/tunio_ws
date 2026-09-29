@@ -17,11 +17,12 @@ def tool(monkeypatch):
     return module
 
 
-def test_실기옵션_없으면_연결도_하지_않는다(tool, monkeypatch):
+@pytest.mark.parametrize('args', [[], ['--scene', 'pick-pluck']])
+def test_실기옵션_없으면_연결도_하지_않는다(tool, monkeypatch, args):
     def forbidden(*args, **kwargs):
         raise AssertionError('로봇에 연결하면 안 된다')
     monkeypatch.setattr(MP, 'connect', forbidden)
-    assert tool.main([]) == 0
+    assert tool.main(args) == 0
 
 
 @pytest.mark.parametrize('args', [['--speed-scale', 'nan'], ['--peg', '2'],
@@ -90,3 +91,49 @@ def test_탐색후에도_정지응답을_처리할_실행기에_노드가_남는
     monkeypatch.setattr(MP, '_node', None)
     monkeypatch.setattr(tool.RL, 'session_path', lambda *a: str(tmp_path/'check.json'))
     assert tool.main(['--check-only']) == 0
+
+
+def test_집기발현_조회는_거치대계획만_읽고_그리퍼와_발현을_실행하지_않는다(tool, monkeypatch):
+    points = TP.load(tool.ROOT/'src/tunio_robot/config/teach_points.yaml')
+    monkeypatch.setattr(MP, 'ensure_tcp', lambda: None)
+    monkeypatch.setattr(MP, '_j6_pose', lambda p, m: (p, 0))
+    seen = []
+
+    def plan(*args, **kwargs):
+        seen.append(kwargs['execute'])
+        return {'joint_plan': []}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('조회에서 집기/발현을 하면 안 된다')
+    monkeypatch.setattr(MP, '_transfer_above_floor', plan)
+    monkeypatch.setattr(MP, 'pick_up', forbidden)
+    monkeypatch.setattr(MP, 'pluck_string', forbidden)
+    result = tool.run(points, 'pick-pluck', 6, points.motion)
+    assert result['holder_approach'] == {'joint_plan': []}
+    assert seen == [False]
+
+
+@pytest.mark.parametrize('stop_at', [1, 2, 3, None])
+def test_집기_준비_발현_순서와_확인취소시_후속명령차단(tool, monkeypatch, stop_at):
+    points = TP.load(tool.ROOT/'src/tunio_robot/config/teach_points.yaml')
+    calls, questions = [], []
+    monkeypatch.setattr(MP, 'ensure_tcp', lambda: None)
+    monkeypatch.setattr(MP, 'pick_up', lambda *a, **k: calls.append(('pick', k)))
+    monkeypatch.setattr(MP, 'pluck_string', lambda *a, **k: calls.append(('pluck', k)))
+
+    def ask(message):
+        questions.append(message)
+        if len(questions) == stop_at:
+            raise RuntimeError('시험 중단')
+    expected = [('pick', {'height_transfer': True}),
+                ('pluck', {'height_transfer': True, 'prepare_only': True}),
+                ('pluck', {'height_transfer': True, 'prepared': True})]
+    if stop_at is not None:
+        with pytest.raises(RuntimeError, match='시험 중단'):
+            tool.run(points, 'pick-pluck', 6, points.motion, execute=True, ask=ask)
+        assert calls == expected[:stop_at - 1]
+    else:
+        result = tool.run(points, 'pick-pluck', 6, points.motion, execute=True, ask=ask)
+        assert calls == expected
+        assert result['plucks_commanded'] == 1
+        assert not result['home_commanded'] and not result['pick_returned']
