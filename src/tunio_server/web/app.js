@@ -502,11 +502,14 @@ function renderTuner(state) {
   $('now-target').textContent = hz(state.target_hz);
 
   if (!state.measurement_valid) {
-    // 측정값이 없을 때는 '측정 불가' 대신 지금 하는 일을 보여 준다
+    // 측정값이 없을 때 — 진행 중이면 목표 음이름을 흐리게 둔다. 단계명은 아래 줄 카드가
+    // 이미 보여 주므로 여기 겹쳐 쓰지 않는다 (2026-09-29). 진행 중이 아닌데 값이 없으면
+    // 그 줄의 측정이 실패한 것이라 '측정 불가'
     const busy = [PHASE.REGISTER_PEG, PHASE.PREPARE_PLUCK, PHASE.MEASURE_READY, PHASE.PLUCK,
       PHASE.ANALYZE, PHASE.ADJUST_PEG, PHASE.VERIFY, PHASE.RETURN, PHASE.PAUSED]
       .includes(state.phase);
-    blank(busy ? `${state.phase_label}…` : '측정 불가');
+    blank(busy ? note : '측정 불가');
+    if (busy) octEl.textContent = info ? info.name.slice(-1) : '';
     return;
   }
 

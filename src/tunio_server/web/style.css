@@ -431,11 +431,13 @@ main { padding: 20px 24px 32px; max-width: 1320px; margin: 0 auto; }
   border-style: solid;
 }
 
-/* 기타 전체와 헤드 확대가 같은 칸을 쓴다. 높이를 고정해야 확대해도 옆 칸이 안 흔들린다 */
+/* 기타 전체와 헤드 확대가 같은 칸을 쓴다. 높이를 **고정**한다 — flex: 1 + min-height 로
+   두면 오른쪽 칸(예상 페그 회전 줄, 펼쳐진 줄 카드)이 단계마다 높이를 바꿀 때 기타 칸이
+   따라 늘고 줄어서 그림 크기가 흔들린다 (2026-09-29 실기에서 확인) */
 .guitar {
   position: relative;
-  flex: 1;
-  min-height: 480px;
+  flex: 0 0 auto;
+  height: 600px;
   border-radius: var(--radius-sm);
   background:
     radial-gradient(ellipse at 50% 35%, color-mix(in srgb, var(--brass) 10%, transparent), transparent 70%);
@@ -928,7 +930,7 @@ main { padding: 20px 24px 32px; max-width: 1320px; margin: 0 auto; }
   .stage { grid-template-columns: 1fr; }
   /* 좁으면 튜너·진행이 먼저, 기타는 아래로 */
   .guitar-card { order: 2; }
-  .guitar { min-height: 440px; }
+  .guitar { height: 440px; }
 }
 
 @media (max-width: 640px) {
