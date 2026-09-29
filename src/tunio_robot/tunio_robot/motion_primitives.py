@@ -2562,7 +2562,6 @@ def _wipe_stroke(end_task, motion, logger=None):
     press_n = float(motion.get("wipe_press_force_n", 2.0))
     settle_sec = float(motion.get("wipe_settle_sec", 20.0))
     press_depth_mm = float(motion.get("wipe_press_depth_mm", 10.0))
-    sync_depth_mm = float(motion.get("wipe_press_sync_depth_mm", 10.0))
     max_force_n = float(motion.get("wipe_max_force_n", press_n + 10.0))
     poll_sec = float(motion.get("wipe_poll_sec", 0.2))
     arrive_tol_n = float(motion.get("wipe_arrive_tolerance_n", 1.0))
@@ -2574,29 +2573,14 @@ def _wipe_stroke(end_task, motion, logger=None):
     fd = [0.0, 0.0, -press_n, 0.0, 0.0, 0.0]      # -Z 방향(누르는 쪽)으로 press_n
 
     cur = list(read_posx()[0][:6])
-    # 전체 깊이를 한 번에 비동기로 내리면 힘 제어가 안 걸리고 그대로 미끄러져
-    # 지나갔다(2026-09-29 실기). 앞부분(sync_depth_mm)은 동기로 내려 표면 가까이
-    # 접근시키고, 나머지만 비동기로 내려 힘이 먼저 멈춰 세우게 한다.
-    sync_depth_mm = min(sync_depth_mm, press_depth_mm)
-    sync_target = list(cur)
-    sync_target[2] -= sync_depth_mm
     press_target = list(cur)
     press_target[2] -= press_depth_mm             # 실제 표면보다 깊은 목표 — 힘이 먼저 멈춰 세운다(가설)
-
-    # 동기 이동은 힘 제어를 걸기 **전에** 순수 위치 제어로 끝낸다. 힘 제어가
-    # 켜진 채로 블로킹 이동을 걸면, 그 구간 안에서 먼저 접촉해 순응이 막을 때
-    # 목표 도달 신호가 안 와서 movel 이 영영 안 끝날 수 있다(2026-09-29 실기 —
-    # wipe_check 가 여기서 멈췄다). 접촉은 애초에 비동기 구간에서만 기대한다.
-    if logger:
-        logger.info(f"넥 접근 — 먼저 위치 제어로만 {sync_depth_mm:.0f}mm 내려간다(힘 제어 걸기 전)")
-    _movel_base(sync_target, v_wipe, a_wipe)
 
     api.set_desired_force(fd, dir_vec, mod=api.DR_FC_MOD_REL)
     try:
         if logger:
             logger.info(f"넥 접촉 대기(최대 {settle_sec:.0f}초) — Base -Z {press_n:.1f}N 목표, "
-                        f"나머지 {press_depth_mm - sync_depth_mm:.0f}mm 비동기 이동. "
-                        f"안전 상한 {max_force_n:.1f}N")
+                        f"{press_depth_mm:.0f}mm 더 깊이 비동기 이동. 안전 상한 {max_force_n:.1f}N")
         _amovel_base(press_target, v_wipe, a_wipe)
         # 0.2초마다 힘을 읽는다 — 판정 셋.
         #   1) 로그로 찍는다(확인용)
@@ -2618,16 +2602,10 @@ def _wipe_stroke(end_task, motion, logger=None):
                             f"(목표 -{press_n:.1f}N·반작용이라 부호 반대, "
                             f"상한 {max_force_n:.1f}N, 도달 {arrive_streak}/{arrive_confirm_polls})")
             if abs(fz) >= max_force_n:
-                if logger:
-                    logger.warning(f"  안전 상한 {max_force_n:.1f}N 넘음(읽은값 {fz:+.2f}N) "
-                                   "— MoveStop 뒤 실패로 넘어간다")
                 _stop_motion()
                 stopped_for_safety = True
                 break
             if arrive_streak >= arrive_confirm_polls:
-                if logger:
-                    logger.info(f"  목표힘 도달 확인({arrive_confirm_polls}회 연속, "
-                                f"읽은값 {fz:+.2f}N) — 훑기로 넘어간다")
                 break
             time.sleep(poll_sec)
         if stopped_for_safety:
@@ -2654,12 +2632,8 @@ def wipe_strings(points, motion, logger=None):
     ⚠️ **미교시면 여기서 막힌다.** 아래 `points.wipe()`(pickup·start·end·
     return_box)가 채워져야 실제로 돈다.
 
-    순서 (2026-09-23 사용자 지정, 1번 항목은 2026-09-29 실기로 접근 방식 추가)
-      1. **안경닦이 잡으러 가기 전, X·Y 먼저 맞추고 그다음 Z 를 내린다.**
-         지금 자리에서 픽업 자리로 대각선으로 바로 가면 1번 줄을 스쳤다
-         (2026-09-29 실기 확인) — 그래서 두 동작으로 나눴다. 이후
-         `pick_up()`은 이미 X·Y 가 맞은 자리에서 내려가므로 사실상 수직이다.
-      1-1. 거치대에서 안경닦이 집기 (pick_up 재사용 — 피크 집기와 같은 패턴)
+    순서 (2026-09-23 사용자 지정)
+      1. 거치대에서 안경닦이 집기 (pick_up 재사용 — 피크 집기와 같은 패턴)
       2. **픽업 자리에서 Z 만 먼저 닦기 높이(시작점 Z)로 올린 뒤, 그다음에
          수평으로 시작점까지 이동한다.** 높이와 수평 이동을 한 번에 섞은
          대각선으로 가면 그 경로가 기타를 쓸고 갈 수 있다 — 픽업 자리
@@ -2674,31 +2648,10 @@ def wipe_strings(points, motion, logger=None):
     ensure_tcp()
     wipe = points.wipe()                                # 미교시면 여기서 막힌다
     v_app, a_app = _transit_speed(motion)
-    travel_z = float(motion.get("wipe_travel_z_mm", wipe.start.task[2]))
-
-    # 지금 자리에서 픽업 자리까지 대각선으로 바로 가면 1번 줄을 스친다
-    # (2026-09-29 실기 확인). X·Y 만 먼저 맞추는 것으로는 부족했다 — verify_pass
-    # 직후라 현재 높이가 줄 근처로 낮을 수 있어, 그 높이에서 수평 이동해도
-    # 여전히 기타 위를 가로지른다. 그래서 먼저 안전 높이(travel_z, pickup→start
-    # 구간에 이미 쓰는 값과 같다)로 Z 만 올리고, 그다음에만 X·Y 를 옮긴다 —
-    # 지금 높이가 이미 더 높으면 굳이 내리지 않는다.
-    cur = list(read_posx()[0][:6])
-    safe_z = max(cur[2], travel_z)
-    if safe_z - cur[2] > 0.5:
-        up_first = list(cur)
-        up_first[2] = safe_z
-        if logger:
-            logger.info(f"안경닦이 픽업 접근 — 먼저 Z 를 안전 높이 {safe_z:.0f}mm 로 올린다")
-        _movel_base(up_first, v_app, a_app)
-        cur[2] = safe_z
-    xy_first = list(cur)
-    xy_first[0], xy_first[1] = wipe.pickup.task[0], wipe.pickup.task[1]
-    if logger:
-        logger.info("안경닦이 픽업 접근 — 그다음 X·Y 를 맞춘다 (기타 위 대각선 이동 방지)")
-    _movel_base(xy_first, v_app, a_app)
 
     pick_up(wipe.pickup, motion, logger=logger)
     try:
+        travel_z = float(motion.get("wipe_travel_z_mm", wipe.start.task[2]))
         mid = list(wipe.pickup.task)
         mid[2] = travel_z
         _movel_base(mid, v_app, a_app)                   # 픽업 자리에서 Z 만 먼저
