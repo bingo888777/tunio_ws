@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" width="1920" height="1080">
+<defs><marker id="ah" markerWidth="12" markerHeight="12" refX="9" refY="4" orient="auto"><path d="M0 0 L9 4 L0 8 z" fill="#5F6B65"/></marker></defs>
+<style>text{font-family:"Noto Sans CJK KR","Apple SD Gothic Neo","Malgun Gothic",sans-serif}.t{font-size:25px;font-weight:700;fill:#1E2724}.s{font-size:16.5px;fill:#4B5652}.l{font-size:17px;font-weight:600;fill:#3E4A44}.rt{font-size:26px;font-weight:800}.rs{font-size:16px;fill:#6B7571}.title{font-size:34px;font-weight:800;fill:#1E2724}.sub{font-size:17px;fill:#6B7571}</style>
+<rect width="1920" height="1080" fill="white"/>
+<text x="40" y="66" class="title">TUNIO 작업 흐름</text>
+<text x="330" y="66" class="sub">로봇이 줄을 튕겨 소리로 재고, 페그를 돌려 맞춘다 · 정상 흐름 · 2026-09-30</text>
+<rect x="40" y="130" width="910" height="270" rx="22" fill="#F5F3FB" stroke="#8C7AB8" stroke-width="2.5"/>
+<text x="66" y="170" class="rt" fill="#8C7AB8">준비 · 페그 재등록</text>
+<text x="377" y="170" class="rs">조율마다 1회 · 관제 웹 버튼</text>
+<rect x="960" y="130" width="920" height="880" rx="22" fill="#FBF9EE" stroke="#B8A050" stroke-width="2.5"/>
+<text x="986" y="170" class="rt" fill="#B8A050">조율 루프</text>
+<text x="1135" y="170" class="rs">줄별 반복 6 → 5 → 2 → 1 · 줄당 페그 조절 최대 5회</text>
+<rect x="40" y="450" width="910" height="250" rx="22" fill="#EEF5FC" stroke="#3E7FB8" stroke-width="2.5"/>
+<text x="66" y="490" class="rt" fill="#3E7FB8">마무리</text>
+<path d="M328.0 250 L372.0 250" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M628.0 250 L672.0 250" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M928.0 250 L982.0 250" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1238.0 250 L1292.0 250" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1548.0 250 L1592.0 250" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1720 309.0 L1720 511.0" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1592.0 570 L1570.0 570" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1270.0 570 L1238.0 570" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/><rect x="1244.5" y="539.0" width="19" height="26" rx="6" fill="white" opacity="0.92"/><text x="1254.0" y="558.0" class="l" text-anchor="middle">예</text>
+<path d="M982.0 570 L928.0 570" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/><rect x="917.0" y="539.0" width="76" height="26" rx="6" fill="white" opacity="0.92"/><text x="955.0" y="558.0" class="l" text-anchor="middle">4줄 끝</text>
+<path d="M672.0 570 L628.0 570" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M372.0 570 L328.0 570" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/>
+<path d="M1420 665.0 L1420 821.0" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/><rect x="1391.5" y="712.0" width="57" height="26" rx="6" fill="white" opacity="0.92"/><text x="1420.0" y="731.0" class="l" text-anchor="middle">아니오</text>
+<path d="M1292.0 880 H1265 V347.0 H1110 V309.0" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)"/><rect x="1141.5" y="745" width="247" height="26" rx="6" fill="white" opacity="0.92"/><text x="1265" y="764" class="l" text-anchor="middle">다시 측정 · 최대 5회</text>
+<path d="M1110 511.0 V327.0 H1040 V309.0" fill="none" stroke="#5F6B65" stroke-width="3.2" stroke-linejoin="round" marker-end="url(#ah)" stroke-dasharray="10 7"/>
+<rect x="40" y="745" width="910" height="265" rx="22" fill="#FAFAF8" stroke="#C9CFCB" stroke-width="2"/>
+<rect x="70" y="777" width="22" height="22" rx="6" fill="#2E9070"/>
+<text x="106" y="795" class="t" style="font-size:21px">초록</text>
+<text x="196" y="795" class="s" style="font-size:19px">마이크가 재고 판정한다 — 조율 피드백은 힘이 아니라 소리</text>
+<rect x="70" y="829" width="22" height="22" rx="6" fill="#C25A5A"/>
+<text x="106" y="847" class="t" style="font-size:21px">빨강</text>
+<text x="196" y="847" class="s" style="font-size:19px">페그 조절 — 각도는 줄별 실측값으로 계산, 마지막은 항상 조이는 방향</text>
+<rect x="70" y="881" width="22" height="22" rx="6" fill="#8E99A2"/>
+<text x="106" y="899" class="t" style="font-size:21px">회색</text>
+<text x="196" y="899" class="s" style="font-size:19px">로봇 이동·사람 준비 · 파랑은 저장·복귀</text>
+<rect x="70" y="933" width="22" height="22" rx="6" fill="#C9873A"/>
+<text x="106" y="951" class="t" style="font-size:21px">언제든</text>
+<text x="196" y="951" class="s" style="font-size:19px">일시정지·취소 → 로봇 즉시 정지. 재개는 그 줄을 처음부터</text>
+<rect x="72.0" y="191.0" width="256" height="118" rx="16" fill="#EEF0EE" stroke="#8E99A2" stroke-width="3"/><text x="200" y="230" class="t" text-anchor="middle">사람 준비</text><text x="200" y="256" class="s" text-anchor="middle">기타 거치 · 피크 꽂기</text><text x="200" y="277" class="s" text-anchor="middle">페그 손잡이 눕히기</text>
+<rect x="372.0" y="191.0" width="256" height="118" rx="16" fill="#E3DDF3" stroke="#8C7AB8" stroke-width="3"/><text x="500" y="230" class="t" text-anchor="middle">페그 각도 등록</text><text x="500" y="256" class="s" text-anchor="middle">줄마다 페그를 물어 기록</text><text x="500" y="277" class="s" text-anchor="middle">6 → 5 → 2 → 1</text>
+<rect x="672.0" y="191.0" width="256" height="118" rx="16" fill="#EEF0EE" stroke="#8E99A2" stroke-width="3"/><text x="800" y="241" class="t" text-anchor="middle">시작</text><text x="800" y="267" class="s" text-anchor="middle">관제 웹 버튼</text>
+<rect x="982.0" y="191.0" width="256" height="118" rx="16" fill="#EEF0EE" stroke="#8E99A2" stroke-width="3"/><text x="1110" y="230" class="t" text-anchor="middle">피크 집기</text><text x="1110" y="256" class="s" text-anchor="middle">거치대에서 집고</text><text x="1110" y="277" class="s" text-anchor="middle">줄 위로 이동</text>
+<rect x="1292.0" y="191.0" width="256" height="118" rx="16" fill="#D2EDE0" stroke="#2E9070" stroke-width="3"/><text x="1420" y="241" class="t" text-anchor="middle">마이크 준비</text><text x="1420" y="267" class="s" text-anchor="middle">ready 뒤에만 발현</text>
+<rect x="1592.0" y="191.0" width="256" height="118" rx="16" fill="#D2EDE0" stroke="#2E9070" stroke-width="3"/><text x="1720" y="241" class="t" text-anchor="middle">줄 튕기기</text><text x="1720" y="267" class="s" text-anchor="middle">튕기고 즉시 후퇴</text>
+<rect x="1592.0" y="511.0" width="256" height="118" rx="16" fill="#D2EDE0" stroke="#2E9070" stroke-width="3"/><text x="1720" y="561" class="t" text-anchor="middle">주파수 측정</text><text x="1720" y="587" class="s" text-anchor="middle">FFT + YIN · 약 2초</text>
+<polygon points="1420,475.0 1570.0,570 1420,665.0 1270.0,570" fill="#FAE7C6" stroke="#C9873A" stroke-width="3"/><text x="1420" y="561" class="t" text-anchor="middle">허용 오차 이내?</text><text x="1420" y="587" class="s" text-anchor="middle">±10 센트</text>
+<rect x="982.0" y="511.0" width="256" height="118" rx="16" fill="#D2EDE0" stroke="#2E9070" stroke-width="3"/><text x="1110" y="561" class="t" text-anchor="middle">줄 완료</text><text x="1110" y="587" class="s" text-anchor="middle">다음 줄로 (피크 집기부터)</text>
+<rect x="1292.0" y="821.0" width="256" height="118" rx="16" fill="#FADEDE" stroke="#C25A5A" stroke-width="3"/><text x="1420" y="860" class="t" text-anchor="middle">페그 조절</text><text x="1420" y="886" class="s" text-anchor="middle">피크 반환 → 오차만큼 회전</text><text x="1420" y="907" class="s" text-anchor="middle">높으면 풀었다 조여 올림</text>
+<rect x="672.0" y="511.0" width="256" height="118" rx="16" fill="#D2EDE0" stroke="#2E9070" stroke-width="3"/><text x="800" y="550" class="t" text-anchor="middle">최종 검증</text><text x="800" y="576" class="s" text-anchor="middle">성공한 줄을 다시 측정</text><text x="800" y="597" class="s" text-anchor="middle">(다른 줄 조이면 틀어짐)</text>
+<rect x="372.0" y="511.0" width="256" height="118" rx="16" fill="#D9E9F8" stroke="#3E7FB8" stroke-width="3"/><text x="500" y="561" class="t" text-anchor="middle">복귀</text><text x="500" y="587" class="s" text-anchor="middle">피크 반환 · 대기 자세</text>
+<rect x="72.0" y="511.0" width="256" height="118" rx="16" fill="#D9E9F8" stroke="#3E7FB8" stroke-width="3"/><text x="200" y="561" class="t" text-anchor="middle">결과 저장</text><text x="200" y="587" class="s" text-anchor="middle">줄별 판정 · 이력 탭</text>
+</svg>
